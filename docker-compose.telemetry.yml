@@ -1,0 +1,39 @@
+# EMQX MQTT Broker — Telemetry Overlay
+# Usage: docker compose -f docker-compose.yml -f docker-compose.telemetry.yml up -d
+
+services:
+  emqx:
+    image: emqx/emqx:5.8.3
+    container_name: fleet-emqx
+    environment:
+      EMQX_NAME: fleet-emqx
+      EMQX_HOST: 127.0.0.1
+      EMQX_DASHBOARD__DEFAULT_USERNAME: admin
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: ${EMQX_ADMIN_PASSWORD:-fleet_emqx_admin}
+    ports:
+      - '1883:1883'    # MQTT (dev/internal only — firewall in production)
+      - '8883:8883'    # MQTTS
+      - '8083:8083'    # WebSocket
+      - '8084:8084'    # WSS
+      - '18083:18083'  # Dashboard
+    volumes:
+      - emqx_data:/opt/emqx/data
+      - ./infra/emqx/acl.conf:/opt/emqx/etc/acl.conf:ro
+    healthcheck:
+      test: ['CMD', 'emqx', 'ctl', 'status']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    environment:
+      MQTT_ENABLED: 'true'
+      MQTT_URL: mqtt://emqx:1883
+      MQTT_USERNAME: backend-ingest
+      MQTT_PASSWORD: ${MQTT_INGEST_PASSWORD:-fleet_mqtt_ingest}
+    depends_on:
+      emqx:
+        condition: service_healthy
+
+volumes:
+  emqx_data:

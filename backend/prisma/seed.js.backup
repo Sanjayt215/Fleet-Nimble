@@ -1,0 +1,81 @@
+import { PrismaClient } from '@prisma/client';
+import bcrypt from 'bcrypt';
+
+const prisma = new PrismaClient();
+
+async function main() {
+  const roles = ['ADMIN', 'MANAGER', 'DRIVER', 'VIEWER'];
+  for (const name of roles) {
+    await prisma.role.upsert({
+      where: { name },
+      update: {},
+      create: { name },
+    });
+  }
+
+  const company = await prisma.company.upsert({
+    where: { slug: 'default' },
+    update: {},
+    create: {
+      id: '00000000-0000-0000-0000-000000000010',
+      name: 'FleetNimble Default',
+      slug: 'default',
+    },
+  });
+
+  const adminRole = await prisma.role.findUnique({ where: { name: 'ADMIN' } });
+  const hash = await bcrypt.hash('Admin123!', 12);
+
+  const admin = await prisma.user.upsert({
+    where: { email: 'admin@fleetnimble.com' },
+    update: { companyId: company.id },
+    create: {
+      name: 'FleetNimble Admin',
+      email: 'admin@fleetnimble.com',
+      passwordHash: hash,
+      roleId: adminRole.id,
+      companyId: company.id,
+    },
+  });
+
+  const vehicle = await prisma.vehicle.upsert({
+    where: { id: '00000000-0000-0000-0000-000000000001' },
+    update: { companyId: company.id },
+    create: {
+      id: '00000000-0000-0000-0000-000000000001',
+      userId: admin.id,
+      companyId: company.id,
+      vin: '1HGBH41JXMN109186',
+      plateNumber: 'FLT-001',
+      make: 'Toyota',
+      model: 'Camry',
+      year: 2022,
+      odometer: 45230,
+    },
+  });
+
+  await prisma.maintenanceLog.createMany({
+    data: [
+      {
+        vehicleId: vehicle.id,
+        serviceType: 'Oil Change',
+        dueKm: 50000,
+        dueDate: new Date(Date.now() + 30 * 86400000),
+        completed: false,
+      },
+      {
+        vehicleId: vehicle.id,
+        serviceType: 'Tire Rotation',
+        dueDate: new Date(Date.now() + 14 * 86400000),
+        completed: false,
+      },
+    ],
+    skipDuplicates: true,
+  });
+
+  console.log('Seed complete:', { admin: admin.email, vehicle: vehicle.plateNumber });
+}
+
+main()
+  .catch(console.error)
+  .finally(() => prisma.$disconnect());

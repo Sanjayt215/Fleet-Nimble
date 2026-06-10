@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: fleet-backend
+    env: node
+    plan: free
+    region: oregon
+    branch: main
+    buildCommand: "npm ci && npx prisma generate"
+    startCommand: "sh -lc 'npx prisma migrate deploy || true && npm run db:seed || true && npm run db:seed:phase2 || true && node src/server.js'"
+    envVars:
+      - key: PORT
+        value: "5000"
+      - key: NODE_ENV
+        value: "production"
+      - key: DATABASE_URL
+        value: "postgresql://<USER>:<PASSWORD>@<HOST>:<PORT>/<DBNAME>?sslmode=require"
+      - key: REDIS_URL
+        value: "redis://<HOST>:6379"
+      - key: JWT_SECRET
+        value: "replace-with-strong-secret"
+      - key: JWT_REFRESH_SECRET
+        value: "replace-with-refresh-secret"
+      - key: CORS_ORIGIN
+        value: "https://app.your-domain.com"
+      - key: MQTT_ENABLED
+        value: "false"
+  - type: static
+    name: fleet-frontend
+    env: static
+    plan: free
+    region: oregon
+    branch: main
+    buildCommand: "npm ci && npm run build"
+    publishCommand: "npm run build"
+    publishPath: "frontend/dist"
+    envVars:
+      - key: VITE_API_URL
+        value: "https://api.your-domain.com/api"
+      - key: VITE_SOCKET_URL
+        value: "https://api.your-domain.com"

@@ -1,0 +1,43 @@
+{
+  "name": "fleetnimble-api",
+  "version": "1.0.0",
+  "description": "FleetNimble API — OBD-II telematics and fleet intelligence",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "db:generate": "prisma generate --schema=./prisma/schema.prisma",
+    "db:migrate": "prisma migrate dev --schema=./prisma/schema.prisma",
+    "db:push": "prisma db push --schema=./prisma/schema.prisma",
+    "db:seed": "node prisma/seed.js",
+    "db:seed:phase2": "node prisma/seed-phase2.js",
+    "db:verify:phase2": "node prisma/verify-phase2.js",
+    "db:studio": "prisma studio --schema=./prisma/schema.prisma",
+    "backup": "node scripts/pg-backup.js",
+    "mqtt:test": "node scripts/mqtt-e2e-test.js",
+    "backup:schedule": "node -e \"setInterval(() => import('./scripts/pg-backup.js'), 3600000)\""
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "bcrypt": "^5.1.1",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1",
+    "express-rate-limit": "^7.4.1",
+    "helmet": "^8.0.0",
+    "ioredis": "^5.4.1",
+    "jsonwebtoken": "^9.0.2",
+    "mqtt": "^5.15.1",
+    "multer": "^1.4.5-lts.1",
+    "node-cron": "^3.0.3",
+    "socket.io": "^4.8.1",
+    "uuid": "^14.0.0",
+    "winston": "^3.17.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "prisma": "^5.22.0"
+  }
+}

@@ -1,0 +1,126 @@
+import prisma from '../utils/prisma.js';
+import { normalizeTelemetry } from './telemetryParser.js';
+import { setLatestObdCached } from './cacheService.js';
+import { updateLiveStateFromTelemetry } from './liveStateService.js';
+
+/**
+ * Transaction-safe OBD ingest: live row, raw backup, GPS, device heartbeat.
+ */
+export async function ingestObdReading(vehicleId, rawBody, options = {}) {
+  const { deviceId, deviceName, source = 'android' } = options;
+  const telemetry = normalizeTelemetry(rawBody);
+
+  const record = await prisma.$transaction(async (tx) => {
+    const live = await tx.obdLiveData.create({
+      data: { vehicleId, ...telemetry },
+    });
+
+    await tx.obdRawBackup.create({
+      data: {
+        vehicleId,
+        rawPayload: rawBody,
+        source: rawBody.source ?? source,
+        processedAt: new Date(),
+      },
+    });
+
+    if (telemetry.latitude != null && telemetry.longitude != null) {
+      await tx.gpsLocation.upsert({
+        where: { vehicleId },
+        update: {
+          lat: telemetry.latitude,
+          lng: telemetry.longitude,
+          altitude: telemetry.altitude,
+          accuracy: telemetry.gpsAccuracy,
+          heading: telemetry.heading,
+          speed: telemetry.gpsSpeed,
+          recordedAt: new Date(),
+        },
+        create: {
+          vehicleId,
+          lat: telemetry.latitude,
+          lng: telemetry.longitude,
+          altitude: telemetry.altitude,
+          accuracy: telemetry.gpsAccuracy,
+          heading: telemetry.heading,
+          speed: telemetry.gpsSpeed,
+        },
+      });
+    }
+
+    const devKey = deviceId || rawBody.deviceId || rawBody.device_id || 'mobile';
+    const existing = await tx.vehicleConnection.findFirst({
+      where: { vehicleId, deviceId: devKey },
+    });
+    if (existing) {
+      await tx.vehicleConnection.update({
+        where: { id: existing.id },
+        data: { connected: true, lastSeenAt: new Date(), deviceName: deviceName || existing.deviceName },
+      });
+    } else {
+      await tx.vehicleConnection.create({
+        data: {
+          vehicleId,
+          deviceId: devKey,
+          deviceName: deviceName || 'OpenOBD',
+          protocol: 'ELM327',
+          connected: true,
+          lastSeenAt: new Date(),
+        },
+      });
+    }
+
+    await tx.vehicle.update({
+      where: { id: vehicleId },
+      data: { lastObdAt: new Date(), telemetryOnline: true },
+    });
+
+    return live;
+  });
+
+  // Update vehicle_live_state with REAL telemetry
+  await updateLiveStateFromTelemetry(vehicleId, telemetry, 'REAL');
+
+  await setLatestObdCached(vehicleId, record);
+  return { record, telemetry };
+}
+
+export async function markStaleTelemetry(io) {
+  const threshold = new Date(Date.now() - 30_000);
+  const stale = await prisma.vehicle.findMany({
+    where: {
+      telemetryOnline: true,
+      OR: [{ lastObdAt: null }, { lastObdAt: { lt: threshold } }],
+    },
+    select: { id: true, userId: true },
+  });
+
+  if (!stale.length) return 0;
+
+  await prisma.vehicle.updateMany({
+    where: { id: { in: stale.map((v) => v.id) } },
+    data: { telemetryOnline: false },
+  });
+
+  await prisma.vehicleConnection.updateMany({
+    where: { vehicleId: { in: stale.map((v) => v.id) } },
+    data: { connected: false },
+  });
+
+  if (io) {
+    for (const v of stale) {
+      io.to(`vehicle:${v.id}`).emit('vehicle:status', { vehicleId: v.id, online: false });
+      io.to(`user:${v.userId}`).emit('vehicle:status', { vehicleId: v.id, online: false });
+    }
+  }
+
+  return stale.length;
+}
+
+export async function purgeOldTelemetry(days = 90) {
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const result = await prisma.obdLiveData.deleteMany({
+    where: { recordedAt: { lt: cutoff } },
+  });
+  return result.count;
+}
