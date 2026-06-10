@@ -27,66 +27,60 @@ const vehicleData = [
 
 async function seedDatabase() {
   try {
-    logger.info('🌱 Starting Phase-2 database seed (skips if 25+ vehicles present)...');
+    logger.info('🌱 Starting Phase-2 database seed...');
 
-    const existingCount = await prisma.vehicle.count();
-    if (existingCount >= 25) {
-      logger.info(`Skipping phase2 seed: ${existingCount} vehicles already present`);
-      process.exit(0);
-    }
-
-    // Get or create default user
-    let user = await prisma.user.findFirst();
-    if (!user) {
+    const vehicleCount = await prisma.vehicle.count();
+    let vehicles = [];
+    if (vehicleCount === 0) {
       const role = await prisma.role.findFirst({ where: { name: 'MANAGER' } });
       if (!role) {
         logger.error('No MANAGER role found. Please seed roles first.');
         process.exit(1);
       }
-
-      user = await prisma.user.create({
+      const user = await prisma.user.create({
         data: {
           name: 'Fleet Manager',
           email: 'fleet@example.com',
-          passwordHash: 'hashed_password_placeholder',
+          passwordHash: 'fleetmanager-placeholder',
           roleId: role.id,
         },
       });
-      logger.info('✅ Created sample user');
-    }
+      logger.info('✅ Created sample fleet manager');
 
-    // Create 20 vehicles
-    const vehicles = [];
-    for (let i = 0; i < vehicleData.length; i++) {
-      const data = vehicleData[i];
-      const odometer = Math.floor(Math.random() * 150000) + 10000;
-      const engineHours = odometer / 60 + Math.random() * 500;
+      for (let i = 0; i < vehicleData.length; i++) {
+        const data = vehicleData[i];
+        const odometer = Math.floor(Math.random() * 150000) + 10000;
+        const engineHours = odometer / 60 + Math.random() * 500;
 
-      const vehicle = await prisma.vehicle.create({
-        data: {
-          userId: user.id,
-          vin: data.vin,
-          plateNumber: data.plate,
-          make: data.make,
-          model: data.model,
-          year: data.year,
-          odometer,
-          engineHoursObd: engineHours,
-        },
-      });
-
-      vehicles.push(vehicle);
-      logger.info(`✅ Created vehicle ${i + 1}/20: ${data.make} ${data.model}`);
+        const vehicle = await prisma.vehicle.create({
+          data: {
+            userId: user.id,
+            vin: data.vin,
+            plateNumber: data.plate,
+            make: data.make,
+            model: data.model,
+            year: data.year,
+            odometer,
+            engineHoursObd: engineHours,
+          },
+        });
+        vehicles.push(vehicle);
+        logger.info(`✅ Created vehicle ${i + 1}/${vehicleData.length}: ${data.make} ${data.model}`);
+      }
+    } else {
+      vehicles = await prisma.vehicle.findMany({ where: { deletedAt: null }, take: 25, orderBy: { createdAt: 'asc' } });
+      logger.info(`✅ Using ${vehicles.length} existing vehicles for phase2 demo data`);
     }
 
     // Create live states for each vehicle
     for (const vehicle of vehicles) {
       const fuelLevel = Math.floor(Math.random() * 50) + 30; // 30-80%
       const status = Math.random() > 0.7 ? 'MOVING' : Math.random() > 0.5 ? 'IDLING' : 'PARKED';
+      const engineHours = vehicle.engineHoursObd ?? Math.max(0, Math.floor(vehicle.odometer / 60));
 
-      const liveState = await prisma.vehicleLiveState.create({
-        data: {
-          vehicleId: vehicle.id,
+      const liveState = await prisma.vehicleLiveState.upsert({
+        where: { vehicleId: vehicle.id },
+        update: {
           telemetrySource: 'SIMULATED',
           rpm: status === 'PARKED' ? 0 : status === 'IDLING' ? Math.floor(Math.random() * 200) + 700 : Math.floor(Math.random() * 1300) + 1200,
           speed: status === 'PARKED' ? 0 : status === 'IDLING' ? 0 : Math.floor(Math.random() * 40) + 20,
@@ -95,7 +89,24 @@ async function seedDatabase() {
           fuelLevel,
           engineLoad: status === 'PARKED' ? 0 : Math.floor(Math.random() * 60) + 20,
           throttlePosition: status === 'PARKED' ? 0 : Math.floor(Math.random() * 70) + 10,
-          engineHours: vehicle.engineHoursObd,
+          engineHours,
+          odometer: vehicle.odometer,
+          gpsLat: 37.7749 + (Math.random() - 0.5),
+          gpsLng: -122.4194 + (Math.random() - 0.5),
+          ignitionStatus: status !== 'PARKED',
+          vehicleStatus: status,
+        },
+        create: {
+          vehicle: { connect: { id: vehicle.id } },
+          telemetrySource: 'SIMULATED',
+          rpm: status === 'PARKED' ? 0 : status === 'IDLING' ? Math.floor(Math.random() * 200) + 700 : Math.floor(Math.random() * 1300) + 1200,
+          speed: status === 'PARKED' ? 0 : status === 'IDLING' ? 0 : Math.floor(Math.random() * 40) + 20,
+          coolantTemp: Math.floor(Math.random() * 40) + 70,
+          batteryVoltage: Math.floor(Math.random() * 2) + 12.5,
+          fuelLevel,
+          engineLoad: status === 'PARKED' ? 0 : Math.floor(Math.random() * 60) + 20,
+          throttlePosition: status === 'PARKED' ? 0 : Math.floor(Math.random() * 70) + 10,
+          engineHours,
           odometer: vehicle.odometer,
           gpsLat: 37.7749 + (Math.random() - 0.5),
           gpsLng: -122.4194 + (Math.random() - 0.5),
@@ -206,25 +217,24 @@ async function seedDatabase() {
       process.exit(1);
     }
 
+    const company = await prisma.company.findFirst();
     const existingDrivers = await prisma.user.count({ where: { roleId: driverRole.id } });
     const driversToCreate = Math.max(0, 8 - existingDrivers);
-    const demoDrivers = [];
     for (let i = 0; i < driversToCreate; i++) {
       const idx = existingDrivers + i + 1;
       const email = `driver${idx}@fleetnimble.com`;
       const name = `Demo Driver ${idx}`;
-      const user = await prisma.user.upsert({
+      await prisma.user.upsert({
         where: { email },
-        update: { name },
+        update: { name, roleId: driverRole.id },
         create: {
           name,
           email,
           passwordHash: 'driver-seed-placeholder',
           roleId: driverRole.id,
-          companyId: user.companyId || undefined,
+          companyId: company?.id || undefined,
         },
       });
-      demoDrivers.push(user);
     }
 
     // If there are drivers, assign first 8 vehicles to drivers for demo
@@ -233,6 +243,25 @@ async function seedDatabase() {
       const drv = allDrivers[i];
       const v = vehicles[i];
       await prisma.vehicle.update({ where: { id: v.id }, data: { userId: drv.id } });
+    }
+
+    // === Ensure driver scores exist for vehicles ===
+    const existingScores = await prisma.driverScore.count();
+    const scoresNeeded = Math.max(0, 8 - existingScores);
+    for (let i = 0; i < scoresNeeded; i++) {
+      const vehicle = vehicles[i % vehicles.length];
+      await prisma.driverScore.create({
+        data: {
+          vehicleId: vehicle.id,
+          harshBraking: Math.floor(Math.random() * 10),
+          harshAcceleration: Math.floor(Math.random() * 8),
+          overspeedEvents: Math.floor(Math.random() * 5),
+          idleTime: Math.random() * 60,
+          score: Math.floor(Math.random() * 20) + 75,
+          periodStart: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+          periodEnd: new Date(),
+        },
+      });
     }
 
     // === Ensure at least 10 DTC codes exist ===
