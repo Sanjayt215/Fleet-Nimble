@@ -99,11 +99,25 @@ export async function dashboardStats(req, res, next) {
       where: { vehicleId: { in: ids } },
     });
 
-    const onlineVehicles = liveStates.filter(
+    const realLiveStates = liveStates.filter((s) => s.telemetrySource === 'REAL');
+    const connectedVehicles = liveStates.filter(
+      (s) => new Date(s.lastUpdate).getTime() > now - 120_000
+    ).length;
+    const onlineVehicles = realLiveStates.filter(
       (s) => new Date(s.lastUpdate).getTime() > now - 30_000
     ).length;
-    const movingVehicles = liveStates.filter((s) => s.vehicleStatus === 'MOVING').length;
+    const movingVehicles = realLiveStates.filter((s) => s.vehicleStatus === 'MOVING').length;
     const vehicleCount = vehicles.length;
+    const activeTrips = await prisma.tripLog.count({
+      where: { vehicleId: { in: ids }, endTime: null },
+    });
+    const maintenanceAlerts = await prisma.maintenanceLog.count({
+      where: {
+        vehicleId: { in: ids },
+        completed: false,
+        OR: [{ dueDate: { lte: new Date() } }, { dueDate: { lte: new Date(now + 7 * 86400000) } }],
+      },
+    });
     const fleetUtilization = vehicleCount > 0 ? Math.round((movingVehicles / vehicleCount) * 100) : 0;
     const avgFuel = liveStates.length
       ? parseFloat((liveStates.reduce((s, l) => s + l.fuelLevel, 0) / liveStates.length).toFixed(1))
@@ -158,14 +172,17 @@ export async function dashboardStats(req, res, next) {
       success: true,
       data: {
         vehicleCount,
+        connectedVehicles,
         onlineVehicles,
         movingVehicles,
+        activeTrips,
         fleetUtilization,
         avgFuel,
         avgRpm,
         activeDtc,
         pendingDtc,
         unreadAlerts,
+        maintenanceAlerts,
         recentTrips,
         maintenanceDue,
         fuelLiters30d: fuelSummary._sum.liters ?? 0,

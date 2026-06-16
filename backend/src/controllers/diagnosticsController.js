@@ -46,7 +46,7 @@ export async function getLiveDiagnostics(req, res, next) {
         telemetryOnline: vehicle.telemetryOnline,
         lastObdAt: vehicle.lastObdAt,
       },
-      liveState: vehicle.liveState
+      liveState: vehicle.liveState?.telemetrySource === 'REAL'
         ? {
             telemetrySource: vehicle.liveState.telemetrySource,
             lastUpdate: vehicle.liveState.lastUpdate,
@@ -133,7 +133,7 @@ export async function getFleetDiagnosticsOverview(req, res, next) {
       model: v.model,
       odometer: v.odometer,
       telemetryOnline: v.telemetryOnline,
-      liveState: v.liveState
+      liveState: v.liveState?.telemetrySource === 'REAL'
         ? {
             status: v.liveState.vehicleStatus,
             speed: v.liveState.speed,

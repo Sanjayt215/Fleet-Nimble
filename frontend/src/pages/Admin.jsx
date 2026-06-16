@@ -12,8 +12,8 @@ export default function Admin() {
 
   useEffect(() => {
     if (user?.role?.name !== 'ADMIN') return;
-    api.get('/admin/stats').then((r) => setStats(r.data.data));
-    api.get('/admin/users').then((r) => setUsers(r.data.data));
+    api.get('/admin/stats').then((r) => setStats(r.data.data)).catch(() => setStats(null));
+    api.get('/admin/users').then((r) => setUsers(r.data.data || [])).catch(() => setUsers([]));
   }, [user]);
 
   if (user?.role?.name !== 'ADMIN') {

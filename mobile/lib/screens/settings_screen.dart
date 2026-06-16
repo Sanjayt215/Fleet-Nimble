@@ -21,10 +21,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   String? _status;
   final _brokerCtrl = TextEditingController(text: AppConfig.mqttBroker);
   final _portCtrl = TextEditingController(text: '${AppConfig.mqttPort}');
+  late TextEditingController _fixedVehicleIdCtrl;
 
   @override
   void initState() {
     super.initState();
+    _fixedVehicleIdCtrl = TextEditingController(text: AppConfig.fixedFleetVehicleId);
     _loadMqttPrefs();
   }
 
@@ -132,6 +134,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   void dispose() {
     _brokerCtrl.dispose();
     _portCtrl.dispose();
+    _fixedVehicleIdCtrl.dispose();
     super.dispose();
   }
 
@@ -139,16 +142,90 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Widget build(BuildContext context) {
     final mqttStatus = MqttTelemetryService.instance.getStatus();
     final vehicle = ref.watch(selectedVehicleProvider);
+    final tokenStatus = ref.watch(tokenStatusProvider);
+    final httpStatus = ref.watch(httpStatusProvider);
+    final lastUploadTime = ref.watch(lastUploadTimeProvider);
+    final useFixedId = ref.watch(useFixedVehicleIdProvider);
+
+    final lastUploadDisplay = lastUploadTime != null
+        ? '${lastUploadTime.hour.toString().padLeft(2, '0')}:${lastUploadTime.minute.toString().padLeft(2, '0')}:${lastUploadTime.second.toString().padLeft(2, '0')}'
+        : 'Never';
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
         children: [
-          ListTile(title: const Text('API URL'), subtitle: Text(AppConfig.apiBaseUrl)),
+          ListTile(title: const Text('Fleet Server URL'), subtitle: Text(AppConfig.apiBaseUrl)),
           ListTile(title: const Text('Socket URL'), subtitle: Text(AppConfig.socketUrl)),
+          
+          // === BACKUP MODE DEBUG SECTION ===
+          if (useFixedId) ...[
+            const SizedBox(height: 8),
+            Container(
+              margin: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.1),
+                border: Border.all(color: Colors.orange, width: 2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.warning, color: Colors.orange, size: 20),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'BACKUP MODE: Fixed Vehicle ID',
+                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Vehicle Mode', style: TextStyle(fontSize: 12)),
+                    subtitle: const Text('FIXED VEHICLE ID', style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold)),
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Token Status', style: TextStyle(fontSize: 12)),
+                    subtitle: Text(tokenStatus, style: TextStyle(color: tokenStatus == 'VALID' ? Colors.green : Colors.red)),
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('HTTP Status', style: TextStyle(fontSize: 12)),
+                    subtitle: Text(httpStatus, style: TextStyle(color: httpStatus == 'OK' ? Colors.green : httpStatus == 'FAILED' ? Colors.red : Colors.grey)),
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Last Upload', style: TextStyle(fontSize: 12)),
+                    subtitle: Text(lastUploadDisplay),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text('Fixed Vehicle ID:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  TextField(
+                    controller: _fixedVehicleIdCtrl,
+                    maxLines: 2,
+                    decoration: InputDecoration(
+                      hintText: 'Paste valid FleetNimble vehicle UUID',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(4)),
+                      contentPadding: const EdgeInsets.all(8),
+                      hintStyle: const TextStyle(fontSize: 11),
+                    ),
+                    style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(),
+          ],
+
           ListTile(
             title: const Text('Selected vehicle'),
-            subtitle: Text(vehicle != null ? '${vehicle.make} ${vehicle.model} (${vehicle.plateNumber ?? vehicle.id})' : 'None'),
+            subtitle: Text(vehicle != null ? '${vehicle.make} ${vehicle.model} (${vehicle.plateNumber ?? vehicle.id})' : 'None (using fixed ID in backup mode)'),
           ),
           const Divider(),
           Padding(

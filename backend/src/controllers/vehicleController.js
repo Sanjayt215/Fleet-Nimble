@@ -54,6 +54,20 @@ export async function list(req, res, next) {
   }
 }
 
+export async function getMyVehicles(req, res, next) {
+  try {
+    const { userId } = req.user;
+    const vehicles = await prisma.vehicle.findMany({
+      where: { userId, deletedAt: null },
+      include: { obdDevices: true, liveState: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json({ success: true, data: vehicles });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function getById(req, res, next) {
   try {
     const vehicle = await findVehicle(req);
@@ -115,10 +129,11 @@ async function findVehicle(req) {
       telematicsDevice: true,
       gpsLocation: true,
       company: { select: { id: true, slug: true, name: true } },
+      user: { select: { id: true, name: true, email: true } },
     },
   });
   if (!vehicle) throw new AppError('Vehicle not found', 404, 'NOT_FOUND');
-  if (vehicle.liveState && (!vehicle.liveData || vehicle.liveData.length === 0)) {
+  if (vehicle.liveState?.telemetrySource === 'REAL' && (!vehicle.liveData || vehicle.liveData.length === 0)) {
     vehicle.liveData = [
       {
         id: vehicle.liveState.id,

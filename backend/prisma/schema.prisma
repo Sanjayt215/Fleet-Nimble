@@ -46,6 +46,11 @@ enum TelemetrySource {
   REAL
 }
 
+enum TelemetryMode {
+  DEMO
+  LIVE
+}
+
 enum VehicleStatus {
   PARKED
   IDLING
@@ -108,6 +113,8 @@ model User {
   workOrders     WorkOrder[]    @relation("AssignedWorkOrders")
   notifications  Notification[]
   auditLogs      AuditLog[]
+  obdDevices     OBDDevice[]
+  telemetries    Telemetry[]
 
   @@index([email])
   @@index([roleId])
@@ -128,28 +135,34 @@ model RefreshToken {
 }
 
 model Vehicle {
-  id           String    @id @default(uuid())
-  userId       String    @map("user_id")
-  companyId    String?   @map("company_id")
-  vin          String?
-  plateNumber  String?   @map("plate_number")
-  make         String?
-  model        String?
-  year         Int?
-  odometer     Float     @default(0)
-  milOn             Boolean?  @map("mil_on")
-  readinessMonitors Json?     @map("readiness_monitors")
-  engineHoursObd    Float?    @map("engine_hours_obd")
-  obdDeviceId       String?   @map("obd_device_id")
-  lastObdAt         DateTime? @map("last_obd_at")
-  telemetryOnline   Boolean   @default(false) @map("telemetry_online")
-  deletedAt         DateTime? @map("deleted_at")
-  createdAt         DateTime  @default(now()) @map("created_at")
-  updatedAt         DateTime  @updatedAt @map("updated_at")
+  id                String        @id @default(uuid())
+  userId            String        @map("user_id")
+  companyId         String?       @map("company_id")
+  vehicleName       String?       @map("vehicle_name")
+  vin               String?
+  plateNumber       String?       @map("plate_number")
+  registrationNumber String?      @map("registration_number")
+  make              String?
+  model             String?
+  year              Int?
+  fuelType          String?
+  odometer          Float         @default(0)
+  milOn             Boolean?      @map("mil_on")
+  readinessMonitors Json?         @map("readiness_monitors")
+  engineHoursObd    Float?        @map("engine_hours_obd")
+  obdDeviceId       String?       @map("obd_device_id")
+  lastObdAt         DateTime?     @map("last_obd_at")
+  lastTelemetryAt   DateTime?     @map("last_telemetry_at")
+  status            VehicleStatus @default(OFFLINE)
+  telemetryOnline   Boolean       @default(false) @map("telemetry_online")
+  deletedAt         DateTime?     @map("deleted_at")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
 
   user              User                @relation(fields: [userId], references: [id])
   company           Company?            @relation(fields: [companyId], references: [id])
   telematicsDevice  TelematicsDevice?
+  obdDevices        OBDDevice[]
   behaviorEvents    DriverBehaviorEvent[]
   geofenceEvents    GeofenceEvent[]
   connections       VehicleConnection[]
@@ -168,6 +181,7 @@ model Vehicle {
   reports           Report[]
   rawBackups        ObdRawBackup[]
   gpsLocation       GpsLocation?
+  telemetries       Telemetry[]
 
   @@index([userId])
   @@index([companyId])
@@ -585,6 +599,56 @@ model Report {
 
   @@index([vehicleId, reportType])
   @@map("reports")
+}
+
+model OBDDevice {
+  id               String        @id @default(uuid())
+  userId           String        @map("user_id")
+  vehicleId        String?       @map("vehicle_id")
+  deviceName       String?
+  bluetoothAddress String?
+  status           DeviceStatus  @default(PROVISIONED)
+  lastConnectedAt  DateTime?     @map("last_connected_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+
+  user             User          @relation(fields: [userId], references: [id])
+  vehicle          Vehicle?      @relation(fields: [vehicleId], references: [id])
+  telemetries      Telemetry[]
+
+  @@unique([userId, bluetoothAddress])
+  @@index([userId])
+  @@index([vehicleId])
+  @@map("obd_devices")
+}
+
+model Telemetry {
+  id               String        @id @default(uuid())
+  userId           String        @map("user_id")
+  vehicleId        String        @map("vehicle_id")
+  obdDeviceId      String?       @map("obd_device_id")
+  mode             TelemetryMode @default(LIVE)
+  rpm              Float?
+  speed            Float?
+  fuelLevel        Float?        @map("fuel_level")
+  coolantTemp      Float?        @map("coolant_temp")
+  batteryVoltage   Float?        @map("battery_voltage")
+  engineLoad       Float?        @map("engine_load")
+  latitude         Float?
+  longitude        Float?
+  odometer         Float?
+  timestamp        DateTime      @default(now())
+  createdAt        DateTime      @default(now()) @map("created_at")
+
+  user             User          @relation(fields: [userId], references: [id])
+  vehicle          Vehicle       @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  obdDevice        OBDDevice?    @relation(fields: [obdDeviceId], references: [id])
+
+  @@index([userId])
+  @@index([vehicleId])
+  @@index([mode])
+  @@index([timestamp(sort: Desc)])
+  @@map("telemetries")
 }
 
 // Fuel consumption and refueling event history

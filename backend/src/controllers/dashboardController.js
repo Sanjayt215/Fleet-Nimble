@@ -28,13 +28,14 @@ export async function getFleetKpis(req, res, next) {
     });
 
     // Calculate KPIs
+    const realLiveVehicles = vehiclesWithLiveState.filter((v) => v.liveState?.telemetrySource === 'REAL');
     const onlineVehicles = vehiclesWithLiveState.filter((v) => v.telemetryOnline).length;
-    const movingVehicles = vehiclesWithLiveState.filter((v) => v.liveState?.vehicleStatus === 'MOVING').length;
-    const idlingVehicles = vehiclesWithLiveState.filter((v) => v.liveState?.vehicleStatus === 'IDLING').length;
-    const parkedVehicles = vehiclesWithLiveState.filter((v) => v.liveState?.vehicleStatus === 'PARKED').length;
+    const movingVehicles = realLiveVehicles.filter((v) => v.liveState?.vehicleStatus === 'MOVING').length;
+    const idlingVehicles = realLiveVehicles.filter((v) => v.liveState?.vehicleStatus === 'IDLING').length;
+    const parkedVehicles = realLiveVehicles.filter((v) => v.liveState?.vehicleStatus === 'PARKED').length;
 
     // Fuel metrics
-    const fuelStates = vehiclesWithLiveState
+    const fuelStates = realLiveVehicles
       .map((v) => v.liveState?.fuelLevel ?? 0)
       .filter((f) => f != null);
     const avgFuelLevel = fuelStates.length > 0 ? fuelStates.reduce((a, b) => a + b) / fuelStates.length : 0;
@@ -55,8 +56,8 @@ export async function getFleetKpis(req, res, next) {
     const fleetUtilization = totalVehicles > 0 ? Math.round((movingVehicles / totalVehicles) * 100) : 0;
 
     // Telemetry source distribution
-    const realTelemetryCount = vehiclesWithLiveState.filter((v) => v.liveState?.telemetrySource === 'REAL').length;
-    const simulatedTelemetryCount = vehiclesWithLiveState.filter((v) => v.liveState?.telemetrySource === 'SIMULATED').length;
+    const realTelemetryCount = realLiveVehicles.length;
+    const simulatedTelemetryCount = 0;
 
     // Driver scores (last 7 days)
     const driverScores = await prisma.driverScore.findMany({

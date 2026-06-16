@@ -10,6 +10,18 @@ export class AppError extends Error {
 }
 
 export function notFoundHandler(req, res, next) {
+  try {
+    console.log('[NOTFOUND]', { method: req.method, originalUrl: req.originalUrl, baseUrl: req.baseUrl, path: req.path, url: req.url });
+    if (req.app && req.app._router && Array.isArray(req.app._router.stack)) {
+      const layers = req.app._router.stack
+        .filter((l) => l && l.regexp)
+        .map((l) => ({ name: l.name || '<anon>', regexp: l.regexp.source }))
+        .slice(0, 12);
+      console.log('[NOTFOUND] app layers sample', layers);
+    }
+  } catch (err) {
+    console.log('[NOTFOUND] error logging', err && err.message);
+  }
   next(new AppError(`Route ${req.method} ${req.path} not found`, 404, 'NOT_FOUND'));
 }
 

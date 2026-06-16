@@ -3,7 +3,7 @@ import logger from '../utils/logger.js';
 
 const HEARTBEAT_STALE_MS = 90_000;
 const TELEMETRY_LIVE_MS = 5_000;
-const TELEMETRY_STALE_MS = 120_000;
+const TELEMETRY_STALE_MS = 30_000;
 
 /**
  * Resolve vehicle + device for MQTT ingest (cached per message).

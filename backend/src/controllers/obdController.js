@@ -84,7 +84,7 @@ export async function getLatest(req, res, next) {
       ? buildTelemetryHealth(vehicle, vehicle.telematicsDevice)
       : null;
 
-    if (!data && vehicle?.liveState) {
+    if (!data && vehicle?.liveState?.telemetrySource === 'REAL') {
       data = {
         id: vehicle.liveState.id,
         vehicleId: vehicle.liveState.vehicleId,

@@ -275,8 +275,10 @@ export function buildInitialLiveState(vehicle, companySettings) {
 }
 
 export async function createVehicleLiveState(vehicle, companySettings) {
-  const initialState = buildInitialLiveState(vehicle, companySettings);
-  return prisma.vehicleLiveState.create({ data: initialState });
+  logger.info('Vehicle live state creation disabled; live state will be populated from real telemetry only', {
+    vehicleId: vehicle.id,
+  });
+  return null;
 }
 
 export async function getVehicleLiveState(vehicleId) {
@@ -433,7 +435,7 @@ export async function simulateLiveStateCycle(io) {
       }
       if (updated.speed > 100 && Math.random() < 0.04) {
         behaviorEvents.push({
-          eventType: 'OVERSPEED',
+          eventType: 'SPEEDING',
           severity: 'LOW',
           metadata: { speed: updated.speed, limit: 100 },
         });
@@ -462,39 +464,8 @@ export async function simulateLiveStateCycle(io) {
 }
 
 export async function markStaleRealLiveSources(io) {
-  const threshold = new Date(Date.now() - 60_000);
-  const stale = await prisma.vehicleLiveState.findMany({
-    where: {
-      telemetrySource: 'REAL',
-      lastUpdate: { lt: threshold },
-    },
-  });
-
-  if (!stale.length) return 0;
-
-  const updateIds = stale.map((item) => item.vehicleId);
-  await prisma.vehicleLiveState.updateMany({
-    where: { vehicleId: { in: updateIds } },
-    data: { telemetrySource: 'SIMULATED' },
-  });
-
-  if (io) {
-    for (const item of stale) {
-      io.to(`vehicle:${item.vehicleId}`).emit('live:source', {
-        vehicleId: item.vehicleId,
-        telemetrySource: 'SIMULATED',
-      });
-      const owner = await prisma.vehicle.findUnique({ where: { id: item.vehicleId }, select: { userId: true } });
-      if (owner?.userId) {
-        io.to(`user:${owner.userId}`).emit('live:source', {
-          vehicleId: item.vehicleId,
-          telemetrySource: 'SIMULATED',
-        });
-      }
-    }
-  }
-
-  return stale.length;
+  logger.info('Real telemetry stale fallback disabled');
+  return 0;
 }
 
 export function mapStateToLiveUpdate(state) {

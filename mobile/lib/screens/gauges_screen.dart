@@ -6,6 +6,7 @@ import '../services/obd_service.dart';
 import '../services/offline_cache.dart';
 import '../services/sync_service.dart';
 import '../services/telemetry_publisher.dart';
+import '../utils/config.dart';
 import '../widgets/rpm_gauge.dart';
 import '../widgets/fuel_gauge.dart';
 import '../widgets/temp_gauge.dart';
@@ -36,8 +37,17 @@ class _GaugesScreenState extends ConsumerState<GaugesScreen> {
 
   Future<void> _poll() async {
     if (!_obd.isConnected) return;
-    final vehicle = ref.read(selectedVehicleProvider);
-    if (vehicle == null) return;
+    
+    // Determine vehicle ID: use fixed ID if in backup mode, otherwise use selected vehicle
+    String? vehicleId;
+    if (AppConfig.useFixedFleetVehicleId) {
+      vehicleId = AppConfig.fixedFleetVehicleId;
+      ref.read(httpStatusProvider.notifier).state = 'CONNECTING...';
+    } else {
+      final vehicle = ref.read(selectedVehicleProvider);
+      if (vehicle == null) return;
+      vehicleId = vehicle.id;
+    }
 
     try {
       final parsed = await _obd.pollAllPids();
@@ -45,7 +55,7 @@ class _GaugesScreenState extends ConsumerState<GaugesScreen> {
       ref.read(liveDataProvider.notifier).state = live;
 
       final payload = live.toJson();
-      final result = await TelemetryPublisher.publishLiveData(vehicle.id, payload);
+      final result = await TelemetryPublisher.publishLiveData(vehicleId, payload);
 
       if (result.anySuccess) {
         if (mounted) {
@@ -59,12 +69,17 @@ class _GaugesScreenState extends ConsumerState<GaugesScreen> {
             }
           });
         }
+        ref.read(httpStatusProvider.notifier).state = 'OK';
+        ref.read(lastUploadTimeProvider.notifier).state = DateTime.now();
         await SyncService.retryPending();
       } else {
-        await OfflineCache.queue('live_data', {'vehicleId': vehicle.id, ...payload});
+        await OfflineCache.queue('live_data', {'vehicleId': vehicleId, ...payload});
         if (mounted) setState(() => _lastUploadStatus = 'Queued offline');
+        ref.read(httpStatusProvider.notifier).state = 'FAILED';
       }
-    } catch (_) {}
+    } catch (e) {
+      ref.read(httpStatusProvider.notifier).state = 'FAILED';
+    }
   }
 
   @override
@@ -81,6 +96,9 @@ class _GaugesScreenState extends ConsumerState<GaugesScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Live Gauges'),
+        subtitle: AppConfig.useFixedFleetVehicleId 
+          ? const Text('Fixed Vehicle ID Mode', style: TextStyle(fontSize: 12, color: Colors.orange))
+          : null,
         actions: [
           if (_lastUploadStatus != null)
             Center(

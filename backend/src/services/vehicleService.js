@@ -1,19 +1,15 @@
 import prisma from '../utils/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { cacheDel } from '../utils/redis.js';
-import { createVehicleLiveState, mapStateToLiveUpdate } from './liveStateService.js';
-
-function randomBetween(min, max) {
-  return min + Math.random() * (max - min);
-}
+import { mapStateToLiveUpdate } from './liveStateService.js';
 
 export async function createVehicle(userId, data) {
   const odometer = data.odometer != null && !Number.isNaN(Number(data.odometer))
     ? Number(data.odometer)
-    : randomBetween(10000, 200000);
+    : 0;
   const engineHoursObd = data.engineHoursObd != null && !Number.isNaN(Number(data.engineHoursObd))
     ? Number(data.engineHoursObd)
-    : randomBetween(500, 5000);
+    : undefined;
 
   return prisma.$transaction(async (tx) => {
     const vehicle = await tx.vehicle.create({
@@ -34,10 +30,6 @@ export async function createVehicle(userId, data) {
       where: { id: vehicle.id },
       include: { company: true },
     });
-
-    if (vehicleWithCompany) {
-      await createVehicleLiveState(vehicleWithCompany, vehicleWithCompany.company?.settings);
-    }
 
     await tx.fuelLog.create({
       data: {
@@ -102,7 +94,7 @@ export async function getVehicle(id, userId, role) {
     throw new AppError('Access denied', 403);
   }
 
-  if (vehicle.liveState && (!vehicle.liveData || vehicle.liveData.length === 0)) {
+  if (vehicle.liveState?.telemetrySource === 'REAL' && (!vehicle.liveData || vehicle.liveData.length === 0)) {
     vehicle.liveData = [mapStateToLiveUpdate(vehicle.liveState)];
   }
 

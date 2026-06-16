@@ -5,7 +5,6 @@ import { purgeExpiredDedup } from '../mqtt/deduplication.js';
 import { purgeOldDeadLetters, fetchRetryBatch, markDeadLetterProcessed, markDeadLetterRetry } from '../mqtt/deadLetter.js';
 import { handleMqttMessage } from '../mqtt/handlers/telemetryHandler.js';
 import { markStaleMqttDevices } from '../services/deviceAuthService.js';
-import { simulateLiveStateCycle, markStaleRealLiveSources } from '../services/liveStateService.js';
 import logger from '../utils/logger.js';
 
 export function startCronJobs(app) {
@@ -32,25 +31,26 @@ export function startCronJobs(app) {
   });
 
   // Vehicle simulator: generate realistic telemetry every 2 seconds
-  cron.schedule('*/2 * * * * *', async () => {
-    try {
-      const io = getIo();
-      await simulateLiveStateCycle(io);
-    } catch (err) {
-      logger.error('Telemetry simulator cron failed', { err: err.message });
-    }
-  });
+  // Disabled to stop random telemetry simulation.
+  // cron.schedule('*/2 * * * * *', async () => {
+  //   try {
+  //     const io = getIo();
+  //     await simulateLiveStateCycle(io);
+  //   } catch (err) {
+  //     logger.error('Telemetry simulator cron failed', { err: err.message });
+  //   }
+  // });
 
-  // Real telemetry fallback: revert stale REAL sources to SIMULATED after 60s
-  cron.schedule('*/15 * * * * *', async () => {
-    try {
-      const io = getIo();
-      const count = await markStaleRealLiveSources(io);
-      if (count > 0) logger.debug('Stale REAL telemetry sources reverted', { count });
-    } catch (err) {
-      logger.error('Real telemetry fallback cron failed', { err: err.message });
-    }
-  });
+  // Real telemetry fallback is disabled to preserve only real telemetry sources.
+  // cron.schedule('*/15 * * * * *', async () => {
+  //   try {
+  //     const io = getIo();
+  //     const count = await markStaleRealLiveSources(io);
+  //     if (count > 0) logger.debug('Stale REAL telemetry sources reverted', { count });
+  //   } catch (err) {
+  //     logger.error('Real telemetry fallback cron failed', { err: err.message });
+  //   }
+  // });
 
   // Daily retention purge (90 days default)
   cron.schedule('0 3 * * *', async () => {

@@ -53,19 +53,19 @@ export function formatValue(fieldName, value) {
   const formatters = {
     rpm: (v) => Math.round(v),
     speed: (v) => Math.round(v),
-    coolantTemp: (v) => v.toFixed(1),
+    coolantTemp: (v) => Math.round(v),
     batteryVoltage: (v) => v.toFixed(1),
-    fuelLevel: (v) => v.toFixed(1),
-    engineLoad: (v) => v.toFixed(1),
+    fuelLevel: (v) => Math.round(v),
+    engineLoad: (v) => Math.round(v),
     maf: (v) => v.toFixed(2),
-    throttlePosition: (v) => v.toFixed(1),
-    intakeTemp: (v) => v.toFixed(1),
-    engineHours: (v) => v.toFixed(1),
+    throttlePosition: (v) => Math.round(v),
+    intakeTemp: (v) => Math.round(v),
+    engineHours: (v) => Math.round(v),
     odometer: (v) => Math.round(v),
   };
 
   const formatter = formatters[fieldName];
-  return formatter ? formatter(validated) : validated.toFixed(1);
+  return formatter ? formatter(validated) : Math.round(validated);
 }
 
 // Format with unit

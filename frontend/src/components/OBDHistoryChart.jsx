@@ -19,8 +19,10 @@ function OBDHistoryChart({ vehicleId, liveUpdate = null }) {
 
   useEffect(() => {
     if (!vehicleId) return;
-    api.get(`/obd/history/${vehicleId}`, { params: { limit: 100 } }).then((r) => {
+    api.get(`/mobile/telemetry/history/${vehicleId}`, { params: { limit: 100 } }).then((r) => {
       setData(r.data.data || []);
+    }).catch(() => {
+      setData([]);
     });
   }, [vehicleId]);
 
@@ -35,8 +37,9 @@ function OBDHistoryChart({ vehicleId, liveUpdate = null }) {
       .reverse()
       .map((row) => {
         const value = Number(row[metric]);
+        const timestamp = row.recordedAt || row.timestamp || row.createdAt;
         return {
-          time: new Date(row.recordedAt).toLocaleTimeString(),
+          time: timestamp ? new Date(timestamp).toLocaleTimeString() : 'Unknown',
           value: Number.isFinite(value) ? value : null,
         };
       })

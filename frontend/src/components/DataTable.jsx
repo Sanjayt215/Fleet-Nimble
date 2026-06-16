@@ -11,7 +11,7 @@ export default function DataTable({
   return (
     <div className="card overflow-hidden p-0">
       {onSearchChange && (
-        <div className="border-b border-slate-200 p-4 dark:border-slate-800">
+        <div className="border-b border-slate-800 p-4">
           <input
             type="search"
             placeholder="Search..."
@@ -23,7 +23,7 @@ export default function DataTable({
       )}
       <div className="overflow-x-auto">
         <table className="w-full">
-          <thead className="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-800/50">
+          <thead className="border-b border-slate-800 bg-slate-900">
             <tr>
               {columns.map((col) => (
                 <th key={col.key} className="table-th">
@@ -32,10 +32,10 @@ export default function DataTable({
               ))}
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+          <tbody className="divide-y divide-slate-800">
             {data?.length ? (
               data.map((row, i) => (
-                <tr key={row.id || i} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                <tr key={row.id || i} className="hover:bg-slate-800/80">
                   {columns.map((col) => (
                     <td key={col.key} className="table-td">
                       {col.render ? col.render(row) : row[col.key]}
@@ -45,7 +45,7 @@ export default function DataTable({
               ))
             ) : (
               <tr>
-                <td colSpan={columns.length} className="px-4 py-12 text-center text-slate-500">
+                <td colSpan={columns.length} className="px-4 py-12 text-center text-slate-400">
                   {emptyMessage}
                 </td>
               </tr>
@@ -54,7 +54,7 @@ export default function DataTable({
         </table>
       </div>
       {totalPages > 1 && (
-        <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3 dark:border-slate-800">
+        <div className="flex items-center justify-between border-t border-slate-800 px-4 py-3">
           <button
             type="button"
             disabled={page <= 1}
@@ -63,7 +63,7 @@ export default function DataTable({
           >
             Previous
           </button>
-          <span className="text-sm text-slate-500">
+          <span className="text-sm text-slate-400">
             Page {page} of {totalPages}
           </span>
           <button

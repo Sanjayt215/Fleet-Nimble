@@ -5,6 +5,8 @@ import { useAuth } from '../context/AuthContext';
 export function useSocket(events = {}, vehicleId = null) {
   const { isAuthenticated } = useAuth();
   const handlers = useRef(events);
+  const eventRefsRef = useRef([]);
+  
   handlers.current = events;
 
   useEffect(() => {
@@ -25,7 +27,14 @@ export function useSocket(events = {}, vehicleId = null) {
       if (socket.connected) socket.emit('ping:heartbeat');
     }, 20000);
 
-    const subs = Object.entries(events).map(([event, fn]) => {
+    // Clean up all previous listeners before adding new ones
+    eventRefsRef.current.forEach(([event, wrapped]) => {
+      socket.off(event, wrapped);
+    });
+    eventRefsRef.current = [];
+
+    // Add new listeners
+    const newSubs = Object.entries(events).map(([event, fn]) => {
       if (typeof fn !== 'function') return null;
       const wrapped = (...args) => {
         const handler = handlers.current[event];
@@ -35,10 +44,18 @@ export function useSocket(events = {}, vehicleId = null) {
       return [event, wrapped];
     }).filter(Boolean);
 
+    eventRefsRef.current = newSubs;
+
     return () => {
       clearInterval(interval);
       socket.off('connect', joinRooms);
-      subs.forEach(([event, wrapped]) => socket.off(event, wrapped));
+      
+      // Clean up event listeners
+      eventRefsRef.current.forEach(([event, wrapped]) => {
+        socket.off(event, wrapped);
+      });
+      eventRefsRef.current = [];
+      
       unsubscribeSocket();
     };
   }, [isAuthenticated, vehicleId]);

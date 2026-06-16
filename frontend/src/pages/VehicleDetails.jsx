@@ -1,24 +1,37 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useLocation } from 'react-router-dom';
 import api from '../services/api';
 import GaugeChart from '../components/GaugeChart';
 import { useSocket } from '../hooks/useSocket';
 import { mergeTelemetry } from '../utils/telemetryFormat';
 import { TelemetryHealthCard } from '../components/VehicleStatusBadge';
+import { useMode } from '../context/ModeContext';
+import { DEMO_FLEET } from '../data/demoData';
 
 export default function VehicleDetails() {
   const { id } = useParams();
+  const location = useLocation();
+  const { isDemo } = useMode();
   const [vehicle, setVehicle] = useState(null);
   const [live, setLive] = useState(null);
 
+  const getBasePath = () => location.pathname.startsWith('/demo') ? '/demo' : '/analysis';
+
   useSocket(
     {
-      'live:update': (d) => {
-        if (d.vehicleId === id || d.vehicleId === undefined) {
+      'live-telemetry-update': (d) => {
+        if (isDemo) return;
+        if (d?.mode !== 'LIVE') return;
+        const vid = d.vehicleId ?? d.vehicle?.id ?? d.vehicle_id;
+        if (vid === id) {
+          if (d.vehicle) {
+            setVehicle((prev) => ({ ...prev, ...d.vehicle }));
+          }
           setLive((prev) => mergeTelemetry(prev, d));
         }
       },
       'device:heartbeat': (d) => {
+        if (isDemo) return; // Don't use socket in demo mode
         if (d.vehicleId === id) {
           setVehicle((prev) => prev ? {
             ...prev,
@@ -31,48 +44,67 @@ export default function VehicleDetails() {
         }
       },
     },
-    id
+    isDemo ? null : id
   );
 
   useEffect(() => {
-    api.get(`/vehicles/${id}`).then((r) => {
-      setVehicle(r.data.data);
-      if (r.data.data.liveData?.[0]) setLive(r.data.data.liveData[0]);
-    });
-    api.get(`/obd/latest/${id}`).then((r) => r.data.data && setLive(r.data.data));
-  }, [id]);
+    if (isDemo) {
+      const demoVehicle = DEMO_FLEET.find(v => v.id === id);
+      if (demoVehicle) {
+        setVehicle(demoVehicle);
+        setLive({
+          rpm: Math.floor(Math.random() * (4000 - 800) + 800),
+          speed: Math.floor(Math.random() * (80 - 0) + 0),
+          fuelLevel: Math.floor(Math.random() * (100 - 20) + 20),
+          coolantTemp: Math.floor(Math.random() * (95 - 70) + 70),
+          batteryVoltage: (Math.random() * (14.2 - 12.4) + 12.4).toFixed(1),
+          engineLoad: Math.floor(Math.random() * (60 - 10) + 10)
+        });
+      }
+    } else {
+      api.get(`/vehicles/${id}`).then((r) => {
+        setVehicle(r.data.data);
+      }).catch(() => setVehicle(null));
+      api.get(`/mobile/telemetry/history/${id}`, { params: { limit: 1 } })
+        .then((r) => {
+          const entries = r.data.data || [];
+          if (entries.length > 0) setLive(entries[0]);
+        })
+        .catch(() => {});
+    }
+  }, [id, isDemo]);
 
   if (!vehicle) return <div className="animate-pulse">Loading...</div>;
 
   return (
     <div className="space-y-8">
       <div className="flex items-center gap-4">
-        <Link to="/vehicles" className="text-fleet-600 hover:underline">← Vehicles</Link>
-        <h2 className="text-2xl font-bold">
+        <Link to={`${getBasePath()}/vehicles`} className="text-cyan-400 hover:underline">← Vehicles</Link>
+        <h2 className="text-2xl font-bold text-white">
           {vehicle.make} {vehicle.model} {vehicle.year}
         </h2>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <TelemetryHealthCard health={vehicle.telemetryHealth} />
-        <div className="card"><p className="text-sm text-slate-500">VIN</p><p className="font-mono">{vehicle.vin || '—'}</p></div>
-        <div className="card"><p className="text-sm text-slate-500">Plate</p><p>{vehicle.plateNumber || '—'}</p></div>
-        <div className="card"><p className="text-sm text-slate-500">Odometer</p><p>{vehicle.odometer?.toLocaleString()} km</p></div>
-        <div className="card">
-          <p className="text-sm text-slate-500">MIL (check engine)</p>
-          <p className={vehicle.milOn ? 'font-semibold text-red-600' : 'text-green-600'}>
+        <div className="card bg-slate-900/50 border-slate-800"><p className="text-sm text-slate-400">VIN</p><p className="font-mono text-white">{vehicle.vin || '—'}</p></div>
+        <div className="card bg-slate-900/50 border-slate-800"><p className="text-sm text-slate-400">Plate</p><p className="text-white">{vehicle.registrationNumber || vehicle.plateNumber || '—'}</p></div>
+        <div className="card bg-slate-900/50 border-slate-800"><p className="text-sm text-slate-400">Odometer</p><p className="text-white">{vehicle.odometer?.toLocaleString() || '—'} km</p></div>
+        <div className="card bg-slate-900/50 border-slate-800">
+          <p className="text-sm text-slate-400">MIL (check engine)</p>
+          <p className={vehicle.milOn ? 'font-semibold text-red-400' : 'text-green-400'}>
             {vehicle.milOn == null ? '—' : vehicle.milOn ? 'ON' : 'OFF'}
           </p>
         </div>
-        <div className="card">
-          <p className="text-sm text-slate-500">Engine hours (OBD)</p>
-          <p>{vehicle.engineHoursObd != null ? vehicle.engineHoursObd.toFixed(1) : '—'}</p>
+        <div className="card bg-slate-900/50 border-slate-800">
+          <p className="text-sm text-slate-400">Engine hours (OBD)</p>
+          <p className="text-white">{vehicle.engineHoursObd != null ? vehicle.engineHoursObd.toFixed(1) : '—'}</p>
         </div>
-        <div className="card flex flex-col gap-2">
-          <Link to={`/vehicles/${id}/live`} className="btn-primary inline-block text-center">
+        <div className="card bg-slate-900/50 border-slate-800 flex flex-col gap-2">
+          <Link to={`${getBasePath()}/vehicles/${id}/live`} className="btn-primary inline-block text-center">
             Live OBD
           </Link>
-          <Link to={`/diagnostics?vehicle=${id}`} className="btn-secondary inline-block text-center text-sm">
+          <Link to={`${getBasePath()}/diagnostics?vehicle=${id}`} className="btn-secondary inline-block text-center text-sm">
             Diagnostics
           </Link>
         </div>

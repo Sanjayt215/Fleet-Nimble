@@ -6,53 +6,7 @@ import GaugeChart from '../components/GaugeChart';
 import StatCard from '../components/StatCard';
 import OBDHistoryChart from '../components/OBDHistoryChart';
 import VehicleStatusBadge from '../components/VehicleStatusBadge';
-import { mergeTelemetry } from '../utils/telemetryFormat';
-
-// Safety guards and formatting functions
-function isSafeNumber(value) {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-function clampValue(value, min, max) {
-  if (!isSafeNumber(value)) return min;
-  return Math.min(Math.max(value, min), max);
-}
-
-function formatCoolantTemp(value) {
-  if (!isSafeNumber(value)) return '—';
-  const clamped = clampValue(value, -20, 150);
-  return `${clamped.toFixed(1)}°C`;
-}
-
-function formatFuelLevel(value) {
-  if (!isSafeNumber(value)) return '—';
-  const clamped = clampValue(value, 0, 100);
-  return `${clamped.toFixed(1)}%`;
-}
-
-function formatBatteryVoltage(value) {
-  if (!isSafeNumber(value)) return '—';
-  const clamped = clampValue(value, 9, 15);
-  return `${clamped.toFixed(1)}V`;
-}
-
-function formatThrottle(value) {
-  if (!isSafeNumber(value)) return '—';
-  const clamped = clampValue(value, 0, 100);
-  return `${clamped.toFixed(1)}%`;
-}
-
-function formatMAF(value) {
-  if (!isSafeNumber(value)) return '—';
-  const clamped = clampValue(value, 0, 30);
-  return `${clamped.toFixed(2)} g/s`;
-}
-
-function formatIntakeTemp(value) {
-  if (!isSafeNumber(value)) return '—';
-  const clamped = clampValue(value, -10, 120);
-  return `${clamped.toFixed(1)}°C`;
-}
+import { mergeTelemetry, formatWithUnit, formatValue, isSafeNumber, clamp } from '../utils/telemetryFormat';
 
 // LIVE OBD — real-time vehicle telemetry page
 function LeafletMap({ lat, lng }) {
@@ -107,15 +61,19 @@ export default function LiveOBD() {
 
   useSocket(
     {
-      'live:update': (d) => {
-        const vid = d.vehicleId ?? d.vehicle_id;
+      'live-telemetry-update': (d) => {
+        if (d?.mode !== 'LIVE') return;
+        const vid = d.vehicleId ?? d.vehicle?.id ?? d.vehicle_id;
         if (vid === vehicleId) {
           setLive((prev) => mergeTelemetry(prev, d));
           setTelemetryHealth((prev) => ({
             ...(prev || {}),
             streamStatus: 'live',
-            lastObdAt: d.recordedAt || new Date().toISOString(),
+            lastObdAt: d.recordedAt || d.timestamp || new Date().toISOString(),
           }));
+          if (d.vehicle) {
+            setVehicle((prev) => ({ ...prev, ...d.vehicle }));
+          }
         }
       },
       'vehicle:status': (d) => {
@@ -148,13 +106,20 @@ export default function LiveOBD() {
     api.get(`/vehicles/${vehicleId}`).then((r) => {
       setVehicle(r.data.data);
       setTelemetryHealth(r.data.data?.telemetryHealth ?? null);
+    }).catch(() => {
+      setVehicle(null);
     });
-    api.get(`/obd/latest/${vehicleId}`).then((r) => {
-      if (r.data.data) {
-        setLive(r.data.data);
-        if (r.data.data.telemetryHealth) setTelemetryHealth(r.data.data.telemetryHealth);
-      }
-    });
+    api.get(`/mobile/telemetry/history/${vehicleId}`, { params: { limit: 1 } })
+      .then((r) => {
+        const entries = r.data.data || [];
+        if (entries.length > 0) {
+          setLive(entries[0]);
+          if (entries[0].telemetryHealth) setTelemetryHealth(entries[0].telemetryHealth);
+        }
+      })
+      .catch(() => {
+        setLive(null);
+      });
   }, [vehicleId]);
 
   const status = live?.telemetryOnline === false
@@ -199,12 +164,12 @@ export default function LiveOBD() {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-        <StatCard title="Coolant" value={formatCoolantTemp(live?.coolantTemp)} />
-        <StatCard title="Fuel" value={formatFuelLevel(live?.fuelLevel)} />
-        <StatCard title="Battery" value={formatBatteryVoltage(live?.batteryVoltage)} />
-        <StatCard title="Throttle" value={formatThrottle(live?.throttle)} />
-        <StatCard title="MAF" value={formatMAF(live?.maf)} />
-        <StatCard title="Intake" value={formatIntakeTemp(live?.intakeTemp)} />
+        <StatCard title="Coolant" value={live?.coolantTemp != null ? formatWithUnit('coolantTemp', live?.coolantTemp) : '—'} />
+        <StatCard title="Fuel" value={live?.fuelLevel != null ? formatWithUnit('fuelLevel', live?.fuelLevel) : '—'} />
+        <StatCard title="Battery" value={live?.batteryVoltage != null ? formatWithUnit('batteryVoltage', live?.batteryVoltage) : '—'} />
+        <StatCard title="Throttle" value={live?.throttle != null ? formatWithUnit('throttlePosition', live?.throttle) : '—'} />
+        <StatCard title="MAF" value={live?.maf != null ? formatWithUnit('maf', live?.maf) : '—'} />
+        <StatCard title="Intake" value={live?.intakeTemp != null ? formatWithUnit('intakeTemp', live?.intakeTemp) : '—'} />
       </div>
 
       {lat != null && lng != null && (

@@ -11,9 +11,9 @@ function GaugeChart({ label, value, unit, max = 100, color = '#3b82f6' }) {
 
     let formatted = '—';
     if (Number.isFinite(clampedValue)) {
-      formatted = label === 'RPM' || label === 'Speed'
-        ? Math.round(clampedValue)
-        : clampedValue.toFixed(2);
+      formatted = label === 'Battery'
+        ? clampedValue.toFixed(1)
+        : Math.round(clampedValue);
     }
 
     return {
@@ -39,10 +39,10 @@ function GaugeChart({ label, value, unit, max = 100, color = '#3b82f6' }) {
           strokeDashoffset={offset}
           transform="rotate(-90 60 60)"
         />
-        <text x="60" y="58" textAnchor="middle" className="fill-slate-900 text-xl font-bold dark:fill-white">
+        <text x="60" y="58" textAnchor="middle" className="fill-white text-xl font-bold">
           {displayValue}
         </text>
-        <text x="60" y="74" textAnchor="middle" className="fill-slate-500 text-xs">
+        <text x="60" y="74" textAnchor="middle" className="fill-slate-400 text-xs">
           {unit}
         </text>
       </svg>

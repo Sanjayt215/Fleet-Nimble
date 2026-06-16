@@ -1,6 +1,5 @@
 import prisma from '../utils/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
-import { getOrCreateTwin } from '../services/digitalTwinService.js';
 
 /**
  * GET /twin/:vehicleId — return live state for a single vehicle
@@ -18,8 +17,8 @@ export async function getTwin(req, res, next) {
     });
     if (!vehicle) throw new AppError('Vehicle not found', 404, 'NOT_FOUND');
 
-    const twin = await getOrCreateTwin(vehicleId);
-    res.json({ success: true, data: twin });
+    const twin = await prisma.vehicleLiveState.findUnique({ where: { vehicleId } });
+    res.json({ success: true, data: twin?.telemetrySource === 'REAL' ? twin : null });
   } catch (err) {
     next(err);
   }
@@ -45,12 +44,10 @@ export async function getAllTwins(req, res, next) {
     });
 
     // Backfill any missing twins inline
-    const results = await Promise.all(
-      vehicles.map(async (v) => {
-        const liveState = v.liveState || (await getOrCreateTwin(v.id));
-        return { ...v, liveState };
-      })
-    );
+    const results = vehicles.map((v) => ({
+      ...v,
+      liveState: v.liveState?.telemetrySource === 'REAL' ? v.liveState : null,
+    }));
 
     // Fleet KPIs
     const now = Date.now();

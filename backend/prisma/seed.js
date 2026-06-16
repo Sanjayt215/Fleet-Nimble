@@ -57,11 +57,12 @@ async function main() {
   });
 
   const adminRole = await prisma.role.findUnique({ where: { name: 'ADMIN' } });
-  const hash = await bcrypt.hash('Admin@123', 12);
+  const ADMIN_PASSWORD = 'Admin123!';
+  const hash = await bcrypt.hash(ADMIN_PASSWORD, 12);
 
   const admin = await prisma.user.upsert({
     where: { email: 'admin@fleetnimble.com' },
-    update: { companyId: company.id },
+    update: { companyId: company.id, passwordHash: hash },
     create: {
       name: 'FleetNimble Admin',
       email: 'admin@fleetnimble.com',
@@ -149,7 +150,7 @@ async function main() {
 
   console.log('\nSeed complete:');
   console.log(`  Admin email: admin@fleetnimble.com`);
-  console.log(`  Admin password: Admin123!`);
+  console.log(`  Admin password: ${ADMIN_PASSWORD}`);
   console.log(`  Vehicles seeded: ${FLEET.length}`);
 }
 

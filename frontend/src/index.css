@@ -4,27 +4,47 @@
 
 @layer base {
   body {
-    @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 antialiased;
+    @apply bg-slate-950 text-white antialiased;
   }
 }
 
 @layer components {
   .card {
-    @apply rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900;
+    @apply rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-sm;
   }
   .btn-primary {
     @apply rounded-lg bg-fleet-600 px-4 py-2 text-sm font-medium text-white hover:bg-fleet-700 disabled:opacity-50;
   }
   .btn-secondary {
-    @apply rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800;
+    @apply rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800;
   }
   .input {
-    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900;
+    @apply w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white placeholder:text-slate-500;
   }
   .table-th {
-    @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500;
+    @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400;
   }
   .table-td {
-    @apply px-4 py-3 text-sm;
+    @apply px-4 py-3 text-sm text-slate-100;
+  }
+
+  .glass-panel {
+    @apply rounded-[2rem] border border-slate-700/30 bg-slate-950/75 p-6 shadow-xl shadow-cyan-500/10 backdrop-blur-xl;
+  }
+  .btn-lg {
+    @apply min-w-[180px] rounded-2xl px-6 py-3 text-base;
+  }
+  .home-landing {
+    background-image: radial-gradient(circle at top left, rgba(34,211,238,0.18), transparent 28%), radial-gradient(circle at top right, rgba(59,130,246,0.12), transparent 22%), radial-gradient(circle at bottom left, rgba(56,189,248,0.1), transparent 26%);
+  }
+  .bg-glow-mask {
+    background: radial-gradient(circle at 40% 20%, rgba(56,189,248,0.22), transparent 32%), radial-gradient(circle at 70% 30%, rgba(14,165,233,0.22), transparent 30%);
+  }
+  
+  .waiting-banner-dark {
+    @apply rounded-xl border border-cyan-500/50 bg-cyan-950/30 p-4 text-cyan-200;
+  }
+  .empty-state-dark {
+    @apply rounded-lg border border-cyan-500/30 bg-slate-900 p-6 text-cyan-100;
   }
 }

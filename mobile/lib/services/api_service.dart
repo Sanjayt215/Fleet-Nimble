@@ -60,6 +60,89 @@ class ApiService {
     return list.map((e) => Vehicle.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  Future<List<Vehicle>> getMyVehicles() async {
+    await loadToken();
+    final res = await http.get(
+      Uri.parse('${AppConfig.apiBaseUrl}/mobile/vehicles/my'),
+      headers: _headers,
+    );
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    final list = body['data'] as List<dynamic>;
+    return list.map((e) => Vehicle.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<Map<String, dynamic>> setupVehicle({
+    required String vehicleName,
+    String? registrationNumber,
+    String? make,
+    String? model,
+    int? year,
+    String? fuelType,
+    String? vin,
+    String? obdDeviceName,
+    String? bluetoothAddress,
+  }) async {
+    await loadToken();
+    final res = await http.post(
+      Uri.parse('${AppConfig.apiBaseUrl}/mobile/vehicles/setup'),
+      headers: _headers,
+      body: jsonEncode({
+        'vehicleName': vehicleName,
+        'registrationNumber': registrationNumber,
+        'make': make,
+        'model': model,
+        'year': year,
+        'fuelType': fuelType,
+        'vin': vin,
+        'obdDeviceName': obdDeviceName,
+        'bluetoothAddress': bluetoothAddress,
+      }),
+    );
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    if (res.statusCode >= 400 || body['success'] != true) {
+      throw Exception(body['error']?.toString() ?? 'Vehicle setup failed');
+    }
+    return body['data'] as Map<String, dynamic>;
+  }
+
+  Future<void> postLiveTelemetry({
+    required String vehicleId,
+    String mode = 'LIVE',
+    double? rpm,
+    double? speed,
+    double? fuelLevel,
+    double? coolantTemp,
+    double? batteryVoltage,
+    double? engineLoad,
+    double? latitude,
+    double? longitude,
+    double? odometer,
+    DateTime? timestamp,
+  }) async {
+    await loadToken();
+    final res = await http.post(
+      Uri.parse('${AppConfig.apiBaseUrl}/mobile/telemetry/live'),
+      headers: _headers,
+      body: jsonEncode({
+        'vehicleId': vehicleId,
+        'mode': mode,
+        'rpm': rpm,
+        'speed': speed,
+        'fuelLevel': fuelLevel,
+        'coolantTemp': coolantTemp,
+        'batteryVoltage': batteryVoltage,
+        'engineLoad': engineLoad,
+        'latitude': latitude,
+        'longitude': longitude,
+        'odometer': odometer,
+        'timestamp': timestamp?.toIso8601String(),
+      }),
+    );
+    if (res.statusCode >= 400) {
+      throw Exception('HTTP ${res.statusCode}');
+    }
+  }
+
   Future<void> postLiveData(String vehicleId, Map<String, dynamic> data) async {
     await loadToken();
     final res = await http.post(

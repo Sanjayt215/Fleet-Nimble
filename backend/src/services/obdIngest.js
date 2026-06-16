@@ -2,7 +2,7 @@ import prisma from '../utils/prisma.js';
 import { normalizeTelemetry } from './telemetryParser.js';
 import { setLatestObdCached } from './cacheService.js';
 import { switchToRealTelemetry } from './digitalTwinService.js';
-import { pauseVehicleSimulation } from './telemetrySimulator.js';
+
 
 /**
  * Transaction-safe OBD ingest: live row, raw backup, GPS, device heartbeat.
@@ -81,9 +81,8 @@ export async function ingestObdReading(vehicleId, rawBody, options = {}) {
 
   await setLatestObdCached(vehicleId, record);
 
-  // Update digital twin with REAL data + pause simulator for this vehicle
+  // Update digital twin with REAL data only.
   try {
-    pauseVehicleSimulation(vehicleId);
     await switchToRealTelemetry(vehicleId, telemetry);
   } catch (err) {
     // Non-fatal — don't block response
