@@ -18,7 +18,7 @@ import WorkOrders from './pages/WorkOrders';
 import Settings from './pages/Settings';
 import Admin from './pages/Admin';
 import LiveOBD from './pages/LiveOBD';
-
+import GpsTracking from './pages/GpsTracking';
 export default function App() {
   return (
     <Routes>
@@ -34,6 +34,7 @@ export default function App() {
           <Route path="/demo/vehicles" element={<Vehicles />} />
           <Route path="/demo/vehicles/:id" element={<VehicleDetails />} />
           <Route path="/demo/vehicles/:vehicleId/live" element={<LiveOBD />} />
+          <Route path="/demo/gps-tracking" element={<GpsTracking />} />
           <Route path="/demo/diagnostics" element={<Diagnostics />} />
           <Route path="/demo/dtc" element={<DtcCodes />} />
           <Route path="/demo/trips" element={<Trips />} />
@@ -50,6 +51,7 @@ export default function App() {
           <Route path="/analysis/vehicles" element={<Vehicles />} />
           <Route path="/analysis/vehicles/:id" element={<VehicleDetails />} />
           <Route path="/analysis/vehicles/:vehicleId/live" element={<LiveOBD />} />
+          <Route path="/analysis/gps-tracking" element={<GpsTracking />} />
           <Route path="/analysis/diagnostics" element={<Diagnostics />} />
           <Route path="/analysis/dtc" element={<DtcCodes />} />
           <Route path="/analysis/trips" element={<Trips />} />

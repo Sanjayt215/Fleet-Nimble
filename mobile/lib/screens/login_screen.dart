@@ -29,6 +29,7 @@ class _LoginScreenState extends State<LoginScreen> {
         final prefs = await SharedPreferences.getInstance();
         // Store the fixed vehicle ID for reference
         await prefs.setString('vehicleId', AppConfig.fixedFleetVehicleId);
+        if (!mounted) return;
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (_) => const HomeScreen()),
@@ -37,6 +38,7 @@ class _LoginScreenState extends State<LoginScreen> {
         // Original flow: check if vehicle exists
         final prefs = await SharedPreferences.getInstance();
         final hasVehicle = prefs.getString('vehicleId') != null;
+        if (!mounted) return;
         
         if (hasVehicle) {
           Navigator.pushReplacement(
@@ -51,6 +53,7 @@ class _LoginScreenState extends State<LoginScreen> {
         }
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -72,13 +75,13 @@ class _LoginScreenState extends State<LoginScreen> {
               const Text('FleetNimble Telematics Platform', textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: Colors.grey)),
               if (AppConfig.useFixedFleetVehicleId)
                 Container(
-                  margin: const EdgeInsets.only(top: 12),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.2),
-                    border: Border.all(color: Colors.orange),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
+                margin: const EdgeInsets.only(top: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.2),
+                  border: Border.all(color: Colors.orange),
+                  borderRadius: BorderRadius.circular(8),
+                ),
                   child: const Text(
                     '⚙️ Backup Mode: Fixed Vehicle ID\nVehicle setup skipped',
                     textAlign: TextAlign.center,

@@ -7,6 +7,7 @@ import { useMode } from '../context/ModeContext';
 const getNav = (basePath) => [
   { to: basePath, label: 'Dashboard', icon: '📊' },
   { to: `${basePath}/vehicles`, label: 'Vehicles', icon: '🚗' },
+  { to: `${basePath}/gps-tracking`, label: 'GPS Tracking', icon: '🗺️' },
   { to: `${basePath}/diagnostics`, label: 'Live Diagnostics', icon: '🔧' },
   { to: `${basePath}/dtc`, label: 'DTC Codes', icon: '⚠️' },
   { to: `${basePath}/fuel`, label: 'Fuel Management', icon: '⛽' },

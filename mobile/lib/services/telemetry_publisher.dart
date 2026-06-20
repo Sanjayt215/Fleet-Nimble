@@ -79,6 +79,13 @@ class TelemetryPublisher {
         engineLoad: _toDouble(payload['engineLoad']),
         latitude: _toDouble(payload['latitude']),
         longitude: _toDouble(payload['longitude']),
+        gpsAccuracy: _toDouble(payload['gpsAccuracy']),
+        gpsAltitude: _toDouble(payload['gpsAltitude']),
+        gpsHeading: _toDouble(payload['gpsHeading']),
+        gpsTimestamp: payload['gpsTimestamp'] != null
+          ? DateTime.parse(payload['gpsTimestamp'].toString())
+          : null,
+        vin: payload['vin'] as String?,
         odometer: _toDouble(payload['odometer']),
         timestamp: DateTime.now(),
       );
@@ -131,6 +138,13 @@ class TelemetryPublisher {
               engineLoad: _toDouble(reading['engineLoad']),
               latitude: _toDouble(reading['latitude']),
               longitude: _toDouble(reading['longitude']),
+              gpsAccuracy: _toDouble(reading['gpsAccuracy']),
+              gpsAltitude: _toDouble(reading['gpsAltitude']),
+              gpsHeading: _toDouble(reading['gpsHeading']),
+              gpsTimestamp: reading['gpsTimestamp'] != null
+                ? DateTime.parse(reading['gpsTimestamp'].toString())
+                : null,
+              vin: reading['vin'] as String?,
               odometer: _toDouble(reading['odometer']),
               timestamp: reading['timestamp'] != null 
                 ? DateTime.parse(reading['timestamp'].toString())

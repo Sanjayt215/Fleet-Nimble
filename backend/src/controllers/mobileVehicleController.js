@@ -1,6 +1,65 @@
 import prisma from "../utils/prisma.js";
 import logger from "../utils/logger.js";
 
+export async function vinDecode(req, res) {
+  try {
+    const { vin } = req.body;
+
+    if (!vin) {
+      return res.status(400).json({
+        success: false,
+        error: { code: "INVALID_PAYLOAD", message: "VIN is required" }
+      });
+    }
+
+    const response = await fetch(
+      `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/${vin}?format=json`
+    );
+
+    if (!response.ok) {
+      return res.status(400).json({
+        success: false,
+        error: { code: "VIN_DECODE_FAILED", message: "Failed to decode VIN" }
+      });
+    }
+
+    const data = await response.json();
+    const result = data.Results[0];
+
+    if (!result || result.ErrorCode) {
+      return res.status(400).json({
+        success: false,
+        error: { code: "VIN_DECODE_FAILED", message: result.ErrorText || "Failed to decode VIN" }
+      });
+    }
+
+    const decodedData = {
+      vin: result.VIN,
+      make: result.Make,
+      model: result.Model,
+      year: result.ModelYear ? parseInt(result.ModelYear) : null,
+      manufacturer: result.Manufacturer,
+      fuelType: result.FuelTypePrimary,
+      bodyClass: result.BodyClass,
+      engineModel: result.EngineModel
+    };
+
+    res.json({
+      success: true,
+      data: decodedData
+    });
+  } catch (err) {
+    console.error("VIN decode failed:", err);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: "VIN_DECODE_FAILED",
+        message: err.message
+      }
+    });
+  }
+}
+
 export async function setupVehicle(req, res) {
   try {
     const userId = req.userId || req.user?.id;
@@ -14,6 +73,9 @@ export async function setupVehicle(req, res) {
       year,
       fuelType,
       vin,
+      manufacturer,
+      bodyClass,
+      engineModel,
       obdDeviceName,
       bluetoothAddress
     } = req.body;
@@ -25,16 +87,15 @@ export async function setupVehicle(req, res) {
       });
     }
 
-    if (!vehicleName || !registrationNumber || !make || !model || !year) {
+    if (!vehicleName || !registrationNumber) {
       return res.status(400).json({
         success: false,
-        error: { code: "INVALID_PAYLOAD", message: "vehicleName, registrationNumber, make, model, and year are required" }
+        error: { code: "INVALID_PAYLOAD", message: "vehicleName and registrationNumber are required" }
       });
     }
 
     const normalizedReg = registrationNumber.toUpperCase().trim();
 
-    // Create or update vehicle by registrationNumber for the user
     const existingVehicle = await prisma.vehicle.findFirst({
       where: {
         userId,
@@ -49,9 +110,12 @@ export async function setupVehicle(req, res) {
       registrationNumber: normalizedReg,
       make,
       model,
-      year: parseInt(year) || 2015,
+      year: year ? parseInt(year) : null,
       fuelType,
-      vin: vin || "",
+      vin,
+      manufacturer,
+      bodyClass,
+      engineModel,
       companyId: companyId || undefined
     };
 
@@ -69,7 +133,6 @@ export async function setupVehicle(req, res) {
       });
     }
 
-    // Create or update OBD device if provided
     let obdDevice = null;
     if (obdDeviceName || bluetoothAddress) {
       obdDevice = await prisma.oBDDevice.upsert({
@@ -91,14 +154,12 @@ export async function setupVehicle(req, res) {
         },
       });
 
-      // Update vehicle with obdDeviceId
       await prisma.vehicle.update({
         where: { id: vehicle.id },
         data: { obdDeviceId: obdDevice.id },
       });
     }
 
-    // Emit socket event to user's room
     const io = req.app.get('io');
     if (io) {
       io.to(`user:${userId}`).emit('vehicle-registered', {
@@ -121,6 +182,9 @@ export async function setupVehicle(req, res) {
         year: vehicle.year,
         fuelType: vehicle.fuelType,
         vin: vehicle.vin,
+        manufacturer: vehicle.manufacturer,
+        bodyClass: vehicle.bodyClass,
+        engineModel: vehicle.engineModel,
         obdDeviceId: obdDevice?.id
       }
     });
@@ -144,7 +208,6 @@ export async function getMyVehicles(req, res) {
       return res.status(401).json({ success: false, error: "User not authenticated" });
     }
 
-    // Fetch vehicles belonging to this user or their company
     const vehicles = await prisma.vehicle.findMany({
       where: {
         deletedAt: null,
@@ -157,7 +220,6 @@ export async function getMyVehicles(req, res) {
       orderBy: { createdAt: 'desc' },
     });
 
-    // Attach latest telemetry (if any) for each vehicle
     const vehiclesWithTelemetry = await Promise.all(
       vehicles.map(async (v) => {
         const latest = await prisma.telemetry.findFirst({

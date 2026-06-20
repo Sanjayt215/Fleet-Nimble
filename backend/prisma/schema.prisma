@@ -95,26 +95,26 @@ model Company {
 }
 
 model User {
-  id           String    @id @default(uuid())
-  name         String
-  email        String    @unique
-  passwordHash String    @map("password_hash")
-  roleId       Int       @map("role_id")
-  companyId    String?   @map("company_id")
-  role         Role      @relation(fields: [roleId], references: [id])
-  company      Company?  @relation(fields: [companyId], references: [id])
-  deletedAt    DateTime? @map("deleted_at")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
+  id               String        @id @default(uuid())
+  name             String
+  email            String        @unique
+  passwordHash     String        @map("password_hash")
+  roleId           Int           @map("role_id")
+  companyId        String?       @map("company_id")
+  role             Role          @relation(fields: [roleId], references: [id])
+  company          Company?      @relation(fields: [companyId], references: [id])
+  deletedAt        DateTime?     @map("deleted_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
 
-  vehicles       Vehicle[]
-  refreshTokens  RefreshToken[]
-  deviceTokens   DeviceToken[]
-  workOrders     WorkOrder[]    @relation("AssignedWorkOrders")
-  notifications  Notification[]
-  auditLogs      AuditLog[]
-  obdDevices     OBDDevice[]
-  telemetries    Telemetry[]
+  vehicles         Vehicle[]
+  refreshTokens    RefreshToken[]
+  deviceTokens     DeviceToken[]
+  workOrders       WorkOrder[]    @relation("AssignedWorkOrders")
+  notifications    Notification[]
+  auditLogs        AuditLog[]
+  obdDevices       OBDDevice[]
+  telemetries      Telemetry[]
 
   @@index([email])
   @@index([roleId])
@@ -140,6 +140,9 @@ model Vehicle {
   companyId         String?       @map("company_id")
   vehicleName       String?       @map("vehicle_name")
   vin               String?
+  manufacturer      String?
+  bodyClass         String?
+  engineModel       String?
   plateNumber       String?       @map("plate_number")
   registrationNumber String?      @map("registration_number")
   make              String?
@@ -153,6 +156,9 @@ model Vehicle {
   obdDeviceId       String?       @map("obd_device_id")
   lastObdAt         DateTime?     @map("last_obd_at")
   lastTelemetryAt   DateTime?     @map("last_telemetry_at")
+  gpsLastLatitude   Float?        @map("gps_last_latitude")
+  gpsLastLongitude  Float?        @map("gps_last_longitude")
+  gpsLastAt         DateTime?     @map("gps_last_at")
   status            VehicleStatus @default(OFFLINE)
   telemetryOnline   Boolean       @default(false) @map("telemetry_online")
   deletedAt         DateTime?     @map("deleted_at")
@@ -191,34 +197,34 @@ model Vehicle {
 }
 
 model VehicleLiveState {
-  id               String          @id @default(uuid())
-  vehicleId        String          @unique @map("vehicle_id")
+  id               String        @id @default(uuid())
+  vehicleId        String        @unique @map("vehicle_id")
   telemetrySource  TelemetrySource @default(SIMULATED) @map("telemetry_source")
-  lastUpdate       DateTime        @default(now()) @map("last_update")
+  lastUpdate       DateTime      @default(now()) @map("last_update")
 
-  rpm              Float           @default(0)
-  speed            Float           @default(0)
-  coolantTemp      Float           @default(32) @map("coolant_temp")
-  batteryVoltage   Float           @default(12.5) @map("battery_voltage")
-  fuelLevel        Float           @default(80) @map("fuel_level")
-  engineLoad       Float           @default(12) @map("engine_load")
-  maf              Float           @default(3.1)
-  throttlePosition Float           @default(4) @map("throttle_position")
-  intakeTemp       Float           @default(30) @map("intake_temp")
+  rpm              Float         @default(0)
+  speed            Float         @default(0)
+  coolantTemp      Float         @default(32) @map("coolant_temp")
+  batteryVoltage   Float         @default(12.5) @map("battery_voltage")
+  fuelLevel        Float         @default(80) @map("fuel_level")
+  engineLoad       Float         @default(12) @map("engine_load")
+  maf              Float         @default(3.1)
+  throttlePosition Float         @default(4) @map("throttle_position")
+  intakeTemp       Float         @default(30) @map("intake_temp")
 
-  engineHours      Float           @default(1000) @map("engine_hours")
-  odometer         Float           @default(50000)
+  engineHours      Float         @default(1000) @map("engine_hours")
+  odometer         Float         @default(50000)
 
-  gpsLat           Float?          @map("gps_lat")
-  gpsLng           Float?          @map("gps_lng")
+  gpsLat           Float?        @map("gps_lat")
+  gpsLng           Float?        @map("gps_lng")
 
-  ignitionStatus   Boolean         @default(false) @map("ignition_status")
-  vehicleStatus    VehicleStatus   @default(PARKED) @map("vehicle_status")
+  ignitionStatus   Boolean       @default(false) @map("ignition_status")
+  vehicleStatus    VehicleStatus @default(PARKED) @map("vehicle_status")
 
-  createdAt        DateTime        @default(now()) @map("created_at")
-  updatedAt        DateTime        @updatedAt @map("updated_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
 
-  vehicle          Vehicle         @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicle          Vehicle       @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
 
   @@index([vehicleId])
   @@index([lastUpdate])
@@ -283,15 +289,15 @@ model DriverBehaviorEvent {
 }
 
 model Geofence {
-  id           String   @id @default(uuid())
-  companyId    String   @map("company_id")
-  name         String
-  geometry     Json
+  id         String   @id @default(uuid())
+  companyId  String   @map("company_id")
+  name       String
+  geometry   Json
   alertOnEnter Boolean  @default(true) @map("alert_on_enter")
   alertOnExit  Boolean  @default(true) @map("alert_on_exit")
-  active       Boolean  @default(true)
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
 
   company Company         @relation(fields: [companyId], references: [id])
   events  GeofenceEvent[]
@@ -520,16 +526,16 @@ model Notification {
 }
 
 model DriverScore {
-  id                 String   @id @default(uuid())
-  vehicleId          String   @map("vehicle_id")
-  harshBraking       Int      @default(0) @map("harsh_braking")
-  harshAcceleration  Int      @default(0) @map("harsh_acceleration")
-  overspeedEvents    Int      @default(0) @map("overspeed_events")
-  idleTime           Float    @default(0) @map("idle_time")
-  score              Float    @default(100)
-  periodStart        DateTime @map("period_start")
-  periodEnd          DateTime @map("period_end")
-  vehicle            Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  id               String   @id @default(uuid())
+  vehicleId        String   @map("vehicle_id")
+  harshBraking     Int      @default(0) @map("harsh_braking")
+  harshAcceleration Int     @default(0) @map("harsh_acceleration")
+  overspeedEvents  Int      @default(0) @map("overspeed_events")
+  idleTime         Float    @default(0) @map("idle_time")
+  score            Float    @default(100)
+  periodStart      DateTime @map("period_start")
+  periodEnd        DateTime @map("period_end")
+  vehicle          Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
 
   @@index([vehicleId, periodStart])
   @@map("driver_scores")
@@ -636,6 +642,11 @@ model Telemetry {
   engineLoad       Float?        @map("engine_load")
   latitude         Float?
   longitude        Float?
+  gpsAccuracy      Float?        @map("gps_accuracy")
+  gpsAltitude      Float?        @map("gps_altitude")
+  gpsHeading       Float?        @map("gps_heading")
+  gpsTimestamp     DateTime?     @map("gps_timestamp")
+  vin              String?
   odometer         Float?
   timestamp        DateTime      @default(now())
   createdAt        DateTime      @default(now()) @map("created_at")
@@ -669,4 +680,3 @@ model FuelHistory {
   @@index([timestamp])
   @@map("fuel_history")
 }
-

@@ -13,9 +13,43 @@ export async function submitLiveTelemetry(req, res) {
   try {
     const userId = req.user.id || req.userId;
     const companyId = req.user.companyId || req.user.company?.id;
-    const { vehicleId, mode = "LIVE", rpm, speed, fuelLevel, coolantTemp, batteryVoltage, engineLoad, latitude, longitude, odometer, timestamp } = req.body;
+    const { 
+      vehicleId, 
+      mode = "LIVE", 
+      rpm, 
+      speed, 
+      fuelLevel, 
+      coolantTemp, 
+      batteryVoltage, 
+      engineLoad, 
+      latitude, 
+      longitude, 
+      gpsAccuracy, 
+      gpsAltitude, 
+      gpsHeading, 
+      gpsTimestamp,
+      vin,
+      odometer, 
+      timestamp 
+    } = req.body;
 
-    // Sanitize all numeric values
+    // STEP 1: Log incoming telemetry
+    logger.info("📥 Incoming mobile telemetry", {
+      userId,
+      vehicleId,
+      mode,
+      rpm,
+      speed,
+      fuelLevel,
+      coolantTemp,
+      engineLoad,
+      batteryVoltage,
+      latitude,
+      longitude,
+      vin,
+      timestamp: timestamp || new Date().toISOString()
+    });
+
     const sanitizedRpm = sanitizeNumber(rpm);
     const sanitizedSpeed = sanitizeNumber(speed);
     const sanitizedFuelLevel = sanitizeNumber(fuelLevel);
@@ -24,9 +58,11 @@ export async function submitLiveTelemetry(req, res) {
     const sanitizedEngineLoad = sanitizeNumber(engineLoad);
     const sanitizedLatitude = sanitizeNumber(latitude);
     const sanitizedLongitude = sanitizeNumber(longitude);
+    const sanitizedGpsAccuracy = sanitizeNumber(gpsAccuracy);
+    const sanitizedGpsAltitude = sanitizeNumber(gpsAltitude);
+    const sanitizedGpsHeading = sanitizeNumber(gpsHeading);
     const sanitizedOdometer = sanitizeNumber(odometer);
 
-    // Verify vehicle exists and belongs to this user or company
     const vehicle = await prisma.vehicle.findUnique({
       where: { id: vehicleId },
       include: { obdDevices: true },
@@ -38,8 +74,6 @@ export async function submitLiveTelemetry(req, res) {
       return res.status(403).json({ success: false, error: "Vehicle not authorized for this user" });
     }
 
-    // Create telemetry record
-    // Note: obdDeviceId may be null if no OBD device is registered (backup mode)
     const telemetry = await prisma.telemetry.create({
       data: {
         userId,
@@ -54,18 +88,38 @@ export async function submitLiveTelemetry(req, res) {
         engineLoad: sanitizedEngineLoad,
         latitude: sanitizedLatitude,
         longitude: sanitizedLongitude,
+        gpsAccuracy: sanitizedGpsAccuracy,
+        gpsAltitude: sanitizedGpsAltitude,
+        gpsHeading: sanitizedGpsHeading,
+        gpsTimestamp: gpsTimestamp ? new Date(gpsTimestamp) : null,
+        vin: vin || null,
         odometer: sanitizedOdometer,
         timestamp: timestamp ? new Date(timestamp) : new Date(),
       },
     });
 
-    // Determine vehicle status based on speed/rpm
     let vehicleStatus = "OFFLINE";
     if (sanitizedSpeed && sanitizedSpeed > 1) vehicleStatus = "MOVING";
     else if (sanitizedRpm && sanitizedRpm > 200) vehicleStatus = "IDLING";
     else vehicleStatus = "PARKED";
 
-    // Update vehicle live state
+    const vehicleUpdateData = {
+      lastTelemetryAt: new Date(),
+      status: vehicleStatus,
+      telemetryOnline: true,
+    };
+
+    if (sanitizedLatitude !== null && sanitizedLongitude !== null) {
+      vehicleUpdateData.gpsLastLatitude = sanitizedLatitude;
+      vehicleUpdateData.gpsLastLongitude = sanitizedLongitude;
+      vehicleUpdateData.gpsLastAt = new Date();
+    }
+
+    await prisma.vehicle.update({
+      where: { id: vehicleId },
+      data: vehicleUpdateData,
+    });
+
     await prisma.vehicleLiveState.upsert({
       where: { vehicleId },
       create: {
@@ -99,17 +153,6 @@ export async function submitLiveTelemetry(req, res) {
       },
     });
 
-    // Update vehicle lastTelemetryAt, status, telemetryOnline
-    await prisma.vehicle.update({
-      where: { id: vehicleId },
-      data: {
-        lastTelemetryAt: new Date(),
-        status: vehicleStatus,
-        telemetryOnline: true,
-      },
-    });
-
-    // Update OBD device lastConnectedAt if exists
     if (vehicle.obdDeviceId) {
       await prisma.oBDDevice.update({
         where: { id: vehicle.obdDeviceId },
@@ -117,28 +160,46 @@ export async function submitLiveTelemetry(req, res) {
       });
     }
 
-    // Emit socket events
     const io = req.app.get('io');
     if (io) {
       io.to(`user:${userId}`).emit('live-telemetry-update', {
         ...telemetry,
+        mode: "LIVE", // Ensure mode is explicitly set
         vehicle: {
           ...vehicle,
-          lastTelemetryAt: new Date(),
-          status: vehicleStatus,
-          telemetryOnline: true,
+          ...vehicleUpdateData,
         }
       });
-      io.to(`user:${userId}`).emit('vehicle-online', { vehicleId });
+      if (sanitizedLatitude !== null && sanitizedLongitude !== null) {
+        io.to(`user:${userId}`).emit('live-gps-update', {
+          vehicleId,
+          latitude: sanitizedLatitude,
+          longitude: sanitizedLongitude,
+          gpsAccuracy: sanitizedGpsAccuracy,
+          gpsAltitude: sanitizedGpsAltitude,
+          gpsHeading: sanitizedGpsHeading,
+          speed: sanitizedSpeed,
+          timestamp: new Date(),
+        });
+      }
+      io.to(`user:${userId}`).emit('vehicle-online', { vehicleId, status: vehicleStatus, online: true });
     }
 
-    res.json({ success: true, data: { vehicleId, saved: true } });
+    // Log successful save
+    logger.info("✅ Telemetry saved successfully", {
+      vehicleId,
+      telemetryId: telemetry.id,
+      vehicleStatus,
+      hasGPS: sanitizedLatitude !== null && sanitizedLongitude !== null,
+      socketEmitted: !!io
+    });
+
+    res.json({ success: true, data: { vehicleId, saved: true, telemetryId: telemetry.id } });
   } catch (err) {
     logger.error("Error submitting telemetry:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 }
-
 
 export async function getLatestLiveTelemetry(req, res) {
   try {
@@ -154,7 +215,6 @@ export async function getLatestLiveTelemetry(req, res) {
       ],
     };
 
-    // If specific vehicleId is requested, filter by it
     if (vehicleId) {
       whereClause = {
         vehicleId,
@@ -185,7 +245,6 @@ export async function getTelemetryHistory(req, res) {
     const companyId = req.user.companyId || req.user.company?.id || null;
     const { vehicleId } = req.params;
 
-    // Verify ownership of vehicle
     const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
     if (!vehicle || vehicle.deletedAt) return res.status(404).json({ success: false, error: 'Vehicle not found' });
     if (vehicle.userId !== userId && companyId && vehicle.companyId !== companyId) {

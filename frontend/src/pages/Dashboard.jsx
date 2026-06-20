@@ -48,6 +48,39 @@ export default function Dashboard() {
       if (isDemo) return;
       if (data?.mode && data.mode !== 'LIVE') return;
       const vid = data.vehicleId ?? data.vehicle_id;
+      
+      // Update vehicle online status
+      setVehicles((prev) => {
+        const index = prev.findIndex((v) => v.id === vid);
+        if (index >= 0) {
+          const next = [...prev];
+          next[index] = {
+            ...prev[index],
+            telemetryOnline: true,
+            lastTelemetryAt: new Date().toISOString(),
+            status: data.vehicle?.status || prev[index].status
+          };
+          return next;
+        }
+        return prev;
+      });
+
+      // Update stats
+      setStats((prev) => {
+        const onlineCount = vehicles.filter(v => {
+          if (v.id === vid) return true;
+          if (!v.lastTelemetryAt) return false;
+          const age = Date.now() - new Date(v.lastTelemetryAt).getTime();
+          return age < 30000;
+        }).length;
+        
+        return {
+          ...prev,
+          onlineVehicles: onlineCount,
+          fleetUtilization: prev.vehicleCount > 0 ? Math.round((onlineCount / prev.vehicleCount) * 100) : 0
+        };
+      });
+
       setLive((prev) => {
         const index = prev.findIndex((p) => (p.vehicleId ?? p.vehicle_id) === vid);
         if (index >= 0) {
@@ -58,6 +91,24 @@ export default function Dashboard() {
         return [data, ...prev].slice(0, 20);
       });
       appendChartPoint(data);
+    },
+    "vehicle-online": (data) => {
+      if (isDemo) return;
+      const vid = data.vehicleId ?? data.vehicle_id;
+      
+      setVehicles((prev) => {
+        const index = prev.findIndex((v) => v.id === vid);
+        if (index >= 0) {
+          const next = [...prev];
+          next[index] = {
+            ...prev[index],
+            telemetryOnline: data.online !== false,
+            status: data.status || prev[index].status
+          };
+          return next;
+        }
+        return prev;
+      });
     },
     "vehicle-registered": (data) => {
       if (isDemo) return;
@@ -110,12 +161,27 @@ export default function Dashboard() {
       try {
         const [vehiclesRes] = await Promise.all([api.get("/mobile/vehicles/my")]);
         const vehiclesData = vehiclesRes.data?.data || [];
-        setVehicles(vehiclesData);
+        
+        // STEP 3: Calculate vehicle online status based on telemetry age (within 30 seconds)
+        const now = Date.now();
+        const onlineVehicles = vehiclesData.filter(v => {
+          if (!v.lastTelemetryAt) return false;
+          const age = now - new Date(v.lastTelemetryAt).getTime();
+          return age < 30000; // 30 seconds
+        });
+
+        setVehicles(vehiclesData.map(v => {
+          const age = v.lastTelemetryAt ? now - new Date(v.lastTelemetryAt).getTime() : Infinity;
+          return {
+            ...v,
+            telemetryOnline: age < 30000
+          };
+        }));
 
         setStats({
           vehicleCount: vehiclesData.length,
-          onlineVehicles: 0,
-          fleetUtilization: 0,
+          onlineVehicles: onlineVehicles.length,
+          fleetUtilization: vehiclesData.length > 0 ? Math.round((onlineVehicles.length / vehiclesData.length) * 100) : 0,
           activeDtc: 0,
           pendingDtc: 0,
           unreadAlerts: 0,
@@ -373,6 +439,46 @@ export default function Dashboard() {
                 <p className="text-sm text-slate-400">{v.registrationNumber || v.plateNumber || "Simulated"}</p>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* STEP 3: Live Vehicle Status Display */}
+      {isLive && vehicles.length > 0 && (
+        <div className="card bg-slate-900/50 border-slate-800">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="font-semibold text-white">Vehicle Status</h3>
+            <Link to="/analysis/gps" className="text-sm text-cyan-400 hover:underline">
+              View GPS Tracking
+            </Link>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {vehicles.map((v) => {
+              const age = v.lastTelemetryAt ? Date.now() - new Date(v.lastTelemetryAt).getTime() : Infinity;
+              const isOnline = age < 30000;
+              
+              return (
+                <div key={v.id} className="rounded-lg border border-slate-700 p-4 bg-slate-800/30">
+                  <div className="flex items-center gap-2">
+                    <span 
+                      className={`h-2.5 w-2.5 rounded-full ${isOnline ? 'bg-green-500' : 'bg-slate-600'}`} 
+                      title={isOnline ? 'Online' : 'Offline'} 
+                    />
+                    <p className="font-medium text-white">{v.vehicleName || `${v.make} ${v.model}`}</p>
+                  </div>
+                  <p className="text-sm text-slate-400">{v.registrationNumber || v.plateNumber || "—"}</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {isOnline ? (
+                      <span className="text-green-400">Online • {v.status || 'Active'}</span>
+                    ) : (
+                      <span className="text-slate-500">
+                        Offline {v.lastTelemetryAt ? `• ${Math.floor(age / 1000)}s ago` : '• Never'}
+                      </span>
+                    )}
+                  </p>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

@@ -20,6 +20,10 @@ export default function Vehicles() {
     model: "",
     year: "",
     vin: "",
+    fuelType: "",
+    manufacturer: "",
+    bodyClass: "",
+    engineModel: "",
   });
   const { isDemo, isLive } = useMode();
   const location = useLocation();
@@ -56,7 +60,12 @@ export default function Vehicles() {
         (v.make?.toLowerCase() || "").includes(lowerSearch) ||
         (v.model?.toLowerCase() || "").includes(lowerSearch) ||
         (v.registrationNumber?.toLowerCase() || "").includes(lowerSearch) ||
-        (v.plateNumber?.toLowerCase() || "").includes(lowerSearch)
+        (v.plateNumber?.toLowerCase() || "").includes(lowerSearch) ||
+        (v.vin?.toLowerCase() || "").includes(lowerSearch) ||
+        (v.manufacturer?.toLowerCase() || "").includes(lowerSearch) ||
+        (v.fuelType?.toLowerCase() || "").includes(lowerSearch) ||
+        (v.bodyClass?.toLowerCase() || "").includes(lowerSearch) ||
+        (v.engineModel?.toLowerCase() || "").includes(lowerSearch)
     );
   }, [vehicles, search]);
 
@@ -109,6 +118,10 @@ export default function Vehicles() {
       model: "",
       year: "",
       vin: "",
+      fuelType: "",
+      manufacturer: "",
+      bodyClass: "",
+      engineModel: "",
     });
   };
 
@@ -144,6 +157,7 @@ export default function Vehicles() {
     { key: "make", label: "Make", render: (v) => v.make || "—" },
     { key: "model", label: "Model", render: (v) => v.model || "—" },
     { key: "year", label: "Year", render: (v) => v.year || "—" },
+    { key: "vin", label: "VIN", render: (v) => v.vin || "—" },
     {
       key: "odometer",
       label: "Odometer",
@@ -229,6 +243,30 @@ export default function Vehicles() {
             placeholder="VIN"
             value={form.vin}
             onChange={(e) => setForm({ ...form, vin: e.target.value })}
+          />
+          <input
+            className="input bg-slate-800 border border-slate-700"
+            placeholder="Fuel Type"
+            value={form.fuelType}
+            onChange={(e) => setForm({ ...form, fuelType: e.target.value })}
+          />
+          <input
+            className="input bg-slate-800 border border-slate-700"
+            placeholder="Manufacturer"
+            value={form.manufacturer}
+            onChange={(e) => setForm({ ...form, manufacturer: e.target.value })}
+          />
+          <input
+            className="input bg-slate-800 border border-slate-700"
+            placeholder="Body Class"
+            value={form.bodyClass}
+            onChange={(e) => setForm({ ...form, bodyClass: e.target.value })}
+          />
+          <input
+            className="input bg-slate-800 border border-slate-700"
+            placeholder="Engine Model"
+            value={form.engineModel}
+            onChange={(e) => setForm({ ...form, engineModel: e.target.value })}
           />
           <div className="sm:col-span-2">
             <button

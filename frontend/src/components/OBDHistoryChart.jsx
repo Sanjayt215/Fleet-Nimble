@@ -10,26 +10,36 @@ const METRICS = [
   { key: 'batteryVoltage', label: 'Battery V' },
   { key: 'throttle', label: 'Throttle %' },
   { key: 'engineLoad', label: 'Engine Load %' },
+  { key: 'maf', label: 'MAF (g/s)' },
+  { key: 'intakeTemp', label: 'Intake Temp (°C)' },
 ];
 
 // LIVE OBD — historical metric chart
-function OBDHistoryChart({ vehicleId, liveUpdate = null }) {
+function OBDHistoryChart({ vehicleId, liveUpdate = null, isDemo = false, demoHistory = [] }) {
   const [metric, setMetric] = useState('rpm');
   const [data, setData] = useState([]);
 
   useEffect(() => {
+    if (isDemo) {
+      setData(demoHistory);
+      return;
+    }
     if (!vehicleId) return;
     api.get(`/mobile/telemetry/history/${vehicleId}`, { params: { limit: 100 } }).then((r) => {
       setData(r.data.data || []);
     }).catch(() => {
       setData([]);
     });
-  }, [vehicleId]);
+  }, [vehicleId, isDemo, demoHistory]);
 
   useEffect(() => {
     if (!liveUpdate) return;
-    setData((prev) => [...prev, liveUpdate].slice(-100));
-  }, [liveUpdate]);
+    if (isDemo) {
+      setData(demoHistory);
+    } else {
+      setData((prev) => [...prev, liveUpdate].slice(-100));
+    }
+  }, [liveUpdate, isDemo, demoHistory]);
 
   const chartData = useMemo(() => {
     return data

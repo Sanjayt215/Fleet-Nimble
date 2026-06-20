@@ -8,6 +8,13 @@ class LiveData {
   final double? engineLoad;
   final double? maf;
   final double? intakeTemp;
+  final double? latitude;
+  final double? longitude;
+  final double? gpsAccuracy;
+  final double? gpsAltitude;
+  final double? gpsHeading;
+  final DateTime? gpsTimestamp;
+  final String? vin;
 
   LiveData({
     this.rpm,
@@ -19,6 +26,13 @@ class LiveData {
     this.engineLoad,
     this.maf,
     this.intakeTemp,
+    this.latitude,
+    this.longitude,
+    this.gpsAccuracy,
+    this.gpsAltitude,
+    this.gpsHeading,
+    this.gpsTimestamp,
+    this.vin,
   });
 
   Map<String, dynamic> toJson() => {
@@ -31,9 +45,16 @@ class LiveData {
         'engineLoad': engineLoad,
         'maf': maf,
         'intakeTemp': intakeTemp,
+        'latitude': latitude,
+        'longitude': longitude,
+        'gpsAccuracy': gpsAccuracy,
+        'gpsAltitude': gpsAltitude,
+        'gpsHeading': gpsHeading,
+        'gpsTimestamp': gpsTimestamp?.toIso8601String(),
+        'vin': vin,
       };
 
-  LiveData merge(Map<String, double> parsed) => LiveData(
+  LiveData merge(Map<String, dynamic> parsed) => LiveData(
         rpm: parsed['rpm'] ?? rpm,
         speed: parsed['speed'] ?? speed,
         coolantTemp: parsed['coolantTemp'] ?? coolantTemp,
@@ -43,5 +64,12 @@ class LiveData {
         engineLoad: parsed['engineLoad'] ?? engineLoad,
         maf: parsed['maf'] ?? maf,
         intakeTemp: parsed['intakeTemp'] ?? intakeTemp,
+        latitude: parsed['latitude'] ?? latitude,
+        longitude: parsed['longitude'] ?? longitude,
+        gpsAccuracy: parsed['gpsAccuracy'] ?? gpsAccuracy,
+        gpsAltitude: parsed['gpsAltitude'] ?? gpsAltitude,
+        gpsHeading: parsed['gpsHeading'] ?? gpsHeading,
+        gpsTimestamp: parsed['gpsTimestamp'] ?? gpsTimestamp,
+        vin: parsed['vin'] ?? vin,
       );
 }

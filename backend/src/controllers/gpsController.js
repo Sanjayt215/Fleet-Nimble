@@ -1,77 +1,130 @@
-import prisma from '../utils/prisma.js';
-import { AppError } from '../middleware/errorHandler.js';
+import prisma from "../utils/prisma.js";
+import logger from "../utils/logger.js";
 
-export async function updateGps(req, res, next) {
+function assertVehicleOwner(req, vehicle) {
+  if (req.user.role?.name === "ADMIN") return;
+  if (vehicle.userId !== (req.userId || req.user.id)) {
+    throw new Error("Access denied");
+  }
+}
+
+export async function getLiveGps(req, res) {
   try {
-    const { tripId, vehicleId, latitude, longitude, timestamp } = req.body;
-    if (latitude == null || longitude == null) {
-      throw new AppError('latitude and longitude required', 400, 'VALIDATION_ERROR');
+    const userId = req.userId || req.user?.id;
+    const companyId = req.user?.companyId || req.user?.company?.id || null;
+
+    const vehicles = await prisma.vehicle.findMany({
+      where: {
+        deletedAt: null,
+        OR: [
+          { userId },
+          ...(companyId ? [{ companyId }] : []),
+        ],
+      },
+      include: { liveState: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const liveGpsData = vehicles.map(vehicle => ({
+      vehicleId: vehicle.id,
+      vehicleName: vehicle.vehicleName,
+      registrationNumber: vehicle.registrationNumber,
+      latitude: vehicle.gpsLastLatitude,
+      longitude: vehicle.gpsLastLongitude,
+      gpsLastAt: vehicle.gpsLastAt,
+      status: vehicle.status,
+      telemetryOnline: vehicle.telemetryOnline,
+      speed: vehicle.liveState?.speed || null,
+    }));
+
+    res.json({ success: true, data: liveGpsData });
+  } catch (err) {
+    logger.error("Error fetching live GPS:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+export async function getLiveGpsByVehicleId(req, res) {
+  try {
+    const userId = req.userId || req.user?.id;
+    const companyId = req.user?.companyId || req.user?.company?.id || null;
+    const { vehicleId } = req.params;
+
+    const vehicle = await prisma.vehicle.findUnique({
+      where: { id: vehicleId },
+      include: { liveState: true },
+    });
+
+    if (!vehicle || vehicle.deletedAt) {
+      return res.status(404).json({ success: false, error: "Vehicle not found" });
+    }
+    if (vehicle.userId !== userId && companyId && vehicle.companyId !== companyId) {
+      return res.status(403).json({ success: false, error: "Not authorized" });
     }
 
-    let trip;
-    if (tripId) {
-      trip = await prisma.tripLog.findUnique({ where: { id: tripId }, include: { vehicle: true } });
-      if (!trip) throw new AppError('Trip not found', 404, 'NOT_FOUND');
-      await assertVehicleOwner(req, trip.vehicle);
-    } else if (vehicleId) {
-      trip = await prisma.tripLog.findFirst({
-        where: { vehicleId, endTime: null },
-        orderBy: { startTime: 'desc' },
-        include: { vehicle: true },
-      });
-      if (!trip) throw new AppError('No active trip', 404, 'NOT_FOUND');
-      await assertVehicleOwner(req, trip.vehicle);
-    } else {
-      throw new AppError('tripId or vehicleId required', 400, 'VALIDATION_ERROR');
+    const latestTelemetry = await prisma.telemetry.findFirst({
+      where: { vehicleId: vehicle.id, mode: 'LIVE', latitude: { not: null }, longitude: { not: null } },
+      orderBy: { timestamp: 'desc' },
+    });
+
+    const liveGpsData = {
+      vehicleId: vehicle.id,
+      vehicleName: vehicle.vehicleName,
+      registrationNumber: vehicle.registrationNumber,
+      latitude: vehicle.gpsLastLatitude,
+      longitude: vehicle.gpsLastLongitude,
+      gpsLastAt: vehicle.gpsLastAt,
+      status: vehicle.status,
+      telemetryOnline: vehicle.telemetryOnline,
+      speed: vehicle.liveState?.speed || null,
+      latestTelemetry,
+    };
+
+    res.json({ success: true, data: liveGpsData });
+  } catch (err) {
+    logger.error("Error fetching live GPS by vehicle ID:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+export async function getGpsHistoryByVehicleId(req, res) {
+  try {
+    const userId = req.userId || req.user?.id;
+    const companyId = req.user?.companyId || req.user?.company?.id || null;
+    const { vehicleId } = req.params;
+
+    const vehicle = await prisma.vehicle.findUnique({
+      where: { id: vehicleId },
+    });
+
+    if (!vehicle || vehicle.deletedAt) {
+      return res.status(404).json({ success: false, error: "Vehicle not found" });
+    }
+    if (vehicle.userId !== userId && companyId && vehicle.companyId !== companyId) {
+      return res.status(403).json({ success: false, error: "Not authorized" });
     }
 
-    const point = await prisma.gpsHistory.create({
-      data: {
-        tripId: trip.id,
-        latitude: parseFloat(latitude),
-        longitude: parseFloat(longitude),
-        timestamp: timestamp ? new Date(timestamp) : new Date(),
+    const gpsHistory = await prisma.telemetry.findMany({
+      where: { 
+        vehicleId: vehicle.id, 
+        mode: 'LIVE', 
+        latitude: { not: null }, 
+        longitude: { not: null } 
+      },
+      orderBy: { timestamp: 'asc' },
+      take: 500,
+      select: {
+        latitude: true,
+        longitude: true,
+        speed: true,
+        timestamp: true,
+        gpsAccuracy: true,
       },
     });
 
-    const io = req.app.get('io');
-    if (io) {
-      io.to(`vehicle:${trip.vehicleId}`).emit('trip:update', {
-        tripId: trip.id,
-        vehicleId: trip.vehicleId,
-        gps: point,
-      });
-    }
-
-    res.status(201).json({ success: true, data: point });
+    res.json({ success: true, data: gpsHistory });
   } catch (err) {
-    next(err);
-  }
-}
-
-export async function getHistory(req, res, next) {
-  try {
-    const { tripId } = req.params;
-    const trip = await prisma.tripLog.findUnique({
-      where: { id: tripId },
-      include: { vehicle: true },
-    });
-    if (!trip) throw new AppError('Trip not found', 404, 'NOT_FOUND');
-    await assertVehicleOwner(req, trip.vehicle);
-
-    const history = await prisma.gpsHistory.findMany({
-      where: { tripId },
-      orderBy: { timestamp: 'asc' },
-    });
-    res.json({ success: true, data: history });
-  } catch (err) {
-    next(err);
-  }
-}
-
-function assertVehicleOwner(req, vehicle) {
-  if (req.user.role.name === 'ADMIN') return;
-  if (vehicle.userId !== req.userId) {
-    throw new AppError('Access denied', 403, 'FORBIDDEN');
+    logger.error("Error fetching GPS history:", err);
+    res.status(500).json({ success: false, error: err.message });
   }
 }

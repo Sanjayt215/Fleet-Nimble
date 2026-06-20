@@ -87,25 +87,53 @@ export default function VehicleDetails() {
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <TelemetryHealthCard health={vehicle.telemetryHealth} />
-        <div className="card bg-slate-900/50 border-slate-800"><p className="text-sm text-slate-400">VIN</p><p className="font-mono text-white">{vehicle.vin || '—'}</p></div>
-        <div className="card bg-slate-900/50 border-slate-800"><p className="text-sm text-slate-400">Plate</p><p className="text-white">{vehicle.registrationNumber || vehicle.plateNumber || '—'}</p></div>
-        <div className="card bg-slate-900/50 border-slate-800"><p className="text-sm text-slate-400">Odometer</p><p className="text-white">{vehicle.odometer?.toLocaleString() || '—'} km</p></div>
-        <div className="card bg-slate-900/50 border-slate-800">
-          <p className="text-sm text-slate-400">MIL (check engine)</p>
+        <div className="card bg-slate-900/50 border-slate-700">
+          <p className="text-sm text-slate-400">VIN</p>
+          <p className="font-mono text-white">{vehicle.vin || '—'}</p>
+        </div>
+        <div className="card bg-slate-900/50 border-slate-700">
+          <p className="text-sm text-slate-400">Plate Number</p>
+          <p className="text-white">{vehicle.registrationNumber || vehicle.plateNumber || '—'}</p>
+        </div>
+        <div className="card bg-slate-900/50 border-slate-700">
+          <p className="text-sm text-slate-400">Odometer</p>
+          <p className="text-white">{vehicle.odometer?.toLocaleString() || '—'} km</p>
+        </div>
+        <div className="card bg-slate-900/50 border-slate-700">
+          <p className="text-sm text-slate-400">Manufacturer</p>
+          <p className="text-white">{vehicle.manufacturer || '—'}</p>
+        </div>
+        <div className="card bg-slate-900/50 border-slate-700">
+          <p className="text-sm text-slate-400">Body Class</p>
+          <p className="text-white">{vehicle.bodyClass || '—'}</p>
+        </div>
+        <div className="card bg-slate-900/50 border-slate-700">
+          <p className="text-sm text-slate-400">Engine Model</p>
+          <p className="text-white">{vehicle.engineModel || '—'}</p>
+        </div>
+        <div className="card bg-slate-900/50 border-slate-700">
+          <p className="text-sm text-slate-400">Fuel Type</p>
+          <p className="text-white">{vehicle.fuelType || '—'}</p>
+        </div>
+        <div className="card bg-slate-900/50 border-slate-700">
+          <p className="text-sm text-slate-400">MIL (Check Engine)</p>
           <p className={vehicle.milOn ? 'font-semibold text-red-400' : 'text-green-400'}>
             {vehicle.milOn == null ? '—' : vehicle.milOn ? 'ON' : 'OFF'}
           </p>
         </div>
-        <div className="card bg-slate-900/50 border-slate-800">
-          <p className="text-sm text-slate-400">Engine hours (OBD)</p>
+        <div className="card bg-slate-900/50 border-slate-700">
+          <p className="text-sm text-slate-400">Engine Hours (OBD)</p>
           <p className="text-white">{vehicle.engineHoursObd != null ? vehicle.engineHoursObd.toFixed(1) : '—'}</p>
         </div>
-        <div className="card bg-slate-900/50 border-slate-800 flex flex-col gap-2">
+        <div className="card bg-slate-900/50 border-slate-700 flex flex-col gap-2">
           <Link to={`${getBasePath()}/vehicles/${id}/live`} className="btn-primary inline-block text-center">
             Live OBD
           </Link>
           <Link to={`${getBasePath()}/diagnostics?vehicle=${id}`} className="btn-secondary inline-block text-center text-sm">
             Diagnostics
+          </Link>
+          <Link to={`${getBasePath()}/gps-tracking`} className="btn-secondary inline-block text-center text-sm">
+            GPS Tracking
           </Link>
         </div>
       </div>
@@ -127,7 +155,7 @@ export default function VehicleDetails() {
 
       {vehicle.readinessMonitors && (
         <div className="card">
-          <h3 className="mb-2 font-semibold">Readiness monitors</h3>
+          <h3 className="mb-2 font-semibold">Readiness Monitors</h3>
           <pre className="overflow-auto text-xs">{JSON.stringify(vehicle.readinessMonitors, null, 2)}</pre>
         </div>
       )}

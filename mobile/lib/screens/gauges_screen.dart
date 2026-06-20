@@ -2,7 +2,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/app_state.dart';
+import '../models/live_data.dart';
 import '../services/obd_service.dart';
+import '../services/gps_service.dart';
 import '../services/offline_cache.dart';
 import '../services/sync_service.dart';
 import '../services/telemetry_publisher.dart';
@@ -21,13 +23,33 @@ class GaugesScreen extends ConsumerStatefulWidget {
 
 class _GaugesScreenState extends ConsumerState<GaugesScreen> {
   final _obd = ObdService();
+  final _gps = GpsService();
   Timer? _pollTimer;
+  StreamSubscription? _gpsSubscription;
   String? _lastUploadStatus;
 
   @override
   void initState() {
     super.initState();
     _startPolling();
+    _startGps();
+  }
+
+  Future<void> _startGps() async {
+    final hasPermission = await _gps.ensurePermission();
+    if (!hasPermission) return;
+
+    _gpsSubscription = _gps.getPositionStream().listen((position) {
+      final current = ref.read(liveDataProvider);
+      ref.read(liveDataProvider.notifier).state = current.merge({
+        'latitude': position.latitude,
+        'longitude': position.longitude,
+        'gpsAccuracy': position.accuracy,
+        'gpsAltitude': position.altitude,
+        'gpsHeading': position.heading,
+        'gpsTimestamp': DateTime.now(),
+      });
+    });
   }
 
   void _startPolling() {
@@ -51,7 +73,18 @@ class _GaugesScreenState extends ConsumerState<GaugesScreen> {
 
     try {
       final parsed = await _obd.pollAllPids();
-      final live = ref.read(liveDataProvider).merge(parsed);
+      LiveData live = ref.read(liveDataProvider).merge(parsed);
+      
+      // Get vehicle's VIN if available
+      if (AppConfig.useFixedFleetVehicleId) {
+        // Use fixed VIN or leave null
+      } else {
+        final vehicle = ref.read(selectedVehicleProvider);
+        if (vehicle != null && vehicle.vin != null) {
+          live = live.merge({'vin': vehicle.vin});
+        }
+      }
+      
       ref.read(liveDataProvider.notifier).state = live;
 
       final payload = live.toJson();
@@ -85,6 +118,7 @@ class _GaugesScreenState extends ConsumerState<GaugesScreen> {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _gpsSubscription?.cancel();
     super.dispose();
   }
 
@@ -95,10 +129,20 @@ class _GaugesScreenState extends ConsumerState<GaugesScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Live Gauges'),
-        subtitle: AppConfig.useFixedFleetVehicleId 
-          ? const Text('Fixed Vehicle ID Mode', style: TextStyle(fontSize: 12, color: Colors.orange))
-          : null,
+        title: const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Live Gauges'),
+            if (AppConfig.useFixedFleetVehicleId)
+              Text(
+                'Fixed Vehicle ID Mode',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.orange,
+                ),
+              ),
+          ],
+        ),
         actions: [
           if (_lastUploadStatus != null)
             Center(
@@ -144,6 +188,25 @@ class _GaugesScreenState extends ConsumerState<GaugesScreen> {
                       LiveCard(label: 'Battery', value: live.batteryVoltage?.toStringAsFixed(1) ?? '—', unit: 'V', icon: Icons.battery_charging_full),
                     ],
                   ),
+                  if (live.latitude != null && live.longitude != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child: Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('GPS Position', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                              const SizedBox(height: 8),
+                              Text('Lat: ${live.latitude!.toStringAsFixed(5)}, Lng: ${live.longitude!.toStringAsFixed(5)}'),
+                              if (live.gpsAccuracy != null) Text('Accuracy: ${live.gpsAccuracy!.toStringAsFixed(1)}m'),
+                              if (live.gpsHeading != null) Text('Heading: ${live.gpsHeading!.toStringAsFixed(1)}°'),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),

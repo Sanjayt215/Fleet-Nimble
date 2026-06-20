@@ -18,6 +18,7 @@ export default function Diagnostics() {
   const { isDemo, isLive } = useMode();
   const location = useLocation();
 
+  // STEP 2: Socket.IO subscription for real-time updates
   useSocket(
     {
       'live-telemetry-update': (d) => {
@@ -25,10 +26,19 @@ export default function Diagnostics() {
         if (d?.mode !== 'LIVE') return; // Strict LIVE-only filtering
         const vid = d.vehicleId ?? d.vehicle_id;
         if (!vehicleId || vid === vehicleId) {
+          console.log('🔔 Live telemetry update received:', d);
           setLive((prev) => mergeTelemetry(prev, d));
           setStreamStatus('live');
         }
       },
+      'vehicle-online': (d) => {
+        if (isDemo) return;
+        const vid = d.vehicleId ?? d.vehicle_id;
+        if (!vehicleId || vid === vehicleId) {
+          console.log('🟢 Vehicle online event:', d);
+          setStreamStatus(d.online ? 'live' : 'offline');
+        }
+      }
     },
     isDemo ? null : (vehicleId || null)
   );
@@ -47,6 +57,7 @@ export default function Diagnostics() {
     }
   }, [isDemo]);
 
+  // STEP 2: Fetch latest telemetry every 2 seconds
   useEffect(() => {
     if (isDemo) {
       // Demo mode: show empty state, waiting for user input
@@ -58,31 +69,48 @@ export default function Diagnostics() {
         setLive(null);
         setStreamStatus('offline');
       }
-    } else {
-      if (!vehicleId) {
-        setLive(null);
-        setStreamStatus('offline');
-        return;
-      }
-      
-      // Live mode: fetch initial telemetry from API
-      api.get(`/mobile/telemetry/history/${vehicleId}`, { params: { limit: 50 } }).then((r) => {
-        const history = r.data.data || [];
-        setHistory(history);
-        // Get latest from history
-        if (history.length > 0) {
-          const latest = history[0];
+      return;
+    }
+
+    if (!vehicleId) {
+      setLive(null);
+      setStreamStatus('offline');
+      return;
+    }
+    
+    // Initial load
+    const fetchLatest = async () => {
+      try {
+        const res = await api.get('/mobile/telemetry/latest', { params: { vehicleId } });
+        if (res.data.success && res.data.data) {
+          const latest = res.data.data;
           setLive(latest);
           const age = Date.now() - new Date(latest.timestamp || latest.recordedAt).getTime();
-          setStreamStatus(age < 120000 ? 'live' : age < 600000 ? 'stale' : 'offline');
+          setStreamStatus(age < 30000 ? 'live' : age < 120000 ? 'stale' : 'offline');
         } else {
           setStreamStatus('offline');
         }
-      }).catch(() => {
-        setHistory([]);
+      } catch (err) {
+        console.error('Error fetching latest telemetry:', err);
         setStreamStatus('offline');
+      }
+    };
+
+    fetchLatest();
+    
+    // STEP 2: Poll every 2 seconds (as backup to Socket.IO)
+    const pollInterval = setInterval(fetchLatest, 2000);
+
+    // Fetch history once
+    api.get(`/mobile/telemetry/history/${vehicleId}`, { params: { limit: 50 } })
+      .then((r) => {
+        setHistory(r.data.data || []);
+      })
+      .catch(() => {
+        setHistory([]);
       });
-    }
+
+    return () => clearInterval(pollInterval);
   }, [vehicleId, isDemo]);
 
   const statusBadge = {
@@ -132,9 +160,49 @@ export default function Diagnostics() {
       <div className="card bg-slate-900 border border-slate-800">
         <h3 className="mb-2 font-semibold">Telemetry stream</h3>
         <p className="text-sm text-slate-400">
-          Last sample: {live?.recordedAt ? new Date(live.recordedAt).toLocaleString() : isLive ? 'Waiting for OBD app…' : 'Waiting for OBD app or MQTT device…'}
+          Last sample: {live?.timestamp ? new Date(live.timestamp).toLocaleString() : isLive ? 'Waiting for OBD app…' : 'Waiting for OBD app or MQTT device…'}
         </p>
         <p className="mt-1 text-sm text-slate-400">History buffer: {history.length} samples</p>
+        {live && (
+          <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+            <div>
+              <span className="text-slate-500">RPM:</span>
+              <span className="ml-2 text-cyan-400">{live.rpm ?? '—'}</span>
+            </div>
+            <div>
+              <span className="text-slate-500">Speed:</span>
+              <span className="ml-2 text-cyan-400">{live.speed ?? '—'} km/h</span>
+            </div>
+            <div>
+              <span className="text-slate-500">Fuel:</span>
+              <span className="ml-2 text-cyan-400">{live.fuelLevel ?? '—'}%</span>
+            </div>
+            <div>
+              <span className="text-slate-500">Coolant:</span>
+              <span className="ml-2 text-cyan-400">{live.coolantTemp ?? '—'}°C</span>
+            </div>
+            <div>
+              <span className="text-slate-500">Battery:</span>
+              <span className="ml-2 text-cyan-400">{live.batteryVoltage ?? '—'}V</span>
+            </div>
+            <div>
+              <span className="text-slate-500">Engine Load:</span>
+              <span className="ml-2 text-cyan-400">{live.engineLoad ?? '—'}%</span>
+            </div>
+            {live.latitude && live.longitude && (
+              <>
+                <div>
+                  <span className="text-slate-500">GPS:</span>
+                  <span className="ml-2 text-green-400">Active</span>
+                </div>
+                <div>
+                  <span className="text-slate-500">Location:</span>
+                  <span className="ml-2 text-cyan-400">{live.latitude.toFixed(4)}, {live.longitude.toFixed(4)}</span>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
