@@ -25,9 +25,36 @@ export default function Diagnostics() {
         if (isDemo) return; // Don't use socket in demo
         if (d?.mode !== 'LIVE') return; // Strict LIVE-only filtering
         const vid = d.vehicleId ?? d.vehicle_id;
+        console.log('🔔 Socket telemetry received:', {
+          vehicleId: vid,
+          rpm: d.rpm,
+          speed: d.speed,
+          fuelLevel: d.fuelLevel ?? d.fuel,
+          coolantTemp: d.coolantTemp ?? d.coolant,
+          engineLoad: d.engineLoad ?? d.load,
+          batteryVoltage: d.batteryVoltage ?? d.voltage,
+          maf: d.maf,
+          throttle: d.throttle ?? d.throttlePosition,
+          intakeTemp: d.intakeTemp ?? d.intake,
+          timestamp: d.timestamp
+        });
+        
         if (!vehicleId || vid === vehicleId) {
-          console.log('🔔 Live telemetry update received:', d);
-          setLive((prev) => mergeTelemetry(prev, d));
+          // Normalize field names for frontend
+          const normalized = {
+            ...d,
+            rpm: d.rpm ?? 0,
+            speed: d.speed ?? 0,
+            fuelLevel: d.fuelLevel ?? d.fuel ?? 0,
+            coolantTemp: d.coolantTemp ?? d.coolant ?? 0,
+            engineLoad: d.engineLoad ?? d.load ?? 0,
+            batteryVoltage: d.batteryVoltage ?? d.voltage ?? 0,
+            maf: d.maf ?? 0,
+            throttle: d.throttle ?? d.throttlePosition ?? 0,
+            intakeTemp: d.intakeTemp ?? d.intake ?? 0
+          };
+          
+          setLive((prev) => mergeTelemetry(prev, normalized));
           setStreamStatus('live');
         }
       },
@@ -81,18 +108,63 @@ export default function Diagnostics() {
     // Initial load
     const fetchLatest = async () => {
       try {
+        console.log('🔍 Fetching latest telemetry for vehicle:', vehicleId);
         const res = await api.get('/mobile/telemetry/latest', { params: { vehicleId } });
+        console.log('📥 Latest telemetry received:', res.data.data);
+        
         if (res.data.success && res.data.data) {
           const latest = res.data.data;
-          setLive(latest);
+          
+          // Normalize field names
+          const normalized = {
+            ...latest,
+            rpm: latest.rpm ?? 0,
+            speed: latest.speed ?? 0,
+            fuelLevel: latest.fuelLevel ?? latest.fuel ?? 0,
+            coolantTemp: latest.coolantTemp ?? latest.coolant ?? 0,
+            engineLoad: latest.engineLoad ?? latest.load ?? 0,
+            batteryVoltage: latest.batteryVoltage ?? latest.voltage ?? 0,
+            maf: latest.maf ?? 0,
+            throttle: latest.throttle ?? latest.throttlePosition ?? 0,
+            intakeTemp: latest.intakeTemp ?? latest.intake ?? 0
+          };
+          
+          console.log('✅ Normalized telemetry:', {
+            rpm: normalized.rpm,
+            speed: normalized.speed,
+            fuelLevel: normalized.fuelLevel,
+            coolantTemp: normalized.coolantTemp,
+            engineLoad: normalized.engineLoad,
+            batteryVoltage: normalized.batteryVoltage,
+            maf: normalized.maf,
+            throttle: normalized.throttle,
+            intakeTemp: normalized.intakeTemp
+          });
+          
+          setLive(normalized);
+          
           const age = Date.now() - new Date(latest.timestamp || latest.recordedAt).getTime();
-          setStreamStatus(age < 30000 ? 'live' : age < 120000 ? 'stale' : 'offline');
+          // If GPS is updating but OBD is missing, still show as live if recent
+          if (age < 30000) {
+            setStreamStatus('live');
+          } else if (age < 120000) {
+            setStreamStatus('stale');
+          } else {
+            setStreamStatus('offline');
+          }
         } else {
-          setStreamStatus('offline');
+          console.warn('⚠️ No telemetry data received');
+          // Don't set offline if we just don't have data yet
+          if (streamStatus !== 'live') {
+            setStreamStatus('offline');
+          }
         }
       } catch (err) {
-        console.error('Error fetching latest telemetry:', err);
-        setStreamStatus('offline');
+        console.error('❌ Error fetching latest telemetry:', err);
+        // Don't override live status on API error
+        if (streamStatus !== 'live') {
+          setStreamStatus('offline');
+        }
       }
     };
 
@@ -167,40 +239,57 @@ export default function Diagnostics() {
           <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
             <div>
               <span className="text-slate-500">RPM:</span>
-              <span className="ml-2 text-cyan-400">{live.rpm ?? '—'}</span>
+              <span className="ml-2 text-cyan-400 font-semibold">{live.rpm ?? '—'}</span>
             </div>
             <div>
               <span className="text-slate-500">Speed:</span>
-              <span className="ml-2 text-cyan-400">{live.speed ?? '—'} km/h</span>
+              <span className="ml-2 text-cyan-400 font-semibold">{live.speed ?? '—'} km/h</span>
             </div>
             <div>
               <span className="text-slate-500">Fuel:</span>
-              <span className="ml-2 text-cyan-400">{live.fuelLevel ?? '—'}%</span>
+              <span className="ml-2 text-cyan-400 font-semibold">{live.fuelLevel ?? live.fuel ?? '—'}%</span>
             </div>
             <div>
               <span className="text-slate-500">Coolant:</span>
-              <span className="ml-2 text-cyan-400">{live.coolantTemp ?? '—'}°C</span>
+              <span className="ml-2 text-cyan-400 font-semibold">{live.coolantTemp ?? live.coolant ?? '—'}°C</span>
             </div>
             <div>
               <span className="text-slate-500">Battery:</span>
-              <span className="ml-2 text-cyan-400">{live.batteryVoltage ?? '—'}V</span>
+              <span className="ml-2 text-cyan-400 font-semibold">{live.batteryVoltage ?? live.voltage ?? '—'}V</span>
             </div>
             <div>
               <span className="text-slate-500">Engine Load:</span>
-              <span className="ml-2 text-cyan-400">{live.engineLoad ?? '—'}%</span>
+              <span className="ml-2 text-cyan-400 font-semibold">{live.engineLoad ?? live.load ?? '—'}%</span>
+            </div>
+            <div>
+              <span className="text-slate-500">MAF:</span>
+              <span className="ml-2 text-cyan-400 font-semibold">{live.maf ?? '—'} g/s</span>
+            </div>
+            <div>
+              <span className="text-slate-500">Throttle:</span>
+              <span className="ml-2 text-cyan-400 font-semibold">{live.throttle ?? live.throttlePosition ?? '—'}%</span>
+            </div>
+            <div>
+              <span className="text-slate-500">Intake Temp:</span>
+              <span className="ml-2 text-cyan-400 font-semibold">{live.intakeTemp ?? live.intake ?? '—'}°C</span>
             </div>
             {live.latitude && live.longitude && (
               <>
                 <div>
                   <span className="text-slate-500">GPS:</span>
-                  <span className="ml-2 text-green-400">Active</span>
+                  <span className="ml-2 text-green-400 font-semibold">Active</span>
                 </div>
-                <div>
+                <div className="col-span-2">
                   <span className="text-slate-500">Location:</span>
                   <span className="ml-2 text-cyan-400">{live.latitude.toFixed(4)}, {live.longitude.toFixed(4)}</span>
                 </div>
               </>
             )}
+          </div>
+        )}
+        {!live && isLive && (
+          <div className="mt-3 text-center py-4">
+            <p className="text-slate-500 text-sm">No telemetry data yet. Start the mobile app and send OBD data.</p>
           </div>
         )}
       </div>

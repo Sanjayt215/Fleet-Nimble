@@ -13,49 +13,66 @@ export async function submitLiveTelemetry(req, res) {
   try {
     const userId = req.user.id || req.userId;
     const companyId = req.user.companyId || req.user.company?.id;
-    const { 
-      vehicleId, 
-      mode = "LIVE", 
-      rpm, 
-      speed, 
-      fuelLevel, 
-      coolantTemp, 
-      batteryVoltage, 
-      engineLoad, 
-      latitude, 
-      longitude, 
-      gpsAccuracy, 
-      gpsAltitude, 
-      gpsHeading, 
+    
+    // Log full raw request body for debugging
+    logger.info("📥 Incoming mobile telemetry - RAW BODY", {
+      fullBody: req.body
+    });
+
+    // Normalize field names - support alternate field names from mobile app
+    const normalizedRpm = req.body.rpm;
+    const normalizedSpeed = req.body.speed;
+    const normalizedFuelLevel = req.body.fuelLevel ?? req.body.fuel;
+    const normalizedCoolantTemp = req.body.coolantTemp ?? req.body.coolant;
+    const normalizedEngineLoad = req.body.engineLoad ?? req.body.load;
+    const normalizedBatteryVoltage = req.body.batteryVoltage ?? req.body.voltage;
+    const normalizedMaf = req.body.maf;
+    const normalizedThrottle = req.body.throttle ?? req.body.throttlePosition;
+    const normalizedIntakeTemp = req.body.intakeTemp ?? req.body.intake;
+    
+    const {
+      vehicleId,
+      mode = "LIVE",
+      latitude,
+      longitude,
+      gpsAccuracy,
+      gpsAltitude,
+      gpsHeading,
       gpsTimestamp,
       vin,
-      odometer, 
-      timestamp 
+      odometer,
+      timestamp
     } = req.body;
 
-    // STEP 1: Log incoming telemetry
-    logger.info("📥 Incoming mobile telemetry", {
+    // Log normalized values
+    logger.info("📥 Incoming mobile telemetry - NORMALIZED", {
       userId,
       vehicleId,
       mode,
-      rpm,
-      speed,
-      fuelLevel,
-      coolantTemp,
-      engineLoad,
-      batteryVoltage,
+      rpm: normalizedRpm,
+      speed: normalizedSpeed,
+      fuelLevel: normalizedFuelLevel,
+      coolantTemp: normalizedCoolantTemp,
+      engineLoad: normalizedEngineLoad,
+      batteryVoltage: normalizedBatteryVoltage,
+      maf: normalizedMaf,
+      throttle: normalizedThrottle,
+      intakeTemp: normalizedIntakeTemp,
       latitude,
       longitude,
       vin,
       timestamp: timestamp || new Date().toISOString()
     });
 
-    const sanitizedRpm = sanitizeNumber(rpm);
-    const sanitizedSpeed = sanitizeNumber(speed);
-    const sanitizedFuelLevel = sanitizeNumber(fuelLevel);
-    const sanitizedCoolantTemp = sanitizeNumber(coolantTemp);
-    const sanitizedBatteryVoltage = sanitizeNumber(batteryVoltage);
-    const sanitizedEngineLoad = sanitizeNumber(engineLoad);
+    const sanitizedRpm = sanitizeNumber(normalizedRpm);
+    const sanitizedSpeed = sanitizeNumber(normalizedSpeed);
+    const sanitizedFuelLevel = sanitizeNumber(normalizedFuelLevel);
+    const sanitizedCoolantTemp = sanitizeNumber(normalizedCoolantTemp);
+    const sanitizedBatteryVoltage = sanitizeNumber(normalizedBatteryVoltage);
+    const sanitizedEngineLoad = sanitizeNumber(normalizedEngineLoad);
+    const sanitizedMaf = sanitizeNumber(normalizedMaf);
+    const sanitizedThrottle = sanitizeNumber(normalizedThrottle);
+    const sanitizedIntakeTemp = sanitizeNumber(normalizedIntakeTemp);
     const sanitizedLatitude = sanitizeNumber(latitude);
     const sanitizedLongitude = sanitizeNumber(longitude);
     const sanitizedGpsAccuracy = sanitizeNumber(gpsAccuracy);
@@ -86,6 +103,9 @@ export async function submitLiveTelemetry(req, res) {
         coolantTemp: sanitizedCoolantTemp,
         batteryVoltage: sanitizedBatteryVoltage,
         engineLoad: sanitizedEngineLoad,
+        maf: sanitizedMaf,
+        throttlePosition: sanitizedThrottle,
+        intakeTemp: sanitizedIntakeTemp,
         latitude: sanitizedLatitude,
         longitude: sanitizedLongitude,
         gpsAccuracy: sanitizedGpsAccuracy,
@@ -131,6 +151,9 @@ export async function submitLiveTelemetry(req, res) {
         batteryVoltage: sanitizedBatteryVoltage ?? 12.5,
         fuelLevel: sanitizedFuelLevel ?? 80,
         engineLoad: sanitizedEngineLoad ?? 12,
+        maf: sanitizedMaf ?? 0,
+        throttlePosition: sanitizedThrottle ?? 0,
+        intakeTemp: sanitizedIntakeTemp ?? 25,
         odometer: sanitizedOdometer ?? 0,
         gpsLat: sanitizedLatitude,
         gpsLng: sanitizedLongitude,
@@ -145,6 +168,9 @@ export async function submitLiveTelemetry(req, res) {
         batteryVoltage: sanitizedBatteryVoltage ?? 12.5,
         fuelLevel: sanitizedFuelLevel ?? 80,
         engineLoad: sanitizedEngineLoad ?? 12,
+        maf: sanitizedMaf ?? 0,
+        throttlePosition: sanitizedThrottle ?? 0,
+        intakeTemp: sanitizedIntakeTemp ?? 25,
         odometer: sanitizedOdometer ?? 0,
         gpsLat: sanitizedLatitude,
         gpsLng: sanitizedLongitude,
@@ -162,14 +188,50 @@ export async function submitLiveTelemetry(req, res) {
 
     const io = req.app.get('io');
     if (io) {
-      io.to(`user:${userId}`).emit('live-telemetry-update', {
-        ...telemetry,
-        mode: "LIVE", // Ensure mode is explicitly set
+      // Emit normalized telemetry with all OBD fields
+      const telemetryPayload = {
+        id: telemetry.id,
+        vehicleId: telemetry.vehicleId,
+        userId: telemetry.userId,
+        mode: "LIVE",
+        rpm: sanitizedRpm,
+        speed: sanitizedSpeed,
+        fuelLevel: sanitizedFuelLevel,
+        coolantTemp: sanitizedCoolantTemp,
+        engineLoad: sanitizedEngineLoad,
+        batteryVoltage: sanitizedBatteryVoltage,
+        maf: sanitizedMaf,
+        throttle: sanitizedThrottle,
+        throttlePosition: sanitizedThrottle,
+        intakeTemp: sanitizedIntakeTemp,
+        latitude: sanitizedLatitude,
+        longitude: sanitizedLongitude,
+        gpsAccuracy: sanitizedGpsAccuracy,
+        gpsAltitude: sanitizedGpsAltitude,
+        gpsHeading: sanitizedGpsHeading,
+        odometer: sanitizedOdometer,
+        vin: telemetry.vin,
+        timestamp: telemetry.timestamp,
+        createdAt: telemetry.createdAt,
         vehicle: {
           ...vehicle,
           ...vehicleUpdateData,
         }
+      };
+
+      logger.info("🔊 Emitting Socket.IO event", {
+        event: 'live-telemetry-update',
+        vehicleId,
+        rpm: sanitizedRpm,
+        speed: sanitizedSpeed,
+        fuelLevel: sanitizedFuelLevel,
+        coolantTemp: sanitizedCoolantTemp,
+        engineLoad: sanitizedEngineLoad,
+        batteryVoltage: sanitizedBatteryVoltage
       });
+
+      io.to(`user:${userId}`).emit('live-telemetry-update', telemetryPayload);
+      
       if (sanitizedLatitude !== null && sanitizedLongitude !== null) {
         io.to(`user:${userId}`).emit('live-gps-update', {
           vehicleId,
@@ -185,16 +247,48 @@ export async function submitLiveTelemetry(req, res) {
       io.to(`user:${userId}`).emit('vehicle-online', { vehicleId, status: vehicleStatus, online: true });
     }
 
-    // Log successful save
+    // Log successful save with all OBD values
     logger.info("✅ Telemetry saved successfully", {
       vehicleId,
       telemetryId: telemetry.id,
       vehicleStatus,
+      obdData: {
+        rpm: sanitizedRpm,
+        speed: sanitizedSpeed,
+        fuelLevel: sanitizedFuelLevel,
+        coolantTemp: sanitizedCoolantTemp,
+        engineLoad: sanitizedEngineLoad,
+        batteryVoltage: sanitizedBatteryVoltage,
+        maf: sanitizedMaf,
+        throttle: sanitizedThrottle,
+        intakeTemp: sanitizedIntakeTemp
+      },
       hasGPS: sanitizedLatitude !== null && sanitizedLongitude !== null,
       socketEmitted: !!io
     });
 
-    res.json({ success: true, data: { vehicleId, saved: true, telemetryId: telemetry.id } });
+    // Return saved telemetry in response for verification
+    res.json({ 
+      success: true, 
+      data: { 
+        vehicleId, 
+        saved: true, 
+        telemetryId: telemetry.id,
+        savedValues: {
+          rpm: sanitizedRpm,
+          speed: sanitizedSpeed,
+          fuelLevel: sanitizedFuelLevel,
+          coolantTemp: sanitizedCoolantTemp,
+          engineLoad: sanitizedEngineLoad,
+          batteryVoltage: sanitizedBatteryVoltage,
+          maf: sanitizedMaf,
+          throttle: sanitizedThrottle,
+          intakeTemp: sanitizedIntakeTemp,
+          latitude: sanitizedLatitude,
+          longitude: sanitizedLongitude
+        }
+      } 
+    });
   } catch (err) {
     logger.error("Error submitting telemetry:", err);
     res.status(500).json({ success: false, error: err.message });
@@ -206,6 +300,8 @@ export async function getLatestLiveTelemetry(req, res) {
     const userId = req.user.id || req.userId;
     const companyId = req.user.companyId || req.user.company?.id || null;
     const { vehicleId } = req.query;
+
+    logger.info("🔍 Fetching latest telemetry", { userId, vehicleId, companyId });
 
     let whereClause = {
       mode: 'LIVE',
@@ -232,7 +328,36 @@ export async function getLatestLiveTelemetry(req, res) {
       include: { vehicle: true, obdDevice: true },
     });
 
-    res.json({ success: true, data: telemetry });
+    if (telemetry) {
+      logger.info("✅ Latest telemetry found", {
+        telemetryId: telemetry.id,
+        vehicleId: telemetry.vehicleId,
+        rpm: telemetry.rpm,
+        speed: telemetry.speed,
+        fuelLevel: telemetry.fuelLevel,
+        coolantTemp: telemetry.coolantTemp,
+        engineLoad: telemetry.engineLoad,
+        batteryVoltage: telemetry.batteryVoltage,
+        timestamp: telemetry.timestamp
+      });
+
+      // Return with normalized field names
+      const response = {
+        ...telemetry,
+        // Ensure compatibility with alternate field names
+        fuel: telemetry.fuelLevel,
+        coolant: telemetry.coolantTemp,
+        load: telemetry.engineLoad,
+        voltage: telemetry.batteryVoltage,
+        throttle: telemetry.throttlePosition,
+        intake: telemetry.intakeTemp
+      };
+
+      res.json({ success: true, data: response });
+    } else {
+      logger.warn("⚠️ No telemetry found", { userId, vehicleId });
+      res.json({ success: true, data: null });
+    }
   } catch (err) {
     logger.error("Error fetching latest telemetry:", err);
     res.status(500).json({ success: false, error: err.message });
