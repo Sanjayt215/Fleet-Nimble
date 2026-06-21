@@ -6,6 +6,7 @@ import '../services/mqtt_service.dart';
 import '../services/socket_service.dart';
 import '../utils/config.dart';
 import 'login_screen.dart';
+import 'debug_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -283,6 +284,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Text(_status!, style: TextStyle(color: Colors.grey.shade700)),
             ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.bug_report, color: Colors.blue),
+            title: const Text('Debug Information'),
+            subtitle: const Text('System status, telemetry info, error logs'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const DebugScreen()),
+              );
+            },
+          ),
           const Divider(),
           ListTile(
             leading: const Icon(Icons.logout, color: Colors.red),

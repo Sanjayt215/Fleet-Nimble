@@ -1,11 +1,11 @@
 class AppConfig {
   static const String apiBaseUrl = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'http://10.196.249.225:5000/api',
+    defaultValue: 'https://fleet-nimble.onrender.com/api',
   );
   static const String socketUrl = String.fromEnvironment(
     'SOCKET_URL',
-    defaultValue: 'http://10.196.249.225:5000',
+    defaultValue: 'https://fleet-nimble.onrender.com',
   );
 
   /// MQTT broker hostname (no scheme). Emulator → 10.0.2.2; physical device → PC LAN IP.
@@ -20,10 +20,11 @@ class AppConfig {
   /// === BACKUP MODE: Fixed Vehicle ID for Testing ===
   /// When true, app skips vehicle setup and uploads OBD data to a fixed vehicle ID.
   /// Allows testing without relying on the new vehicle setup/authentication flow.
-  static const bool useFixedFleetVehicleId = true;
+  /// PRODUCTION: Set to false
+  static const bool useFixedFleetVehicleId = false;
 
-  /// Fixed FleetNimble vehicle UUID for backup/testing mode.
-  /// IMPORTANT: Replace with a real UUID from your FleetNimble database.
-  /// Use: SELECT id FROM "Vehicle" LIMIT 1;
-  static const String fixedFleetVehicleId = 'PASTE_VALID_FLEETNIMBLE_VEHICLE_UUID_HERE';
+  /// Fixed FleetNimble vehicle UUID for backup/testing mode ONLY.
+  /// IMPORTANT: Only used when useFixedFleetVehicleId = true
+  /// For testing: SELECT id FROM "Vehicle" LIMIT 1;
+  static const String fixedFleetVehicleId = '00000000-0000-0000-0000-000000000125';
 }
