@@ -22,6 +22,12 @@ class ObdService {
 
   bool get isConnected => _device != null;
 
+  /// Read VIN from ECU using mode 09 PID 02
+  Future<String> readVin() async {
+    if (_writeChar == null) throw Exception('Not connected');
+    return await sendCommand('0902');
+  }
+
   Future<void> connect(BluetoothDevice device) async {
     _device = device;
     await device.connect();
@@ -87,6 +93,73 @@ class ObdService {
   Future<List<String>> readDtc() async {
     final raw = await sendCommand('03');
     return DtcDecoder.parseResponse(raw);
+  }
+
+  Future<String?> readVin() async {
+    try {
+      print('🔍 Reading VIN from ECU...');
+      final raw = await sendCommand('0902');
+      print('📥 VIN raw response: $raw');
+      return _parseVin(raw);
+    } catch (e) {
+      print('❌ VIN read error: $e');
+      return null;
+    }
+  }
+
+  String? _parseVin(String response) {
+    if (response.isEmpty) return null;
+
+    // Remove common response artifacts
+    String cleaned = response
+        .toUpperCase()
+        .replaceAll('49 02', '')
+        .replaceAll('49', '')
+        .replaceAll('02', '')
+        .replaceAll(RegExp(r'[0-4]:'), '')
+        .replaceAll('>', '')
+        .replaceAll('\r', '')
+        .replaceAll('\n', ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+
+    // Extract hex bytes
+    List<String> hexBytes = cleaned.split(' ').where((s) => s.isNotEmpty).toList();
+    
+    // Skip frame counters
+    hexBytes = hexBytes.where((byte) {
+      if (byte.length == 2 && byte[1] == '0') {
+        int? value = int.tryParse(byte, radix: 16);
+        if (value != null && value % 16 == 0 && value < 256) {
+          return false;
+        }
+      }
+      return true;
+    }).toList();
+
+    // Convert hex to ASCII
+    StringBuffer vinBuffer = StringBuffer();
+    for (String hexByte in hexBytes) {
+      if (hexByte.length == 2) {
+        try {
+          int? charCode = int.tryParse(hexByte, radix: 16);
+          if (charCode != null && charCode >= 32 && charCode <= 126) {
+            vinBuffer.write(String.fromCharCode(charCode));
+          }
+        } catch (_) {}
+      }
+    }
+
+    String vin = vinBuffer.toString().trim();
+    
+    // Extract valid VIN characters only
+    vin = vin.replaceAll(RegExp(r'[^A-HJ-NPR-Z0-9]'), '');
+    
+    if (vin.length >= 17) {
+      return vin.substring(0, 17);
+    }
+    
+    return null;
   }
 
   Future<void> clearDtc() async {

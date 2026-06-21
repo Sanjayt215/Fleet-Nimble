@@ -71,6 +71,31 @@ class ApiService {
     return list.map((e) => Vehicle.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  /// Decode VIN using backend API
+  Future<Map<String, dynamic>> decodeVin(String vin) async {
+    await loadToken();
+    print('🔍 Decoding VIN: $vin');
+    
+    final res = await http.post(
+      Uri.parse('${AppConfig.apiBaseUrl}/mobile/vehicles/vin-decode'),
+      headers: _headers,
+      body: jsonEncode({'vin': vin}),
+    );
+    
+    print('📥 VIN decode response: ${res.statusCode} ${res.body}');
+    
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    
+    if (res.statusCode >= 400 || body['success'] != true) {
+      final errorMsg = body['error']?['message'] ?? 
+                       body['error']?.toString() ?? 
+                       'VIN decode failed';
+      throw Exception(errorMsg);
+    }
+    
+    return body['data'] as Map<String, dynamic>;
+  }
+
   Future<Map<String, dynamic>> setupVehicle({
     required String vehicleName,
     String? registrationNumber,
@@ -79,10 +104,15 @@ class ApiService {
     int? year,
     String? fuelType,
     String? vin,
+    String? manufacturer,
+    String? bodyClass,
+    String? engineModel,
     String? obdDeviceName,
     String? bluetoothAddress,
   }) async {
     await loadToken();
+    print('🚗 Setting up vehicle: $vehicleName (VIN: $vin)');
+    
     final res = await http.post(
       Uri.parse('${AppConfig.apiBaseUrl}/mobile/vehicles/setup'),
       headers: _headers,
@@ -94,13 +124,20 @@ class ApiService {
         'year': year,
         'fuelType': fuelType,
         'vin': vin,
+        'manufacturer': manufacturer,
+        'bodyClass': bodyClass,
+        'engineModel': engineModel,
         'obdDeviceName': obdDeviceName,
         'bluetoothAddress': bluetoothAddress,
       }),
     );
+    
+    print('📥 Vehicle setup response: ${res.statusCode} ${res.body}');
+    
     final body = jsonDecode(res.body) as Map<String, dynamic>;
     if (res.statusCode >= 400 || body['success'] != true) {
-      throw Exception(body['error']?.toString() ?? 'Vehicle setup failed');
+      final errorMsg = body['error']?.toString() ?? 'Vehicle setup failed';
+      throw Exception(errorMsg);
     }
     return body['data'] as Map<String, dynamic>;
   }
@@ -114,6 +151,9 @@ class ApiService {
     double? coolantTemp,
     double? batteryVoltage,
     double? engineLoad,
+    double? maf,
+    double? throttle,
+    double? intakeTemp,
     double? latitude,
     double? longitude,
     double? gpsAccuracy,
@@ -125,32 +165,45 @@ class ApiService {
     DateTime? timestamp,
   }) async {
     await loadToken();
+    
+    final payload = {
+      'vehicleId': vehicleId,
+      'mode': mode,
+      'rpm': rpm,
+      'speed': speed,
+      'fuelLevel': fuelLevel,
+      'coolantTemp': coolantTemp,
+      'batteryVoltage': batteryVoltage,
+      'engineLoad': engineLoad,
+      'maf': maf,
+      'throttle': throttle,
+      'intakeTemp': intakeTemp,
+      'latitude': latitude,
+      'longitude': longitude,
+      'gpsAccuracy': gpsAccuracy,
+      'gpsAltitude': gpsAltitude,
+      'gpsHeading': gpsHeading,
+      'gpsTimestamp': gpsTimestamp?.toIso8601String(),
+      'vin': vin,
+      'odometer': odometer,
+      'timestamp': (timestamp ?? DateTime.now()).toIso8601String(),
+    };
+    
+    print('📤 Uploading telemetry: vehicleId=$vehicleId, rpm=$rpm, speed=$speed, coolant=$coolantTemp, battery=$batteryVoltage');
+    
     final res = await http.post(
       Uri.parse('${AppConfig.apiBaseUrl}/mobile/telemetry/live'),
       headers: _headers,
-      body: jsonEncode({
-        'vehicleId': vehicleId,
-        'mode': mode,
-        'rpm': rpm,
-        'speed': speed,
-        'fuelLevel': fuelLevel,
-        'coolantTemp': coolantTemp,
-        'batteryVoltage': batteryVoltage,
-        'engineLoad': engineLoad,
-        'latitude': latitude,
-        'longitude': longitude,
-        'gpsAccuracy': gpsAccuracy,
-        'gpsAltitude': gpsAltitude,
-        'gpsHeading': gpsHeading,
-        'gpsTimestamp': gpsTimestamp?.toIso8601String(),
-        'vin': vin,
-        'odometer': odometer,
-        'timestamp': timestamp?.toIso8601String(),
-      }),
+      body: jsonEncode(payload),
     );
+    
     if (res.statusCode >= 400) {
-      throw Exception('HTTP ${res.statusCode}');
+      print('❌ Telemetry upload failed: ${res.statusCode}');
+      print('📥 Error response: ${res.body}');
+      throw Exception('HTTP ${res.statusCode}: ${res.body}');
     }
+    
+    print('✅ Telemetry uploaded successfully');
   }
 
   Future<void> postLiveData(String vehicleId, Map<String, dynamic> data) async {
