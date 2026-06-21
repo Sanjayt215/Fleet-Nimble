@@ -5,51 +5,150 @@ export async function vinDecode(req, res) {
   try {
     const { vin } = req.body;
 
+    logger.info("🔍 VIN decode request", { vin });
+
+    // Validate VIN is provided
     if (!vin) {
+      logger.warn("❌ VIN decode failed: VIN is required");
       return res.status(400).json({
         success: false,
-        error: { code: "INVALID_PAYLOAD", message: "VIN is required" }
+        error: { 
+          code: "INVALID_PAYLOAD", 
+          message: "VIN is required" 
+        }
       });
     }
 
+    // Clean and validate VIN format
+    const cleanVin = vin.trim().toUpperCase();
+    
+    // VIN must be exactly 17 characters
+    if (cleanVin.length !== 17) {
+      logger.warn("❌ VIN decode failed: Invalid length", { 
+        vin: cleanVin, 
+        length: cleanVin.length 
+      });
+      return res.status(400).json({
+        success: false,
+        error: { 
+          code: "INVALID_VIN", 
+          message: `VIN must be exactly 17 characters (received ${cleanVin.length})` 
+        }
+      });
+    }
+
+    // VIN cannot contain I, O, or Q
+    const invalidChars = cleanVin.match(/[IOQ]/g);
+    if (invalidChars) {
+      logger.warn("❌ VIN decode failed: Invalid characters", { 
+        vin: cleanVin, 
+        invalidChars: invalidChars.join(', ') 
+      });
+      return res.status(400).json({
+        success: false,
+        error: { 
+          code: "INVALID_VIN", 
+          message: `VIN contains invalid characters: ${invalidChars.join(', ')}. VIN cannot contain I, O, or Q.` 
+        }
+      });
+    }
+
+    // VIN must only contain alphanumeric characters
+    if (!/^[A-HJ-NPR-Z0-9]{17}$/.test(cleanVin)) {
+      logger.warn("❌ VIN decode failed: Invalid format", { vin: cleanVin });
+      return res.status(400).json({
+        success: false,
+        error: { 
+          code: "INVALID_VIN", 
+          message: "VIN must contain only letters (A-H, J-N, P, R-Z) and numbers (0-9)" 
+        }
+      });
+    }
+
+    // Call NHTSA VIN decoder
+    logger.info("📞 Calling NHTSA VIN decoder", { vin: cleanVin });
     const response = await fetch(
-      `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/${vin}?format=json`
+      `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/${cleanVin}?format=json`
     );
 
     if (!response.ok) {
-      return res.status(400).json({
+      logger.error("❌ NHTSA API request failed", { 
+        status: response.status, 
+        statusText: response.statusText 
+      });
+      return res.status(500).json({
         success: false,
-        error: { code: "VIN_DECODE_FAILED", message: "Failed to decode VIN" }
+        error: { 
+          code: "VIN_DECODE_API_ERROR", 
+          message: "VIN decoder service unavailable" 
+        }
       });
     }
 
     const data = await response.json();
     const result = data.Results[0];
 
-    if (!result || result.ErrorCode) {
-      return res.status(400).json({
+    // Check for API errors
+    if (!result) {
+      logger.error("❌ NHTSA API returned no results", { vin: cleanVin });
+      return res.status(500).json({
         success: false,
-        error: { code: "VIN_DECODE_FAILED", message: result.ErrorText || "Failed to decode VIN" }
+        error: { 
+          code: "VIN_DECODE_FAILED", 
+          message: "VIN decoder returned no results" 
+        }
       });
     }
 
+    // Check for decode errors from NHTSA
+    if (result.ErrorCode && result.ErrorCode !== "0") {
+      logger.warn("⚠️ NHTSA VIN decode returned errors", { 
+        vin: cleanVin, 
+        errorCode: result.ErrorCode,
+        errorText: result.ErrorText 
+      });
+      
+      // Still return decoded data if available, but include warning
+      if (result.Make || result.Model) {
+        logger.info("⚠️ Partial VIN decode available despite errors");
+      } else {
+        return res.status(400).json({
+          success: false,
+          error: { 
+            code: "VIN_DECODE_INCOMPLETE", 
+            message: result.ErrorText || "Unable to fully decode VIN. Please verify VIN is correct." 
+          }
+        });
+      }
+    }
+
     const decodedData = {
-      vin: result.VIN,
-      make: result.Make,
-      model: result.Model,
+      vin: result.VIN || cleanVin,
+      make: result.Make || null,
+      model: result.Model || null,
       year: result.ModelYear ? parseInt(result.ModelYear) : null,
-      manufacturer: result.Manufacturer,
-      fuelType: result.FuelTypePrimary,
-      bodyClass: result.BodyClass,
-      engineModel: result.EngineModel
+      manufacturer: result.Manufacturer || null,
+      fuelType: result.FuelTypePrimary || null,
+      bodyClass: result.BodyClass || null,
+      engineModel: result.EngineModel || null
     };
+
+    logger.info("✅ VIN decoded successfully", { 
+      vin: cleanVin, 
+      make: decodedData.make, 
+      model: decodedData.model, 
+      year: decodedData.year 
+    });
 
     res.json({
       success: true,
       data: decodedData
     });
   } catch (err) {
-    console.error("VIN decode failed:", err);
+    logger.error("❌ VIN decode exception", { 
+      error: err.message, 
+      stack: err.stack 
+    });
     res.status(500).json({
       success: false,
       error: {
@@ -80,7 +179,16 @@ export async function setupVehicle(req, res) {
       bluetoothAddress
     } = req.body;
 
+    logger.info("🚗 Vehicle setup request", { 
+      userId, 
+      vehicleName, 
+      registrationNumber, 
+      vin,
+      hasOBD: !!(obdDeviceName || bluetoothAddress)
+    });
+
     if (!userId) {
+      logger.error("❌ Vehicle setup failed: User not authenticated");
       return res.status(401).json({
         success: false,
         error: { code: "UNAUTHORIZED", message: "User not authenticated" }
@@ -88,21 +196,55 @@ export async function setupVehicle(req, res) {
     }
 
     if (!vehicleName || !registrationNumber) {
+      logger.warn("❌ Vehicle setup failed: Missing required fields");
       return res.status(400).json({
         success: false,
-        error: { code: "INVALID_PAYLOAD", message: "vehicleName and registrationNumber are required" }
+        error: { 
+          code: "INVALID_PAYLOAD", 
+          message: "vehicleName and registrationNumber are required" 
+        }
       });
     }
 
     const normalizedReg = registrationNumber.toUpperCase().trim();
 
-    const existingVehicle = await prisma.vehicle.findFirst({
-      where: {
-        userId,
-        registrationNumber: normalizedReg,
-        deletedAt: null,
-      },
-    });
+    // If VIN is provided, check if vehicle exists by VIN first
+    let existingVehicle = null;
+    if (vin) {
+      const cleanVin = vin.trim().toUpperCase();
+      existingVehicle = await prisma.vehicle.findFirst({
+        where: {
+          vin: cleanVin,
+          userId,
+          deletedAt: null,
+        },
+      });
+      
+      if (existingVehicle) {
+        logger.info("✅ Found existing vehicle by VIN", { 
+          vehicleId: existingVehicle.id, 
+          vin: cleanVin 
+        });
+      }
+    }
+
+    // If not found by VIN, try by registration number
+    if (!existingVehicle) {
+      existingVehicle = await prisma.vehicle.findFirst({
+        where: {
+          userId,
+          registrationNumber: normalizedReg,
+          deletedAt: null,
+        },
+      });
+      
+      if (existingVehicle) {
+        logger.info("✅ Found existing vehicle by registration", { 
+          vehicleId: existingVehicle.id, 
+          registrationNumber: normalizedReg 
+        });
+      }
+    }
 
     let vehicle;
     const vehicleData = {
@@ -112,7 +254,7 @@ export async function setupVehicle(req, res) {
       model,
       year: year ? parseInt(year) : null,
       fuelType,
-      vin,
+      vin: vin ? vin.trim().toUpperCase() : null,
       manufacturer,
       bodyClass,
       engineModel,
@@ -120,11 +262,13 @@ export async function setupVehicle(req, res) {
     };
 
     if (existingVehicle) {
+      logger.info("🔄 Updating existing vehicle", { vehicleId: existingVehicle.id });
       vehicle = await prisma.vehicle.update({
         where: { id: existingVehicle.id },
         data: vehicleData,
       });
     } else {
+      logger.info("✨ Creating new vehicle");
       vehicle = await prisma.vehicle.create({
         data: {
           ...vehicleData,
@@ -135,6 +279,11 @@ export async function setupVehicle(req, res) {
 
     let obdDevice = null;
     if (obdDeviceName || bluetoothAddress) {
+      logger.info("🔌 Setting up OBD device", { 
+        deviceName: obdDeviceName, 
+        bluetoothAddress 
+      });
+      
       obdDevice = await prisma.oBDDevice.upsert({
         where: {
           userId_bluetoothAddress: {
@@ -171,6 +320,12 @@ export async function setupVehicle(req, res) {
       });
     }
 
+    logger.info("✅ Vehicle setup complete", { 
+      vehicleId: vehicle.id, 
+      isNew: !existingVehicle,
+      hasOBD: !!obdDevice 
+    });
+
     res.json({
       success: true, 
       data: {
@@ -185,11 +340,15 @@ export async function setupVehicle(req, res) {
         manufacturer: vehicle.manufacturer,
         bodyClass: vehicle.bodyClass,
         engineModel: vehicle.engineModel,
-        obdDeviceId: obdDevice?.id
+        obdDeviceId: obdDevice?.id,
+        isNew: !existingVehicle
       }
     });
   } catch (err) {
-    console.error("Vehicle setup failed:", err);
+    logger.error("❌ Vehicle setup exception", { 
+      error: err.message, 
+      stack: err.stack 
+    });
     res.status(500).json({
       success: false,
       error: {
