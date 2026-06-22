@@ -634,27 +634,30 @@ model OBDDevice {
 }
 
 model Telemetry {
-  id             String        @id @default(uuid())
-  userId         String        @map("user_id")
-  vehicleId      String        @map("vehicle_id")
-  obdDeviceId    String?       @map("obd_device_id")
-  mode           TelemetryMode @default(LIVE)
-  rpm            Float?
-  speed          Float?
-  fuelLevel      Float?        @map("fuel_level")
-  coolantTemp    Float?        @map("coolant_temp")
-  batteryVoltage Float?        @map("battery_voltage")
-  engineLoad     Float?        @map("engine_load")
-  latitude       Float?
-  longitude      Float?
-  gpsAccuracy    Float?        @map("gps_accuracy")
-  gpsAltitude    Float?        @map("gps_altitude")
-  gpsHeading     Float?        @map("gps_heading")
-  gpsTimestamp   DateTime?     @map("gps_timestamp")
-  vin            String?
-  odometer       Float?
-  timestamp      DateTime      @default(now())
-  createdAt      DateTime      @default(now()) @map("created_at")
+  id               String        @id @default(uuid())
+  userId           String        @map("user_id")
+  vehicleId        String        @map("vehicle_id")
+  obdDeviceId      String?       @map("obd_device_id")
+  mode             TelemetryMode @default(LIVE)
+  rpm              Float?
+  speed            Float?
+  fuelLevel        Float?        @map("fuel_level")
+  coolantTemp      Float?        @map("coolant_temp")
+  batteryVoltage   Float?        @map("battery_voltage")
+  engineLoad       Float?        @map("engine_load")
+  maf              Float?
+  throttlePosition Float?        @map("throttle_position")
+  intakeTemp       Float?        @map("intake_temp")
+  latitude         Float?
+  longitude        Float?
+  gpsAccuracy      Float?        @map("gps_accuracy")
+  gpsAltitude      Float?        @map("gps_altitude")
+  gpsHeading       Float?        @map("gps_heading")
+  gpsTimestamp     DateTime?     @map("gps_timestamp")
+  vin              String?
+  odometer         Float?
+  timestamp        DateTime      @default(now())
+  createdAt        DateTime      @default(now()) @map("created_at")
 
   user      User       @relation(fields: [userId], references: [id])
   vehicle   Vehicle    @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
