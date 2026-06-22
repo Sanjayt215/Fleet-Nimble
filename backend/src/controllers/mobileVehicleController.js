@@ -65,7 +65,7 @@ export async function vinDecode(req, res) {
       });
     }
 
-    // Call NHTSA VIN decoder
+    // VIN format is valid - call NHTSA VIN decoder
     logger.info("📞 Calling NHTSA VIN decoder", { vin: cleanVin });
     const response = await fetch(
       `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/${cleanVin}?format=json`
@@ -76,11 +76,15 @@ export async function vinDecode(req, res) {
         status: response.status, 
         statusText: response.statusText 
       });
-      return res.status(500).json({
+      
+      // VIN is valid but NHTSA service is down - allow manual entry
+      return res.json({
         success: false,
         error: { 
-          code: "VIN_DECODE_API_ERROR", 
-          message: "VIN decoder service unavailable" 
+          code: "VIN_DECODE_SERVICE_UNAVAILABLE", 
+          message: "VIN is valid, but vehicle decoder service is temporarily unavailable. Please enter vehicle details manually.",
+          allowManualEntry: true,
+          vin: cleanVin
         }
       });
     }
@@ -91,37 +95,50 @@ export async function vinDecode(req, res) {
     // Check for API errors
     if (!result) {
       logger.error("❌ NHTSA API returned no results", { vin: cleanVin });
-      return res.status(500).json({
+      return res.json({
         success: false,
         error: { 
-          code: "VIN_DECODE_FAILED", 
-          message: "VIN decoder returned no results" 
+          code: "VIN_DECODE_NO_RESULTS", 
+          message: "VIN is valid, but no vehicle data was found. Please enter vehicle details manually.",
+          allowManualEntry: true,
+          vin: cleanVin
         }
       });
     }
 
-    // Check for decode errors from NHTSA
+    // Log NHTSA error codes if present
     if (result.ErrorCode && result.ErrorCode !== "0") {
-      logger.warn("⚠️ NHTSA VIN decode returned errors", { 
+      logger.warn("⚠️ NHTSA returned error codes", { 
         vin: cleanVin, 
         errorCode: result.ErrorCode,
         errorText: result.ErrorText 
       });
-      
-      // Still return decoded data if available, but include warning
-      if (result.Make || result.Model) {
-        logger.info("⚠️ Partial VIN decode available despite errors");
-      } else {
-        return res.status(400).json({
-          success: false,
-          error: { 
-            code: "VIN_DECODE_INCOMPLETE", 
-            message: result.ErrorText || "Unable to fully decode VIN. Please verify VIN is correct." 
-          }
-        });
-      }
     }
 
+    // Check if we got any meaningful data
+    const hasMakeOrModel = result.Make || result.Model;
+    
+    if (!hasMakeOrModel) {
+      // VIN is valid format but NHTSA has no data (non-US vehicle, etc.)
+      logger.warn("⚠️ VIN valid but no vehicle data available", { 
+        vin: cleanVin,
+        errorCode: result.ErrorCode,
+        errorText: result.ErrorText
+      });
+      
+      return res.json({
+        success: false,
+        error: { 
+          code: "VIN_DECODE_UNAVAILABLE", 
+          message: "VIN is valid but vehicle details could not be decoded. This may be a non-US vehicle or the VIN format is not recognized by the decoder. Please enter vehicle details manually.",
+          allowManualEntry: true,
+          vin: cleanVin,
+          nhtsaError: result.ErrorText
+        }
+      });
+    }
+
+    // We have at least some data - return it
     const decodedData = {
       vin: result.VIN || cleanVin,
       make: result.Make || null,
@@ -137,12 +154,14 @@ export async function vinDecode(req, res) {
       vin: cleanVin, 
       make: decodedData.make, 
       model: decodedData.model, 
-      year: decodedData.year 
+      year: decodedData.year,
+      hasWarnings: result.ErrorCode && result.ErrorCode !== "0"
     });
 
     res.json({
       success: true,
-      data: decodedData
+      data: decodedData,
+      warning: result.ErrorCode && result.ErrorCode !== "0" ? result.ErrorText : null
     });
   } catch (err) {
     logger.error("❌ VIN decode exception", { 
@@ -153,7 +172,8 @@ export async function vinDecode(req, res) {
       success: false,
       error: {
         code: "VIN_DECODE_FAILED",
-        message: err.message
+        message: "An error occurred while decoding the VIN. Please try again or enter vehicle details manually.",
+        allowManualEntry: true
       }
     });
   }
