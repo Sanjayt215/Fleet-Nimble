@@ -1,5 +1,6 @@
 import prisma from "../utils/prisma.js";
 import logger from "../utils/logger.js";
+import { decodeVIN } from "../services/vinDecoderService.js";
 
 export async function vinDecode(req, res) {
   try {
@@ -7,9 +8,7 @@ export async function vinDecode(req, res) {
 
     logger.info("🔍 VIN decode request", { vin });
 
-    // Validate VIN is provided
     if (!vin) {
-      logger.warn("❌ VIN decode failed: VIN is required");
       return res.status(400).json({
         success: false,
         error: { 
@@ -19,150 +18,21 @@ export async function vinDecode(req, res) {
       });
     }
 
-    // Clean and validate VIN format
-    const cleanVin = vin.trim().toUpperCase();
+    // Use the new VIN decoder service
+    const result = await decodeVIN(vin);
     
-    // VIN must be exactly 17 characters
-    if (cleanVin.length !== 17) {
-      logger.warn("❌ VIN decode failed: Invalid length", { 
-        vin: cleanVin, 
-        length: cleanVin.length 
-      });
-      return res.status(400).json({
-        success: false,
-        error: { 
-          code: "INVALID_VIN", 
-          message: `VIN must be exactly 17 characters (received ${cleanVin.length})` 
-        }
-      });
+    // Return result (success or error)
+    if (result.success) {
+      res.json(result);
+    } else {
+      // Return error but don't use HTTP 400 for valid VINs with allowManualEntry
+      if (result.error?.allowManualEntry) {
+        res.json(result);
+      } else {
+        res.status(400).json(result);
+      }
     }
-
-    // VIN cannot contain I, O, or Q
-    const invalidChars = cleanVin.match(/[IOQ]/g);
-    if (invalidChars) {
-      logger.warn("❌ VIN decode failed: Invalid characters", { 
-        vin: cleanVin, 
-        invalidChars: invalidChars.join(', ') 
-      });
-      return res.status(400).json({
-        success: false,
-        error: { 
-          code: "INVALID_VIN", 
-          message: `VIN contains invalid characters: ${invalidChars.join(', ')}. VIN cannot contain I, O, or Q.` 
-        }
-      });
-    }
-
-    // VIN must only contain alphanumeric characters
-    if (!/^[A-HJ-NPR-Z0-9]{17}$/.test(cleanVin)) {
-      logger.warn("❌ VIN decode failed: Invalid format", { vin: cleanVin });
-      return res.status(400).json({
-        success: false,
-        error: { 
-          code: "INVALID_VIN", 
-          message: "VIN must contain only letters (A-H, J-N, P, R-Z) and numbers (0-9)" 
-        }
-      });
-    }
-
-    // VIN format is valid - call NHTSA VIN decoder
-    logger.info("📞 Calling NHTSA VIN decoder", { vin: cleanVin });
-    const response = await fetch(
-      `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/${cleanVin}?format=json`
-    );
-
-    if (!response.ok) {
-      logger.error("❌ NHTSA API request failed", { 
-        status: response.status, 
-        statusText: response.statusText 
-      });
-      
-      // VIN is valid but NHTSA service is down - allow manual entry
-      return res.json({
-        success: false,
-        error: { 
-          code: "VIN_DECODE_SERVICE_UNAVAILABLE", 
-          message: "VIN is valid, but vehicle decoder service is temporarily unavailable. Please enter vehicle details manually.",
-          allowManualEntry: true,
-          vin: cleanVin
-        }
-      });
-    }
-
-    const data = await response.json();
-    const result = data.Results[0];
-
-    // Check for API errors
-    if (!result) {
-      logger.error("❌ NHTSA API returned no results", { vin: cleanVin });
-      return res.json({
-        success: false,
-        error: { 
-          code: "VIN_DECODE_NO_RESULTS", 
-          message: "VIN is valid, but no vehicle data was found. Please enter vehicle details manually.",
-          allowManualEntry: true,
-          vin: cleanVin
-        }
-      });
-    }
-
-    // Log NHTSA error codes if present
-    if (result.ErrorCode && result.ErrorCode !== "0") {
-      logger.warn("⚠️ NHTSA returned error codes", { 
-        vin: cleanVin, 
-        errorCode: result.ErrorCode,
-        errorText: result.ErrorText 
-      });
-    }
-
-    // Check if we got any meaningful data
-    const hasMakeOrModel = result.Make || result.Model;
     
-    if (!hasMakeOrModel) {
-      // VIN is valid format but NHTSA has no data (non-US vehicle, etc.)
-      logger.warn("⚠️ VIN valid but no vehicle data available", { 
-        vin: cleanVin,
-        errorCode: result.ErrorCode,
-        errorText: result.ErrorText
-      });
-      
-      return res.json({
-        success: false,
-        error: { 
-          code: "VIN_DECODE_UNAVAILABLE", 
-          message: "VIN is valid but vehicle details could not be decoded. This may be a non-US vehicle or the VIN format is not recognized by the decoder. Please enter vehicle details manually.",
-          allowManualEntry: true,
-          vin: cleanVin,
-          nhtsaError: result.ErrorText
-        }
-      });
-    }
-
-    // We have at least some data - return it
-    const decodedData = {
-      vin: result.VIN || cleanVin,
-      make: result.Make || null,
-      model: result.Model || null,
-      year: result.ModelYear ? parseInt(result.ModelYear) : null,
-      manufacturer: result.Manufacturer || null,
-      fuelType: result.FuelTypePrimary || null,
-      bodyClass: result.BodyClass || null,
-      engineModel: result.EngineModel || null
-    };
-
-    logger.info("✅ VIN decoded successfully", { 
-      vin: cleanVin, 
-      make: decodedData.make, 
-      model: decodedData.model, 
-      year: decodedData.year,
-      hasWarnings: result.ErrorCode && result.ErrorCode !== "0"
-    });
-
-    res.json({
-      success: true,
-      data: decodedData,
-      warning: result.ErrorCode && result.ErrorCode !== "0" ? result.ErrorText : null
-    });
   } catch (err) {
     logger.error("❌ VIN decode exception", { 
       error: err.message, 
@@ -196,7 +66,13 @@ export async function setupVehicle(req, res) {
       bodyClass,
       engineModel,
       obdDeviceName,
-      bluetoothAddress
+      bluetoothAddress,
+      // New decode metadata fields
+      vinDecodeSource,
+      vinDecodeType,
+      vinCountry,
+      vinConfidence,
+      isPartialDecode
     } = req.body;
 
     logger.info("🚗 Vehicle setup request", { 
@@ -204,6 +80,7 @@ export async function setupVehicle(req, res) {
       vehicleName, 
       registrationNumber, 
       vin,
+      vinDecodeSource,
       hasOBD: !!(obdDeviceName || bluetoothAddress)
     });
 
@@ -278,7 +155,13 @@ export async function setupVehicle(req, res) {
       manufacturer,
       bodyClass,
       engineModel,
-      companyId: companyId || undefined
+      companyId: companyId || undefined,
+      // Store VIN decode metadata
+      vinDecodeSource: vinDecodeSource || null,
+      vinDecodeType: vinDecodeType || null,
+      vinCountry: vinCountry || null,
+      vinConfidence: vinConfidence || null,
+      isPartialDecode: isPartialDecode || false
     };
 
     if (existingVehicle) {
@@ -343,7 +226,8 @@ export async function setupVehicle(req, res) {
     logger.info("✅ Vehicle setup complete", { 
       vehicleId: vehicle.id, 
       isNew: !existingVehicle,
-      hasOBD: !!obdDevice 
+      hasOBD: !!obdDevice,
+      decodeSource: vinDecodeSource
     });
 
     res.json({
@@ -360,6 +244,11 @@ export async function setupVehicle(req, res) {
         manufacturer: vehicle.manufacturer,
         bodyClass: vehicle.bodyClass,
         engineModel: vehicle.engineModel,
+        vinDecodeSource: vehicle.vinDecodeSource,
+        vinDecodeType: vehicle.vinDecodeType,
+        vinCountry: vehicle.vinCountry,
+        vinConfidence: vehicle.vinConfidence,
+        isPartialDecode: vehicle.isPartialDecode,
         obdDeviceId: obdDevice?.id,
         isNew: !existingVehicle
       }
