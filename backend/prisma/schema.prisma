@@ -56,6 +56,9 @@ enum VehicleStatus {
   IDLING
   MOVING
   OFFLINE
+  STANDBY
+  ENGINE_OFF
+  LOW_BATTERY
 }
 
 enum BehaviorEventType {
@@ -135,40 +138,47 @@ model RefreshToken {
 }
 
 model Vehicle {
-  id                 String        @id @default(uuid())
-  userId             String        @map("user_id")
-  companyId          String?       @map("company_id")
-  vehicleName        String?       @map("vehicle_name")
-  vin                String?
-  manufacturer       String?
-  bodyClass          String?
-  engineModel        String?
-  plateNumber        String?       @map("plate_number")
-  registrationNumber String?       @map("registration_number")
-  make               String?
-  model              String?
-  year               Int?
-  fuelType           String?
-  vinDecodeSource    String?       @map("vin_decode_source")
-  vinDecodeType      String?       @map("vin_decode_type")
-  vinCountry         String?       @map("vin_country")
-  vinConfidence      String?       @map("vin_confidence")
-  isPartialDecode    Boolean       @default(false) @map("is_partial_decode")
-  odometer           Float         @default(0)
-  milOn              Boolean?      @map("mil_on")
-  readinessMonitors  Json?         @map("readiness_monitors")
-  engineHoursObd     Float?        @map("engine_hours_obd")
-  obdDeviceId        String?       @map("obd_device_id")
-  lastObdAt          DateTime?     @map("last_obd_at")
-  lastTelemetryAt    DateTime?     @map("last_telemetry_at")
-  gpsLastLatitude    Float?        @map("gps_last_latitude")
-  gpsLastLongitude   Float?        @map("gps_last_longitude")
-  gpsLastAt          DateTime?     @map("gps_last_at")
-  status             VehicleStatus @default(OFFLINE)
-  telemetryOnline    Boolean       @default(false) @map("telemetry_online")
-  deletedAt          DateTime?     @map("deleted_at")
-  createdAt          DateTime      @default(now()) @map("created_at")
-  updatedAt          DateTime      @updatedAt @map("updated_at")
+  id                      String        @id @default(uuid())
+  userId                  String        @map("user_id")
+  companyId               String?       @map("company_id")
+  vehicleName             String?       @map("vehicle_name")
+  vin                     String?
+  manufacturer            String?
+  bodyClass               String?
+  engineModel             String?
+  plateNumber             String?       @map("plate_number")
+  registrationNumber      String?       @map("registration_number")
+  make                    String?
+  model                   String?
+  year                    Int?
+  fuelType                String?
+  vinDecodeSource         String?       @map("vin_decode_source")
+  vinDecodeType           String?       @map("vin_decode_type")
+  vinCountry              String?       @map("vin_country")
+  vinConfidence           String?       @map("vin_confidence")
+  isPartialDecode         Boolean       @default(false) @map("is_partial_decode")
+  odometer                Float         @default(0)
+  milOn                   Boolean?      @map("mil_on")
+  readinessMonitors       Json?         @map("readiness_monitors")
+  engineHoursObd          Float?        @map("engine_hours_obd")
+  obdDeviceId             String?       @map("obd_device_id")
+  lastObdAt               DateTime?     @map("last_obd_at")
+  lastTelemetryAt         DateTime?     @map("last_telemetry_at")
+  gpsLastLatitude         Float?        @map("gps_last_latitude")
+  gpsLastLongitude        Float?        @map("gps_last_longitude")
+  gpsLastAt               DateTime?     @map("gps_last_at")
+  status                  VehicleStatus @default(OFFLINE)
+  telemetryOnline         Boolean       @default(false) @map("telemetry_online")
+  engineState             String?       @map("engine_state")
+  ignitionStatus          String?       @map("ignition_status")
+  batteryProtectionMode   String?       @map("battery_protection_mode")
+  obdPollingActive        Boolean?      @map("obd_polling_active")
+  lastStandbyAt           DateTime?     @map("last_standby_at")
+  lastEngineOnAt          DateTime?     @map("last_engine_on_at")
+  lastEngineOffAt         DateTime?     @map("last_engine_off_at")
+  deletedAt               DateTime?     @map("deleted_at")
+  createdAt               DateTime      @default(now()) @map("created_at")
+  updatedAt               DateTime      @updatedAt @map("updated_at")
 
   user             User                  @relation(fields: [userId], references: [id])
   company          Company?              @relation(fields: [companyId], references: [id])
@@ -197,6 +207,7 @@ model Vehicle {
   @@index([userId])
   @@index([companyId])
   @@index([vin])
+  @@index([engineState])
   @@index([telemetryOnline, lastObdAt])
   @@map("vehicles")
 }
@@ -634,30 +645,36 @@ model OBDDevice {
 }
 
 model Telemetry {
-  id               String        @id @default(uuid())
-  userId           String        @map("user_id")
-  vehicleId        String        @map("vehicle_id")
-  obdDeviceId      String?       @map("obd_device_id")
-  mode             TelemetryMode @default(LIVE)
-  rpm              Float?
-  speed            Float?
-  fuelLevel        Float?        @map("fuel_level")
-  coolantTemp      Float?        @map("coolant_temp")
-  batteryVoltage   Float?        @map("battery_voltage")
-  engineLoad       Float?        @map("engine_load")
-  maf              Float?
-  throttlePosition Float?        @map("throttle_position")
-  intakeTemp       Float?        @map("intake_temp")
-  latitude         Float?
-  longitude        Float?
-  gpsAccuracy      Float?        @map("gps_accuracy")
-  gpsAltitude      Float?        @map("gps_altitude")
-  gpsHeading       Float?        @map("gps_heading")
-  gpsTimestamp     DateTime?     @map("gps_timestamp")
-  vin              String?
-  odometer         Float?
-  timestamp        DateTime      @default(now())
-  createdAt        DateTime      @default(now()) @map("created_at")
+  id                    String        @id @default(uuid())
+  userId                String        @map("user_id")
+  vehicleId             String        @map("vehicle_id")
+  obdDeviceId           String?       @map("obd_device_id")
+  mode                  TelemetryMode @default(LIVE)
+  rpm                   Float?
+  speed                 Float?
+  fuelLevel             Float?        @map("fuel_level")
+  coolantTemp           Float?        @map("coolant_temp")
+  batteryVoltage        Float?        @map("battery_voltage")
+  engineLoad            Float?        @map("engine_load")
+  maf                   Float?
+  throttlePosition      Float?        @map("throttle_position")
+  intakeTemp            Float?        @map("intake_temp")
+  latitude              Float?
+  longitude             Float?
+  gpsAccuracy           Float?        @map("gps_accuracy")
+  gpsAltitude           Float?        @map("gps_altitude")
+  gpsHeading            Float?        @map("gps_heading")
+  gpsTimestamp          DateTime?     @map("gps_timestamp")
+  vin                   String?
+  odometer              Float?
+  engineState           String?       @map("engine_state")
+  ignitionStatus        String?       @map("ignition_status")
+  standbyReason         String?       @map("standby_reason")
+  batteryProtectionMode String?       @map("battery_protection_mode")
+  obdPollingActive      Boolean?      @map("obd_polling_active")
+  standbyHeartbeat      Boolean?      @map("standby_heartbeat")
+  timestamp             DateTime      @default(now())
+  createdAt             DateTime      @default(now()) @map("created_at")
 
   user      User       @relation(fields: [userId], references: [id])
   vehicle   Vehicle    @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
@@ -666,6 +683,7 @@ model Telemetry {
   @@index([userId])
   @@index([vehicleId])
   @@index([mode])
+  @@index([engineState])
   @@index([timestamp(sort: Desc)])
   @@map("telemetries")
 }

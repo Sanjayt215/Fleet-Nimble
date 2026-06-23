@@ -41,14 +41,30 @@ export async function submitLiveTelemetry(req, res) {
       gpsTimestamp,
       vin,
       odometer,
-      timestamp
+      timestamp,
+      // NEW: Engine state fields
+      engineState,
+      ignitionStatus,
+      standbyReason,
+      batteryProtectionMode,
+      obdPollingActive,
+      standbyHeartbeat
     } = req.body;
+
+    // Determine if this is a STANDBY heartbeat
+    const isStandbyMode = mode === "STANDBY" || engineState === "ENGINE_OFF" || engineState === "STANDBY" || standbyHeartbeat === true;
 
     // Log normalized values
     logger.info("📥 Incoming mobile telemetry - NORMALIZED", {
       userId,
       vehicleId,
       mode,
+      isStandbyMode,
+      engineState,
+      ignitionStatus,
+      batteryProtectionMode,
+      obdPollingActive,
+      standbyHeartbeat,
       rpm: normalizedRpm,
       speed: normalizedSpeed,
       fuelLevel: normalizedFuelLevel,
@@ -140,7 +156,7 @@ export async function submitLiveTelemetry(req, res) {
         userId,
         vehicleId,
         obdDeviceId: vehicle.obdDeviceId || null,
-        mode: mode === "LIVE" ? "LIVE" : "DEMO",
+        mode: isStandbyMode ? "DEMO" : (mode === "LIVE" ? "LIVE" : "DEMO"),
         rpm: sanitizedRpm,
         speed: sanitizedSpeed,
         fuelLevel: sanitizedFuelLevel,
@@ -158,6 +174,13 @@ export async function submitLiveTelemetry(req, res) {
         gpsTimestamp: gpsTimestamp ? new Date(gpsTimestamp) : null,
         vin: vin || null,
         odometer: sanitizedOdometer,
+        // NEW: Engine state fields
+        engineState: engineState || null,
+        ignitionStatus: ignitionStatus || null,
+        standbyReason: standbyReason || null,
+        batteryProtectionMode: batteryProtectionMode || null,
+        obdPollingActive: obdPollingActive !== undefined ? obdPollingActive : (!isStandbyMode),
+        standbyHeartbeat: standbyHeartbeat || false,
         timestamp: timestamp ? new Date(timestamp) : new Date(),
       },
     });
@@ -166,19 +189,59 @@ export async function submitLiveTelemetry(req, res) {
       telemetryId: telemetry.id,
       vehicleId,
       mode: telemetry.mode,
+      engineState: telemetry.engineState,
+      isStandbyMode,
       timestamp: telemetry.timestamp
     });
 
+    // Determine vehicle status based on engine state and OBD data
     let vehicleStatus = "OFFLINE";
-    if (sanitizedSpeed && sanitizedSpeed > 1) vehicleStatus = "MOVING";
-    else if (sanitizedRpm && sanitizedRpm > 200) vehicleStatus = "IDLING";
-    else vehicleStatus = "PARKED";
+    
+    if (isStandbyMode) {
+      // STANDBY mode: engine off, battery protection active
+      if (batteryProtectionMode === "LOW_BATTERY" || batteryProtectionMode === "DEEP_SLEEP") {
+        vehicleStatus = "LOW_BATTERY";
+        logger.warn("🔋 LOW BATTERY protection active", { vehicleId, batteryProtectionMode });
+      } else if (engineState === "ENGINE_OFF" || ignitionStatus === "OFF") {
+        vehicleStatus = "ENGINE_OFF";
+      } else {
+        vehicleStatus = "STANDBY";
+      }
+    } else {
+      // LIVE mode: engine on, normal OBD telemetry
+      if (sanitizedSpeed && sanitizedSpeed > 1) {
+        vehicleStatus = "MOVING";
+      } else if (sanitizedRpm && sanitizedRpm > 200) {
+        vehicleStatus = "IDLING";
+      } else {
+        vehicleStatus = "PARKED";
+      }
+    }
 
     const vehicleUpdateData = {
       lastTelemetryAt: new Date(),
       status: vehicleStatus,
-      telemetryOnline: true,
+      telemetryOnline: !isStandbyMode, // Only mark online if not in standby
+      engineState: engineState || vehicle.engineState,
+      ignitionStatus: ignitionStatus || vehicle.ignitionStatus,
+      batteryProtectionMode: batteryProtectionMode || vehicle.batteryProtectionMode,
+      obdPollingActive: obdPollingActive !== undefined ? obdPollingActive : (!isStandbyMode),
     };
+    
+    // Update engine state timestamps
+    if (engineState === "ENGINE_ON" && vehicle.engineState !== "ENGINE_ON") {
+      vehicleUpdateData.lastEngineOnAt = new Date();
+      logger.info("🚗 Engine started", { vehicleId });
+    }
+    
+    if ((engineState === "ENGINE_OFF" || engineState === "STANDBY") && vehicle.engineState === "ENGINE_ON") {
+      vehicleUpdateData.lastEngineOffAt = new Date();
+      logger.info("🛑 Engine stopped", { vehicleId });
+    }
+    
+    if (isStandbyMode) {
+      vehicleUpdateData.lastStandbyAt = new Date();
+    }
 
     if (sanitizedLatitude !== null && sanitizedLongitude !== null) {
       vehicleUpdateData.gpsLastLatitude = sanitizedLatitude;
@@ -194,9 +257,12 @@ export async function submitLiveTelemetry(req, res) {
     logger.info("🚗 Vehicle status updated", {
       vehicleId,
       status: vehicleStatus,
-      telemetryOnline: true,
+      engineState,
+      obdPollingActive: vehicleUpdateData.obdPollingActive,
+      telemetryOnline: vehicleUpdateData.telemetryOnline,
       lastTelemetryAt: vehicleUpdateData.lastTelemetryAt,
-      hasGPS: !!(sanitizedLatitude !== null && sanitizedLongitude !== null)
+      hasGPS: !!(sanitizedLatitude !== null && sanitizedLongitude !== null),
+      isStandbyMode
     });
 
     await prisma.vehicleLiveState.upsert({
@@ -247,12 +313,12 @@ export async function submitLiveTelemetry(req, res) {
 
     const io = req.app.get('io');
     if (io) {
-      // Emit normalized telemetry with all OBD fields
+      // Emit normalized telemetry with all OBD fields + engine state
       const telemetryPayload = {
         id: telemetry.id,
         vehicleId: telemetry.vehicleId,
         userId: telemetry.userId,
-        mode: "LIVE",
+        mode: isStandbyMode ? "STANDBY" : "LIVE",
         rpm: sanitizedRpm,
         speed: sanitizedSpeed,
         fuelLevel: sanitizedFuelLevel,
@@ -270,6 +336,13 @@ export async function submitLiveTelemetry(req, res) {
         gpsHeading: sanitizedGpsHeading,
         odometer: sanitizedOdometer,
         vin: telemetry.vin,
+        // NEW: Engine state fields
+        engineState: telemetry.engineState,
+        ignitionStatus: telemetry.ignitionStatus,
+        standbyReason: telemetry.standbyReason,
+        batteryProtectionMode: telemetry.batteryProtectionMode,
+        obdPollingActive: telemetry.obdPollingActive,
+        standbyHeartbeat: telemetry.standbyHeartbeat,
         timestamp: telemetry.timestamp,
         createdAt: telemetry.createdAt,
         vehicle: {
@@ -282,15 +355,12 @@ export async function submitLiveTelemetry(req, res) {
         event: 'live-telemetry-update',
         userId,
         vehicleId,
+        engineState: telemetry.engineState,
+        obdPollingActive: telemetry.obdPollingActive,
+        isStandbyMode,
         rpm: sanitizedRpm,
         speed: sanitizedSpeed,
-        fuelLevel: sanitizedFuelLevel,
-        coolantTemp: sanitizedCoolantTemp,
-        engineLoad: sanitizedEngineLoad,
-        batteryVoltage: sanitizedBatteryVoltage,
-        maf: sanitizedMaf,
-        throttle: sanitizedThrottle,
-        intakeTemp: sanitizedIntakeTemp
+        batteryVoltage: sanitizedBatteryVoltage
       });
 
       io.to(`user:${userId}`).emit('live-telemetry-update', telemetryPayload);
@@ -301,7 +371,8 @@ export async function submitLiveTelemetry(req, res) {
           userId,
           vehicleId,
           latitude: sanitizedLatitude,
-          longitude: sanitizedLongitude
+          longitude: sanitizedLongitude,
+          isStandbyMode
         });
         
         io.to(`user:${userId}`).emit('live-gps-update', {
@@ -312,18 +383,72 @@ export async function submitLiveTelemetry(req, res) {
           gpsAltitude: sanitizedGpsAltitude,
           gpsHeading: sanitizedGpsHeading,
           speed: sanitizedSpeed,
+          engineState: telemetry.engineState,
+          isStandbyMode,
           timestamp: new Date(),
         });
       }
       
-      logger.info("🔊 Socket.IO vehicle-online", {
-        event: 'vehicle-online',
-        userId,
-        vehicleId,
-        status: vehicleStatus
-      });
-      
-      io.to(`user:${userId}`).emit('vehicle-online', { vehicleId, status: vehicleStatus, online: true });
+      // Emit appropriate vehicle state event
+      if (vehicleStatus === "LOW_BATTERY") {
+        logger.warn("🔊 Socket.IO vehicle-alert LOW_BATTERY", {
+          event: 'vehicle-alert',
+          userId,
+          vehicleId,
+          alertType: 'LOW_BATTERY'
+        });
+        
+        io.to(`user:${userId}`).emit('vehicle-alert', {
+          vehicleId,
+          alertType: 'LOW_BATTERY',
+          batteryProtectionMode,
+          batteryVoltage: sanitizedBatteryVoltage,
+          message: 'Low battery detected. OBD polling paused to protect battery.',
+          timestamp: new Date()
+        });
+      } else if (isStandbyMode) {
+        logger.info("🔊 Socket.IO vehicle-standby", {
+          event: 'vehicle-standby',
+          userId,
+          vehicleId,
+          engineState: telemetry.engineState
+        });
+        
+        io.to(`user:${userId}`).emit('vehicle-standby', {
+          vehicleId,
+          status: vehicleStatus,
+          engineState: telemetry.engineState,
+          standbyReason: telemetry.standbyReason,
+          online: true,
+          standbyHeartbeat: true,
+          timestamp: new Date()
+        });
+        
+        if (engineState === "ENGINE_OFF" || ignitionStatus === "OFF") {
+          io.to(`user:${userId}`).emit('vehicle-engine-off', {
+            vehicleId,
+            engineState: telemetry.engineState,
+            ignitionStatus: telemetry.ignitionStatus,
+            timestamp: new Date()
+          });
+        }
+      } else {
+        logger.info("🔊 Socket.IO vehicle-online", {
+          event: 'vehicle-online',
+          userId,
+          vehicleId,
+          status: vehicleStatus,
+          engineState: telemetry.engineState
+        });
+        
+        io.to(`user:${userId}`).emit('vehicle-online', {
+          vehicleId,
+          status: vehicleStatus,
+          engineState: telemetry.engineState,
+          online: true,
+          timestamp: new Date()
+        });
+      }
     }
 
     // Log successful save with all OBD values
@@ -420,7 +545,7 @@ export async function getLatestLiveTelemetry(req, res) {
         timestamp: telemetry.timestamp
       });
 
-      // Return with normalized field names
+      // Return with normalized field names + engine state
       const response = {
         ...telemetry,
         // Ensure compatibility with alternate field names
@@ -429,7 +554,11 @@ export async function getLatestLiveTelemetry(req, res) {
         load: telemetry.engineLoad,
         voltage: telemetry.batteryVoltage,
         throttle: telemetry.throttlePosition,
-        intake: telemetry.intakeTemp
+        intake: telemetry.intakeTemp,
+        // Engine state info
+        isStandbyMode: telemetry.engineState === "ENGINE_OFF" || telemetry.engineState === "STANDBY" || telemetry.standbyHeartbeat,
+        isEngineOn: telemetry.engineState === "ENGINE_ON",
+        isBatteryProtection: !!telemetry.batteryProtectionMode
       };
 
       res.json({ success: true, data: response });

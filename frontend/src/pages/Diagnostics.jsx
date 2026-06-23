@@ -15,32 +15,28 @@ export default function Diagnostics() {
   const [live, setLive] = useState(null);
   const [history, setHistory] = useState([]);
   const [streamStatus, setStreamStatus] = useState('offline');
+  const [engineState, setEngineState] = useState(null);
+  const [batteryProtection, setBatteryProtection] = useState(null);
   const { isDemo, isLive } = useMode();
   const location = useLocation();
 
-  // STEP 2: Socket.IO subscription for real-time updates
+  // Socket.IO subscription for real-time updates
   useSocket(
     {
       'live-telemetry-update': (d) => {
-        if (isDemo) return; // Don't use socket in demo
-        if (d?.mode !== 'LIVE') return; // Strict LIVE-only filtering
+        if (isDemo) return;
         const vid = d.vehicleId ?? d.vehicle_id;
         console.log('🔔 Socket telemetry received:', {
           vehicleId: vid,
+          mode: d.mode,
+          engineState: d.engineState,
+          obdPollingActive: d.obdPollingActive,
           rpm: d.rpm,
           speed: d.speed,
-          fuelLevel: d.fuelLevel ?? d.fuel,
-          coolantTemp: d.coolantTemp ?? d.coolant,
-          engineLoad: d.engineLoad ?? d.load,
-          batteryVoltage: d.batteryVoltage ?? d.voltage,
-          maf: d.maf,
-          throttle: d.throttle ?? d.throttlePosition,
-          intakeTemp: d.intakeTemp ?? d.intake,
-          timestamp: d.timestamp
+          batteryVoltage: d.batteryVoltage
         });
         
         if (!vehicleId || vid === vehicleId) {
-          // Normalize field names for frontend
           const normalized = {
             ...d,
             rpm: d.rpm ?? 0,
@@ -51,11 +47,51 @@ export default function Diagnostics() {
             batteryVoltage: d.batteryVoltage ?? d.voltage ?? 0,
             maf: d.maf ?? 0,
             throttle: d.throttle ?? d.throttlePosition ?? 0,
-            intakeTemp: d.intakeTemp ?? d.intake ?? 0
+            intakeTemp: d.intakeTemp ?? d.intake ?? 0,
+            engineState: d.engineState,
+            obdPollingActive: d.obdPollingActive,
+            batteryProtectionMode: d.batteryProtectionMode
           };
           
           setLive((prev) => mergeTelemetry(prev, normalized));
-          setStreamStatus('live');
+          setEngineState(d.engineState);
+          setBatteryProtection(d.batteryProtectionMode);
+          
+          // Set status based on engine state
+          if (d.mode === 'STANDBY' || d.engineState === 'ENGINE_OFF' || d.engineState === 'STANDBY') {
+            setStreamStatus('standby');
+          } else {
+            setStreamStatus('live');
+          }
+        }
+      },
+      'vehicle-standby': (d) => {
+        if (isDemo) return;
+        const vid = d.vehicleId ?? d.vehicle_id;
+        if (!vehicleId || vid === vehicleId) {
+          console.log('🟡 Vehicle standby event:', d);
+          setStreamStatus('standby');
+          setEngineState(d.engineState);
+        }
+      },
+      'vehicle-engine-off': (d) => {
+        if (isDemo) return;
+        const vid = d.vehicleId ?? d.vehicle_id;
+        if (!vehicleId || vid === vehicleId) {
+          console.log('🛑 Vehicle engine off event:', d);
+          setStreamStatus('standby');
+          setEngineState('ENGINE_OFF');
+        }
+      },
+      'vehicle-alert': (d) => {
+        if (isDemo) return;
+        const vid = d.vehicleId ?? d.vehicle_id;
+        if (!vehicleId || vid === vehicleId) {
+          console.log('🚨 Vehicle alert:', d);
+          if (d.alertType === 'LOW_BATTERY') {
+            setStreamStatus('low-battery');
+            setBatteryProtection(d.batteryProtectionMode);
+          }
         }
       },
       'vehicle-online': (d) => {
@@ -63,7 +99,10 @@ export default function Diagnostics() {
         const vid = d.vehicleId ?? d.vehicle_id;
         if (!vehicleId || vid === vehicleId) {
           console.log('🟢 Vehicle online event:', d);
-          setStreamStatus(d.online ? 'live' : 'offline');
+          if (d.online && d.engineState === 'ENGINE_ON') {
+            setStreamStatus('live');
+            setEngineState('ENGINE_ON');
+          }
         }
       }
     },
@@ -132,20 +171,23 @@ export default function Diagnostics() {
           console.log('✅ Normalized telemetry:', {
             rpm: normalized.rpm,
             speed: normalized.speed,
-            fuelLevel: normalized.fuelLevel,
-            coolantTemp: normalized.coolantTemp,
-            engineLoad: normalized.engineLoad,
-            batteryVoltage: normalized.batteryVoltage,
-            maf: normalized.maf,
-            throttle: normalized.throttle,
-            intakeTemp: normalized.intakeTemp
+            engineState: latest.engineState,
+            obdPollingActive: latest.obdPollingActive,
+            isStandbyMode: latest.isStandbyMode
           });
           
           setLive(normalized);
+          setEngineState(latest.engineState);
+          setBatteryProtection(latest.batteryProtectionMode);
           
           const age = Date.now() - new Date(latest.timestamp || latest.recordedAt).getTime();
-          // If GPS is updating but OBD is missing, still show as live if recent
-          if (age < 30000) {
+          
+          // Determine status based on engine state and age
+          if (latest.batteryProtectionMode) {
+            setStreamStatus('low-battery');
+          } else if (latest.isStandbyMode || latest.engineState === 'ENGINE_OFF' || latest.engineState === 'STANDBY') {
+            setStreamStatus('standby');
+          } else if (age < 30000) {
             setStreamStatus('live');
           } else if (age < 120000) {
             setStreamStatus('stale');
@@ -154,15 +196,13 @@ export default function Diagnostics() {
           }
         } else {
           console.warn('⚠️ No telemetry data received');
-          // Don't set offline if we just don't have data yet
-          if (streamStatus !== 'live') {
+          if (streamStatus !== 'live' && streamStatus !== 'standby') {
             setStreamStatus('offline');
           }
         }
       } catch (err) {
         console.error('❌ Error fetching latest telemetry:', err);
-        // Don't override live status on API error
-        if (streamStatus !== 'live') {
+        if (streamStatus !== 'live' && streamStatus !== 'standby') {
           setStreamStatus('offline');
         }
       }
@@ -170,7 +210,7 @@ export default function Diagnostics() {
 
     fetchLatest();
     
-    // STEP 2: Poll every 2 seconds (as backup to Socket.IO)
+    // Poll every 2 seconds (as backup to Socket.IO)
     const pollInterval = setInterval(fetchLatest, 2000);
 
     // Fetch history once
@@ -187,23 +227,60 @@ export default function Diagnostics() {
 
   const statusBadge = {
     live: 'bg-green-900/50 text-green-100',
-    stale: 'bg-yellow-900/50 text-yellow-100',
+    standby: 'bg-yellow-900/50 text-yellow-100',
+    'low-battery': 'bg-red-900/50 text-red-100',
+    stale: 'bg-orange-900/50 text-orange-100',
     offline: 'bg-slate-800 text-slate-300',
   };
+  
+  const statusLabel = {
+    live: 'LIVE - ENGINE ON',
+    standby: 'STANDBY - ENGINE OFF',
+    'low-battery': 'LOW BATTERY PROTECTION',
+    stale: 'STALE',
+    offline: 'OFFLINE'
+  };
+
+  const isEngineOff = engineState === 'ENGINE_OFF' || engineState === 'STANDBY' || streamStatus === 'standby';
+  const isLowBattery = streamStatus === 'low-battery' || batteryProtection;
 
   return (
     <div className="space-y-6 text-white">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold">Live Diagnostics</h2>
-          <p className="text-slate-400">{isDemo ? 'Demo Telemetry - simulated data' : 'Real OBD data — no mock values'}</p>
+          <p className="text-slate-400">
+            {isDemo ? 'Demo Telemetry - simulated data' : 'Real OBD data — no mock values'}
+          </p>
         </div>
         <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase ${statusBadge[streamStatus]}`}>
-          {streamStatus}
+          {statusLabel[streamStatus] || streamStatus}
         </span>
       </div>
 
-      {isLive && vehicles.length === 0 && (
+      {/* Battery Protection Alert */}
+      {isLowBattery && (
+        <div className="rounded-3xl border border-red-500/30 bg-red-950/20 px-6 py-4 shadow-inner">
+          <h3 className="font-semibold mb-2 text-red-200">🔋 Low Battery Protection Active</h3>
+          <p className="text-sm text-red-300">
+            OBD polling has been paused to protect your vehicle's battery. GPS tracking remains active.
+            {batteryProtection && ` Mode: ${batteryProtection.replace(/_/g, ' ')}`}
+          </p>
+        </div>
+      )}
+
+      {/* Engine Off / Standby Message */}
+      {isEngineOff && !isLowBattery && (
+        <div className="rounded-3xl border border-yellow-500/30 bg-yellow-950/20 px-6 py-4 shadow-inner">
+          <h3 className="font-semibold mb-2 text-yellow-200">🛑 Engine Off - Standby Mode</h3>
+          <p className="text-sm text-yellow-300">
+            OBD polling is paused to protect your vehicle's battery. GPS standby tracking is active.
+            Last known OBD values are shown below (faded).
+          </p>
+        </div>
+      )}
+
+      {isLive && vehicles.length === 0 && !isEngineOff && (
         <div className="rounded-3xl border border-cyan-500/30 bg-cyan-950/20 px-6 py-4 text-cyan-200 shadow-inner">
           <h3 className="font-semibold mb-2">Waiting for live OBD data from mobile app.</h3>
           <p className="text-sm">Connect your OpenOBD app and start sending real OBD data.</p>
@@ -217,7 +294,8 @@ export default function Diagnostics() {
         ))}
       </select>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      {/* OBD Gauges - Show with opacity if engine is off */}
+      <div className={`grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 ${isEngineOff ? 'opacity-50' : ''}`}>
         {LIVE_GAUGE_FIELDS.map((g) => (
           <GaugeChart
             key={g.field}
@@ -228,9 +306,38 @@ export default function Diagnostics() {
           />
         ))}
       </div>
+      
+      {isEngineOff && live && (
+        <div className="text-center text-sm text-slate-400 italic">
+          ↑ Last known values (engine is off, OBD polling paused)
+        </div>
+      )}
 
       <div className="card bg-slate-900 border border-slate-800">
         <h3 className="mb-2 font-semibold">Telemetry stream</h3>
+        
+        {/* Engine State Info */}
+        {engineState && (
+          <div className="mb-3">
+            <span className="text-sm text-slate-400">Engine State: </span>
+            <span className={`ml-2 text-sm font-semibold ${
+              engineState === 'ENGINE_ON' ? 'text-green-400' : 
+              engineState === 'ENGINE_OFF' ? 'text-yellow-400' : 
+              'text-slate-400'
+            }`}>
+              {engineState.replace(/_/g, ' ')}
+            </span>
+            {live?.obdPollingActive !== undefined && (
+              <>
+                <span className="ml-4 text-sm text-slate-400">OBD Polling: </span>
+                <span className={`ml-2 text-sm font-semibold ${live.obdPollingActive ? 'text-green-400' : 'text-yellow-400'}`}>
+                  {live.obdPollingActive ? 'ACTIVE' : 'PAUSED'}
+                </span>
+              </>
+            )}
+          </div>
+        )}
+        
         <p className="text-sm text-slate-400">
           Last sample: {live?.timestamp ? new Date(live.timestamp).toLocaleString() : isLive ? 'Waiting for OBD app…' : 'Waiting for OBD app or MQTT device…'}
         </p>
@@ -255,7 +362,13 @@ export default function Diagnostics() {
             </div>
             <div>
               <span className="text-slate-500">Battery:</span>
-              <span className="ml-2 text-cyan-400 font-semibold">{live.batteryVoltage ?? live.voltage ?? '—'}V</span>
+              <span className={`ml-2 font-semibold ${
+                (live.batteryVoltage ?? live.voltage ?? 0) < 11.5 ? 'text-red-400' :
+                (live.batteryVoltage ?? live.voltage ?? 0) < 12.0 ? 'text-yellow-400' : 
+                'text-cyan-400'
+              }`}>
+                {live.batteryVoltage ?? live.voltage ?? '—'}V
+              </span>
             </div>
             <div>
               <span className="text-slate-500">Engine Load:</span>
@@ -277,7 +390,9 @@ export default function Diagnostics() {
               <>
                 <div>
                   <span className="text-slate-500">GPS:</span>
-                  <span className="ml-2 text-green-400 font-semibold">Active</span>
+                  <span className="ml-2 text-green-400 font-semibold">
+                    {isEngineOff ? 'Standby Tracking' : 'Active'}
+                  </span>
                 </div>
                 <div className="col-span-2">
                   <span className="text-slate-500">Location:</span>
