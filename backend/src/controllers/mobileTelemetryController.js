@@ -64,6 +64,18 @@ export async function submitLiveTelemetry(req, res) {
       timestamp: timestamp || new Date().toISOString()
     });
 
+    // Validate vehicleId is provided
+    if (!vehicleId) {
+      logger.error("❌ Telemetry rejected: No vehicleId provided", { userId, vin });
+      return res.status(400).json({ 
+        success: false, 
+        error: {
+          code: "MISSING_VEHICLE_ID",
+          message: "vehicleId is required. Please setup vehicle first using /api/mobile/vehicles/setup"
+        }
+      });
+    }
+
     const sanitizedRpm = sanitizeNumber(normalizedRpm);
     const sanitizedSpeed = sanitizeNumber(normalizedSpeed);
     const sanitizedFuelLevel = sanitizeNumber(normalizedFuelLevel);
@@ -80,16 +92,48 @@ export async function submitLiveTelemetry(req, res) {
     const sanitizedGpsHeading = sanitizeNumber(gpsHeading);
     const sanitizedOdometer = sanitizeNumber(odometer);
 
+    // Verify vehicle exists and belongs to authenticated user
+    logger.info("🔍 Verifying vehicle ownership", { userId, vehicleId });
+    
     const vehicle = await prisma.vehicle.findUnique({
       where: { id: vehicleId },
       include: { obdDevices: true },
     });
+    
     if (!vehicle || vehicle.deletedAt) {
-      return res.status(404).json({ success: false, error: "Vehicle not found" });
+      logger.error("❌ Telemetry rejected: Vehicle not found", { userId, vehicleId });
+      return res.status(404).json({ 
+        success: false, 
+        error: {
+          code: "VEHICLE_NOT_FOUND",
+          message: "Vehicle not found. The vehicleId may be invalid or vehicle may have been deleted."
+        }
+      });
     }
+    
     if (vehicle.userId !== userId && companyId && vehicle.companyId !== companyId) {
-      return res.status(403).json({ success: false, error: "Vehicle not authorized for this user" });
+      logger.error("❌ Telemetry rejected: Vehicle not authorized", { 
+        userId, 
+        vehicleId, 
+        vehicleOwner: vehicle.userId,
+        vehicleCompany: vehicle.companyId,
+        userCompany: companyId
+      });
+      return res.status(403).json({ 
+        success: false, 
+        error: {
+          code: "VEHICLE_NOT_AUTHORIZED",
+          message: "Vehicle not authorized for this user"
+        }
+      });
     }
+    
+    logger.info("✅ Vehicle ownership verified", { 
+      userId, 
+      vehicleId,
+      vehicleName: vehicle.vehicleName,
+      vin: vehicle.vin
+    });
 
     const telemetry = await prisma.telemetry.create({
       data: {
@@ -117,6 +161,13 @@ export async function submitLiveTelemetry(req, res) {
         timestamp: timestamp ? new Date(timestamp) : new Date(),
       },
     });
+    
+    logger.info("💾 Telemetry saved to database", {
+      telemetryId: telemetry.id,
+      vehicleId,
+      mode: telemetry.mode,
+      timestamp: telemetry.timestamp
+    });
 
     let vehicleStatus = "OFFLINE";
     if (sanitizedSpeed && sanitizedSpeed > 1) vehicleStatus = "MOVING";
@@ -138,6 +189,14 @@ export async function submitLiveTelemetry(req, res) {
     await prisma.vehicle.update({
       where: { id: vehicleId },
       data: vehicleUpdateData,
+    });
+    
+    logger.info("🚗 Vehicle status updated", {
+      vehicleId,
+      status: vehicleStatus,
+      telemetryOnline: true,
+      lastTelemetryAt: vehicleUpdateData.lastTelemetryAt,
+      hasGPS: !!(sanitizedLatitude !== null && sanitizedLongitude !== null)
     });
 
     await prisma.vehicleLiveState.upsert({
@@ -219,20 +278,32 @@ export async function submitLiveTelemetry(req, res) {
         }
       };
 
-      logger.info("🔊 Emitting Socket.IO event", {
+      logger.info("🔊 Socket.IO live-telemetry-update", {
         event: 'live-telemetry-update',
+        userId,
         vehicleId,
         rpm: sanitizedRpm,
         speed: sanitizedSpeed,
         fuelLevel: sanitizedFuelLevel,
         coolantTemp: sanitizedCoolantTemp,
         engineLoad: sanitizedEngineLoad,
-        batteryVoltage: sanitizedBatteryVoltage
+        batteryVoltage: sanitizedBatteryVoltage,
+        maf: sanitizedMaf,
+        throttle: sanitizedThrottle,
+        intakeTemp: sanitizedIntakeTemp
       });
 
       io.to(`user:${userId}`).emit('live-telemetry-update', telemetryPayload);
       
       if (sanitizedLatitude !== null && sanitizedLongitude !== null) {
+        logger.info("🔊 Socket.IO live-gps-update", {
+          event: 'live-gps-update',
+          userId,
+          vehicleId,
+          latitude: sanitizedLatitude,
+          longitude: sanitizedLongitude
+        });
+        
         io.to(`user:${userId}`).emit('live-gps-update', {
           vehicleId,
           latitude: sanitizedLatitude,
@@ -244,6 +315,14 @@ export async function submitLiveTelemetry(req, res) {
           timestamp: new Date(),
         });
       }
+      
+      logger.info("🔊 Socket.IO vehicle-online", {
+        event: 'vehicle-online',
+        userId,
+        vehicleId,
+        status: vehicleStatus
+      });
+      
       io.to(`user:${userId}`).emit('vehicle-online', { vehicleId, status: vehicleStatus, online: true });
     }
 

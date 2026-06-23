@@ -75,11 +75,15 @@ export async function setupVehicle(req, res) {
       isPartialDecode
     } = req.body;
 
-    logger.info("🚗 Vehicle setup request", { 
+    logger.info("🚗 Vehicle setup request START", { 
       userId, 
+      companyId,
       vehicleName, 
       registrationNumber, 
       vin,
+      make,
+      model,
+      year,
       vinDecodeSource,
       hasOBD: !!(obdDeviceName || bluetoothAddress)
     });
@@ -105,8 +109,10 @@ export async function setupVehicle(req, res) {
 
     const normalizedReg = registrationNumber.toUpperCase().trim();
 
-    // If VIN is provided, check if vehicle exists by VIN first
+    // If VIN is provided, check if vehicle exists by VIN first (PRIORITY 1)
     let existingVehicle = null;
+    let lookupMethod = null;
+    
     if (vin) {
       const cleanVin = vin.trim().toUpperCase();
       existingVehicle = await prisma.vehicle.findFirst({
@@ -118,14 +124,21 @@ export async function setupVehicle(req, res) {
       });
       
       if (existingVehicle) {
+        lookupMethod = 'VIN';
         logger.info("✅ Found existing vehicle by VIN", { 
           vehicleId: existingVehicle.id, 
-          vin: cleanVin 
+          vin: cleanVin,
+          decision: 'UPDATE_EXISTING'
+        });
+      } else {
+        logger.info("🔍 VIN not found in database", { 
+          vin: cleanVin,
+          decision: 'WILL_CHECK_REGISTRATION'
         });
       }
     }
 
-    // If not found by VIN, try by registration number
+    // If not found by VIN, try by registration number (PRIORITY 2)
     if (!existingVehicle) {
       existingVehicle = await prisma.vehicle.findFirst({
         where: {
@@ -136,9 +149,18 @@ export async function setupVehicle(req, res) {
       });
       
       if (existingVehicle) {
+        lookupMethod = 'REGISTRATION';
         logger.info("✅ Found existing vehicle by registration", { 
           vehicleId: existingVehicle.id, 
-          registrationNumber: normalizedReg 
+          registrationNumber: normalizedReg,
+          decision: 'UPDATE_EXISTING'
+        });
+      } else {
+        lookupMethod = 'NEW';
+        logger.info("🆕 No existing vehicle found", { 
+          vin,
+          registrationNumber: normalizedReg,
+          decision: 'CREATE_NEW'
         });
       }
     }
@@ -165,18 +187,38 @@ export async function setupVehicle(req, res) {
     };
 
     if (existingVehicle) {
-      logger.info("🔄 Updating existing vehicle", { vehicleId: existingVehicle.id });
+      logger.info("🔄 Updating existing vehicle", { 
+        vehicleId: existingVehicle.id,
+        lookupMethod,
+        changes: vehicleData
+      });
+      
       vehicle = await prisma.vehicle.update({
         where: { id: existingVehicle.id },
         data: vehicleData,
       });
+      
+      logger.info("✅ Vehicle updated successfully", { 
+        vehicleId: vehicle.id,
+        vin: vehicle.vin
+      });
     } else {
-      logger.info("✨ Creating new vehicle");
+      logger.info("✨ Creating new vehicle", { 
+        userId,
+        vehicleData
+      });
+      
       vehicle = await prisma.vehicle.create({
         data: {
           ...vehicleData,
           userId,
         },
+      });
+      
+      logger.info("✅ New vehicle created successfully", { 
+        vehicleId: vehicle.id,
+        vin: vehicle.vin,
+        vehicleName: vehicle.vehicleName
       });
     }
 
@@ -184,7 +226,8 @@ export async function setupVehicle(req, res) {
     if (obdDeviceName || bluetoothAddress) {
       logger.info("🔌 Setting up OBD device", { 
         deviceName: obdDeviceName, 
-        bluetoothAddress 
+        bluetoothAddress,
+        vehicleId: vehicle.id
       });
       
       obdDevice = await prisma.oBDDevice.upsert({
@@ -210,6 +253,11 @@ export async function setupVehicle(req, res) {
         where: { id: vehicle.id },
         data: { obdDeviceId: obdDevice.id },
       });
+      
+      logger.info("✅ OBD device linked to vehicle", { 
+        obdDeviceId: obdDevice.id,
+        vehicleId: vehicle.id
+      });
     }
 
     const io = req.app.get('io');
@@ -221,37 +269,46 @@ export async function setupVehicle(req, res) {
         },
         obdDevice
       });
+      
+      logger.info("📡 Socket.IO vehicle-registered event emitted", { 
+        userId,
+        vehicleId: vehicle.id
+      });
     }
 
-    logger.info("✅ Vehicle setup complete", { 
-      vehicleId: vehicle.id, 
+    const responseData = {
+      vehicleId: vehicle.id,
+      vehicleName: vehicle.vehicleName,
+      registrationNumber: vehicle.registrationNumber,
+      make: vehicle.make,
+      model: vehicle.model,
+      year: vehicle.year,
+      fuelType: vehicle.fuelType,
+      vin: vehicle.vin,
+      manufacturer: vehicle.manufacturer,
+      bodyClass: vehicle.bodyClass,
+      engineModel: vehicle.engineModel,
+      vinDecodeSource: vehicle.vinDecodeSource,
+      vinDecodeType: vehicle.vinDecodeType,
+      vinCountry: vehicle.vinCountry,
+      vinConfidence: vehicle.vinConfidence,
+      isPartialDecode: vehicle.isPartialDecode,
+      obdDeviceId: obdDevice?.id,
+      isNew: !existingVehicle
+    };
+
+    logger.info("✅ Vehicle setup complete - RESPONSE", { 
+      vehicleId: vehicle.id,
       isNew: !existingVehicle,
+      lookupMethod,
       hasOBD: !!obdDevice,
-      decodeSource: vinDecodeSource
+      decodeSource: vinDecodeSource,
+      responseData
     });
 
     res.json({
       success: true, 
-      data: {
-        vehicleId: vehicle.id,
-        vehicleName: vehicle.vehicleName,
-        registrationNumber: vehicle.registrationNumber,
-        make: vehicle.make,
-        model: vehicle.model,
-        year: vehicle.year,
-        fuelType: vehicle.fuelType,
-        vin: vehicle.vin,
-        manufacturer: vehicle.manufacturer,
-        bodyClass: vehicle.bodyClass,
-        engineModel: vehicle.engineModel,
-        vinDecodeSource: vehicle.vinDecodeSource,
-        vinDecodeType: vehicle.vinDecodeType,
-        vinCountry: vehicle.vinCountry,
-        vinConfidence: vehicle.vinConfidence,
-        isPartialDecode: vehicle.isPartialDecode,
-        obdDeviceId: obdDevice?.id,
-        isNew: !existingVehicle
-      }
+      data: responseData
     });
   } catch (err) {
     logger.error("❌ Vehicle setup exception", { 
