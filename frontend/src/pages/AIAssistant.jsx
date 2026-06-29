@@ -148,11 +148,17 @@ export default function AIAssistant() {
         return;
       }
 
-      const backendMessage =
+      const rawError =
         error.response?.data?.error ||
         error.response?.data?.message ||
+        error.response?.data ||
         error.message ||
         'Unknown error';
+
+      const backendMessage =
+        typeof rawError === 'string'
+          ? rawError
+          : JSON.stringify(rawError, null, 2);
 
       setMessages((prev) => [
         ...prev,

@@ -30,17 +30,19 @@ function getFallbackResponse(chatId, error = null) {
   return {
     success: true,
     data: {
-      reply: `I could not complete the advanced analysis right now${errorMessage}. The AI Assistant is online. Please try a simpler fleet question.`,
-      chatId,
+      reply: `FleetNimble AI is online, but the advanced analysis failed temporarily${errorMessage}. Please try again or ask a simpler fleet question.`,
+      chatId: chatId || null,
       metadata: {
-        title: "AI Assistant",
-        metrics: {},
-        risks: [],
-        recommendedAction: "Try a simpler question",
+        title: "FleetNimble AI Assistant",
         confidence: "LOW",
         dataFreshness: "UNKNOWN",
         simulatedNote: null,
-        suggestedActions: []
+        suggestedActions: [
+          "Summarize my fleet health",
+          "Show critical alerts",
+          "Show vehicles needing maintenance",
+          "Show offline vehicles"
+        ]
       }
     }
   };

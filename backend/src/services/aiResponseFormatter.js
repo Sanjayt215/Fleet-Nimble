@@ -81,9 +81,9 @@ export function createVehicleStatusResponse(vehicle, telemetry) {
         'Status': vehicle?.liveState?.vehicleStatus || 'Unknown',
         'Ignition': vehicle?.liveState?.ignitionStatus ? 'ON' : 'OFF',
         'Telemetry': vehicle?.telemetryOnline ? 'Online' : 'Offline',
-        'Battery Voltage': telemetry?.batteryVoltage ? `${telemetry.batteryVoltage.toFixed(2)}V` : 'Score unavailable because live telemetry is missing',
-        'Coolant Temp': telemetry?.coolantTemp ? `${telemetry.coolantTemp.toFixed(1)}°C` : 'Score unavailable because live telemetry is missing',
-        'Fuel Level': telemetry?.fuelLevel ? `${telemetry.fuelLevel.toFixed(1)}%` : 'Score unavailable because live telemetry is missing',
+        'Battery Voltage': Number.isFinite(telemetry?.batteryVoltage) ? `${telemetry.batteryVoltage.toFixed(2)}V` : 'Score unavailable because live telemetry is missing',
+        'Coolant Temp': Number.isFinite(telemetry?.coolantTemp) ? `${telemetry.coolantTemp.toFixed(1)}°C` : 'Score unavailable because live telemetry is missing',
+        'Fuel Level': Number.isFinite(telemetry?.fuelLevel) ? `${telemetry.fuelLevel.toFixed(1)}%` : 'Score unavailable because live telemetry is missing',
         'RPM': telemetry?.rpm || 'Score unavailable because live telemetry is missing',
         'Speed': telemetry?.speed || 'Score unavailable because live telemetry is missing',
         'Health Score': vehicle?.telemetryOnline ? `${healthScore}/100` : 'Score unavailable because live telemetry is missing',
@@ -408,12 +408,12 @@ function extractKeyMetrics(combinedResults, intent) {
       break;
     
     case 'VEHICLE_COMPARISON':
-      if (summary.comparison?.healthScore) {
+      if (Array.isArray(summary.comparison?.healthScore)) {
         summary.comparison.healthScore.forEach(h => {
           metrics[`${h.vehicle} Health`] = `${h.score}/100`;
         });
       }
-      if (summary.comparison?.fuelEfficiency) {
+      if (Array.isArray(summary.comparison?.fuelEfficiency)) {
         summary.comparison.fuelEfficiency.forEach(f => {
           metrics[`${f.vehicle} Efficiency`] = f.efficiency || 'N/A';
         });
@@ -421,21 +421,21 @@ function extractKeyMetrics(combinedResults, intent) {
       break;
     
     case 'DIAGNOSTICS':
-      metrics['Total DTCs'] = summary.dtcCodes?.length || 0;
-      metrics['Critical Codes'] = summary.dtcCodes?.filter(d => d.code.startsWith('P0')).length || 0;
-      metrics['Affected Vehicles'] = summary.healthStatus?.length || 0;
+      metrics['Total DTCs'] = Array.isArray(summary.dtcCodes) ? summary.dtcCodes.length : 0;
+      metrics['Critical Codes'] = Array.isArray(summary.dtcCodes) ? summary.dtcCodes.filter(d => d?.code?.startsWith('P0')).length : 0;
+      metrics['Affected Vehicles'] = Array.isArray(summary.healthStatus) ? summary.healthStatus.length : 0;
       break;
     
     case 'MAINTENANCE_QUERY':
-      metrics['Total Items'] = summary.maintenanceItems?.length || 0;
-      metrics['Urgent Items'] = summary.urgentItems?.length || 0;
-      metrics['Estimated Cost'] = `$${summary.estimatedCost || 0}`;
+      metrics['Total Items'] = Array.isArray(summary.maintenanceItems) ? summary.maintenanceItems.length : 0;
+      metrics['Urgent Items'] = Array.isArray(summary.urgentItems) ? summary.urgentItems.length : 0;
+      metrics['Estimated Cost'] = `$${Number.isFinite(summary.estimatedCost) ? summary.estimatedCost : 0}`;
       break;
     
     case 'PREDICTIVE_ANALYSIS':
       metrics['Risk Level'] = summary.riskLevel || 'UNKNOWN';
-      metrics['Predictions'] = summary.predictions?.length || 0;
-      metrics['Recommendations'] = summary.recommendations?.length || 0;
+      metrics['Predictions'] = Array.isArray(summary.predictions) ? summary.predictions.length : 0;
+      metrics['Recommendations'] = Array.isArray(summary.recommendations) ? summary.recommendations.length : 0;
       break;
     
     default:

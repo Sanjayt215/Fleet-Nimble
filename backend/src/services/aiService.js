@@ -497,18 +497,20 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
       console.error(orchestratorError.stack);
       // Return fallback response
       return {
-        response: 'AI Assistant encountered an error during analysis. Please try a simpler question.',
+        response: 'FleetNimble AI is online, but the advanced analysis failed temporarily. Please try again or ask a simpler fleet question.',
         context: { vehicleCount: 0, hasVehicles: false },
         knowledgeResults: [],
         metadata: {
-          title: "AI Assistant",
-          metrics: {},
-          risks: [],
-          recommendedAction: "Try again",
+          title: "FleetNimble AI Assistant",
           confidence: "LOW",
           dataFreshness: "UNKNOWN",
           simulatedNote: null,
-          suggestedActions: [],
+          suggestedActions: [
+            "Summarize my fleet health",
+            "Show critical alerts",
+            "Show vehicles needing maintenance",
+            "Show offline vehicles"
+          ],
           entities: {},
         },
       };
@@ -576,18 +578,20 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
     console.error(error.stack);
     // Return fallback instead of throwing
     return {
-      response: 'AI Assistant encountered an error. Please try again.',
+      response: 'FleetNimble AI is online, but the advanced analysis failed temporarily. Please try again or ask a simpler fleet question.',
       context: { vehicleCount: 0, hasVehicles: false },
       knowledgeResults: [],
       metadata: {
-        title: "AI Assistant",
-        metrics: {},
-        risks: [],
-        recommendedAction: "Try again",
+        title: "FleetNimble AI Assistant",
         confidence: "LOW",
         dataFreshness: "UNKNOWN",
         simulatedNote: null,
-        suggestedActions: [],
+        suggestedActions: [
+          "Summarize my fleet health",
+          "Show critical alerts",
+          "Show vehicles needing maintenance",
+          "Show offline vehicles"
+        ],
         entities: {},
       },
     };

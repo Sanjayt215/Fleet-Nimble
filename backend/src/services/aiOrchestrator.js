@@ -151,15 +151,20 @@ export async function orchestrateAI(userId, message, vehicleContext = null) {
     // Return fallback instead of throwing
     return {
       success: true,
-      message: 'AI Assistant encountered an error. Please try again.',
-      title: 'AI Assistant',
+      message: 'FleetNimble AI is online, but the advanced analysis failed temporarily. Please try again or ask a simpler fleet question.',
+      title: 'FleetNimble AI Assistant',
       metrics: {},
       risks: [],
       recommendedAction: 'Try again',
       confidence: 'LOW',
       dataFreshness: 'UNKNOWN',
       simulatedNote: null,
-      suggestedActions: [],
+      suggestedActions: [
+        "Summarize my fleet health",
+        "Show critical alerts",
+        "Show vehicles needing maintenance",
+        "Show offline vehicles"
+      ],
       plan: [],
       entities: {},
       resolvedMessage: null,
