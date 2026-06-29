@@ -8,6 +8,7 @@ const AI_PROVIDER = process.env.AI_PROVIDER || 'openai';
 const AI_MODEL = process.env.AI_MODEL || 'gpt-4o-mini';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const AI_ORCHESTRATOR_ENABLED = process.env.AI_ORCHESTRATOR_ENABLED === 'true';
 
 // Enterprise-grade system prompt for FleetNimble AI Assistant
 const SYSTEM_PROMPT = `You are FleetNimble AI Assistant, an enterprise-grade Fleet Operations Copilot. You provide executive-friendly, concise, visually structured responses for fleet managers.
@@ -481,41 +482,13 @@ async function callAIStream(messages, onChunk) {
 }
 
 /**
- * Process user message and get AI response
+ * Stable fallback chatbot implementation (without orchestrator)
+ * Uses direct OpenAI/OpenRouter call with fleet context
  */
-export async function processChatMessage(userId, message, vehicleId = null, chatHistory = []) {
-  console.log('AI SERVICE PROCESS START', { userId, message: message?.substring(0, 50) });
+async function processChatMessageStable(userId, message, vehicleId = null, chatHistory = []) {
+  console.log('AI STABLE FALLBACK START', { userId, message: message?.substring(0, 50) });
   
   try {
-    // Use AI Orchestrator for structured responses with metadata
-    let orchestratorResult;
-    try {
-      orchestratorResult = await orchestrateAI(userId, message, vehicleId);
-      console.log('AI ORCHESTRATOR COMPLETE');
-    } catch (orchestratorError) {
-      console.error('AI FAILED AT ORCHESTRATOR IN SERVICE', orchestratorError);
-      console.error(orchestratorError.stack);
-      // Return fallback response
-      return {
-        response: 'FleetNimble AI is online, but the advanced analysis failed temporarily. Please try again or ask a simpler fleet question.',
-        context: { vehicleCount: 0, hasVehicles: false },
-        knowledgeResults: [],
-        metadata: {
-          title: "FleetNimble AI Assistant",
-          confidence: "LOW",
-          dataFreshness: "UNKNOWN",
-          simulatedNote: null,
-          suggestedActions: [
-            "Summarize my fleet health",
-            "Show critical alerts",
-            "Show vehicles needing maintenance",
-            "Show offline vehicles"
-          ],
-          entities: {},
-        },
-      };
-    }
-    
     // Build context from user's fleet data
     let context;
     try {
@@ -536,43 +509,219 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
       knowledgeResults = [];
     }
 
-    // Validate orchestrator result
-    if (!orchestratorResult) {
-      console.error('AI FAILED AT ORCHESTRATOR RESULT VALIDATION - result is null');
+    // Build messages for OpenAI/OpenRouter
+    const messages = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      ...chatHistory,
+      { role: 'user', content: message }
+    ];
+
+    // Call AI provider
+    let response;
+    try {
+      if (AI_PROVIDER === 'openrouter') {
+        response = await callOpenRouter(messages);
+      } else {
+        response = await callOpenAI(messages);
+      }
+    } catch (aiError) {
+      console.error('AI FAILED AT OPENAI/OPENROUTER CALL', aiError);
+      console.error(aiError.stack);
+      // Return simple fallback response
       return {
-        response: 'AI Assistant encountered an error. Please try again.',
+        response: 'I apologize, but I encountered an error processing your request. Please try again.',
         context,
         knowledgeResults,
         metadata: {
-          title: "AI Assistant",
-          metrics: {},
-          risks: [],
-          recommendedAction: "Try again",
+          title: "FleetNimble AI Assistant",
           confidence: "LOW",
           dataFreshness: "UNKNOWN",
           simulatedNote: null,
-          suggestedActions: [],
+          suggestedActions: [
+            "Summarize my fleet health",
+            "Show critical alerts",
+            "Show vehicles needing maintenance",
+            "Show offline vehicles"
+          ],
           entities: {},
         },
       };
     }
 
     return {
-      response: orchestratorResult.message || 'No response generated',
+      response: response || 'No response generated',
       context,
       knowledgeResults,
       metadata: {
-        title: orchestratorResult.title || "AI Assistant",
-        metrics: orchestratorResult.metrics || {},
-        risks: orchestratorResult.risks || [],
-        recommendedAction: orchestratorResult.recommendedAction || null,
-        confidence: orchestratorResult.confidence || "MEDIUM",
-        dataFreshness: orchestratorResult.dataFreshness || "UNKNOWN",
-        simulatedNote: orchestratorResult.simulatedNote || null,
-        suggestedActions: orchestratorResult.suggestedActions || [],
-        entities: orchestratorResult.entities || {},
+        title: "FleetNimble AI Assistant",
+        confidence: "MEDIUM",
+        dataFreshness: "UNKNOWN",
+        simulatedNote: null,
+        suggestedActions: [
+          "Summarize my fleet health",
+          "Show critical alerts",
+          "Show vehicles needing maintenance",
+          "Show offline vehicles"
+        ],
+        entities: {},
       },
     };
+  } catch (error) {
+    console.error('AI FAILED AT STABLE FALLBACK', error);
+    console.error(error.stack);
+    return {
+      response: 'FleetNimble AI is online, but encountered an error. Please try again.',
+      context: { vehicleCount: 0, hasVehicles: false },
+      knowledgeResults: [],
+      metadata: {
+        title: "FleetNimble AI Assistant",
+        confidence: "LOW",
+        dataFreshness: "UNKNOWN",
+        simulatedNote: null,
+        suggestedActions: [
+          "Summarize my fleet health",
+          "Show critical alerts",
+          "Show vehicles needing maintenance",
+          "Show offline vehicles"
+        ],
+        entities: {},
+      },
+    };
+  }
+}
+
+/**
+ * Call OpenAI API
+ */
+async function callOpenAI(messages) {
+  if (!OPENAI_API_KEY) {
+    throw new Error('OpenAI API key not configured');
+  }
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: AI_MODEL,
+      messages,
+      temperature: 0.7,
+      max_tokens: 1000,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`OpenAI API error: ${response.status} - ${error}`);
+  }
+
+  const data = await response.json();
+  return data.choices[0]?.message?.content || 'No response generated';
+}
+
+/**
+ * Call OpenRouter API
+ */
+async function callOpenRouter(messages) {
+  if (!OPENROUTER_API_KEY) {
+    throw new Error('OpenRouter API key not configured');
+  }
+
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: AI_MODEL,
+      messages,
+      temperature: 0.7,
+      max_tokens: 1000,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`OpenRouter API error: ${response.status} - ${error}`);
+  }
+
+  const data = await response.json();
+  return data.choices[0]?.message?.content || 'No response generated';
+}
+
+/**
+ * Process user message and get AI response
+ */
+export async function processChatMessage(userId, message, vehicleId = null, chatHistory = []) {
+  console.log('AI SERVICE PROCESS START', { userId, message: message?.substring(0, 50) });
+  
+  try {
+    // Check if orchestrator is enabled
+    if (AI_ORCHESTRATOR_ENABLED) {
+      console.log('AI_CHAT_MODE=ORCHESTRATOR');
+      
+      // Use AI Orchestrator for structured responses with metadata
+      let orchestratorResult;
+      try {
+        orchestratorResult = await orchestrateAI(userId, message, vehicleId);
+        console.log('AI ORCHESTRATOR COMPLETE');
+      } catch (orchestratorError) {
+        console.error('AI_ORCHESTRATOR_FAILED_USING_FALLBACK', orchestratorError);
+        console.error(orchestratorError.stack);
+        // Automatically fallback to stable chatbot
+        return await processChatMessageStable(userId, message, vehicleId, chatHistory);
+      }
+      
+      // Build context from user's fleet data
+      let context;
+      try {
+        context = await buildContext(userId, vehicleId);
+      } catch (contextError) {
+        console.error('AI FAILED AT BUILD CONTEXT', contextError);
+        console.error(contextError.stack);
+        context = { vehicleCount: 0, hasVehicles: false };
+      }
+
+      // Search knowledge base for relevant information
+      let knowledgeResults;
+      try {
+        knowledgeResults = searchKnowledgeBase(message);
+      } catch (kbError) {
+        console.error('AI FAILED AT KNOWLEDGE BASE', kbError);
+        console.error(kbError.stack);
+        knowledgeResults = [];
+      }
+
+      // Validate orchestrator result
+      if (!orchestratorResult) {
+        console.error('AI FAILED AT ORCHESTRATOR RESULT VALIDATION - result is null');
+        return await processChatMessageStable(userId, message, vehicleId, chatHistory);
+      }
+
+      return {
+        response: orchestratorResult.message || 'No response generated',
+        context,
+        knowledgeResults,
+        metadata: {
+          title: orchestratorResult.title || "FleetNimble AI Assistant",
+          metrics: orchestratorResult.metrics || {},
+          risks: orchestratorResult.risks || [],
+          recommendedAction: orchestratorResult.recommendedAction || null,
+          confidence: orchestratorResult.confidence || "MEDIUM",
+          dataFreshness: orchestratorResult.dataFreshness || "UNKNOWN",
+          simulatedNote: orchestratorResult.simulatedNote || null,
+          suggestedActions: orchestratorResult.suggestedActions || [],
+          entities: orchestratorResult.entities || {},
+        },
+      };
+    } else {
+      console.log('AI_CHAT_MODE=STABLE_FALLBACK');
+      // Use stable fallback chatbot
+      return await processChatMessageStable(userId, message, vehicleId, chatHistory);
+    }
   } catch (error) {
     console.error('AI FAILED AT SERVICE', error);
     console.error(error.stack);
