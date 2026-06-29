@@ -129,31 +129,36 @@ export function cancelAction(actionId) {
  * Execute action based on type
  */
 async function executeAction(actionType, params, userId) {
-  switch (actionType) {
-    case ACTION_TYPES.ASSIGN_VEHICLE:
-      return await assignVehicle(params, userId);
-    case ACTION_TYPES.SCHEDULE_MAINTENANCE:
-      return await scheduleMaintenance(params, userId);
-    case ACTION_TYPES.GENERATE_WORK_ORDER:
-      return await generateWorkOrder(params, userId);
-    case ACTION_TYPES.CREATE_SERVICE_TICKET:
-      return await createServiceTicket(params, userId);
-    case ACTION_TYPES.NOTIFY_DRIVER:
-      return await notifyDriver(params, userId);
-    case ACTION_TYPES.SEND_EMAIL:
-      return await sendEmail(params, userId);
-    case ACTION_TYPES.CREATE_ALERT:
-      return await createAlert(params, userId);
-    case ACTION_TYPES.GENERATE_INVOICE:
-      return await generateInvoice(params, userId);
-    case ACTION_TYPES.EXPORT_REPORT:
-      return await exportReport(params, userId);
-    case ACTION_TYPES.CREATE_MAINTENANCE_REMINDER:
-      return await createMaintenanceReminder(params, userId);
-    case ACTION_TYPES.ASSIGN_TECHNICIAN:
-      return await assignTechnician(params, userId);
-    default:
-      throw new Error(`Unknown action type: ${actionType}`);
+  try {
+    switch (actionType) {
+      case ACTION_TYPES.ASSIGN_VEHICLE:
+        return await assignVehicle(params, userId);
+      case ACTION_TYPES.SCHEDULE_MAINTENANCE:
+        return await scheduleMaintenance(params, userId);
+      case ACTION_TYPES.GENERATE_WORK_ORDER:
+        return await generateWorkOrder(params, userId);
+      case ACTION_TYPES.CREATE_SERVICE_TICKET:
+        return await createServiceTicket(params, userId);
+      case ACTION_TYPES.NOTIFY_DRIVER:
+        return await notifyDriver(params, userId);
+      case ACTION_TYPES.SEND_EMAIL:
+        return await sendEmail(params, userId);
+      case ACTION_TYPES.CREATE_ALERT:
+        return await createAlert(params, userId);
+      case ACTION_TYPES.GENERATE_INVOICE:
+        return await generateInvoice(params, userId);
+      case ACTION_TYPES.EXPORT_REPORT:
+        return await exportReport(params, userId);
+      case ACTION_TYPES.CREATE_MAINTENANCE_REMINDER:
+        return await createMaintenanceReminder(params, userId);
+      case ACTION_TYPES.ASSIGN_TECHNICIAN:
+        return await assignTechnician(params, userId);
+      default:
+        throw new Error(`Unknown action type: ${actionType}`);
+    }
+  } catch (error) {
+    logger.error('Action execution failed', { actionType, userId, error: error.message });
+    throw error;
   }
 }
 

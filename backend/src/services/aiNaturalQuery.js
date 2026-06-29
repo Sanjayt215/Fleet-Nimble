@@ -140,7 +140,24 @@ export async function extractEntities(message, userId) {
     return entities;
   } catch (error) {
     logger.error('Error extracting entities', { userId, error: error.message });
-    return { vehicles: [] };
+    return { 
+      vehicles: [], 
+      make: null, 
+      model: null, 
+      plate: null, 
+      vin: null, 
+      batteryThreshold: null, 
+      coolantThreshold: null, 
+      fuelThreshold: null, 
+      offlineDays: null, 
+      maintenanceDue: false, 
+      dtcCode: null, 
+      alertType: null, 
+      reportType: null, 
+      days: null, 
+      actionType: null, 
+      details: null 
+    };
   }
 }
 

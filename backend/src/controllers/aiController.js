@@ -2,6 +2,7 @@ import { AppError } from '../middleware/errorHandler.js';
 import * as aiService from '../services/aiService.js';
 import { generateProactiveInsights } from '../services/aiProactiveInsights.js';
 import prisma from '../utils/prisma.js';
+import logger from '../utils/logger.js';
 
 // Audit logging helper
 async function logAiInteraction(userId, chatId, messageType, content, vehicleId, req) {
@@ -23,21 +24,47 @@ async function logAiInteraction(userId, chatId, messageType, content, vehicleId,
   }
 }
 
+// Fallback response generator
+function getFallbackResponse(chatId, error = null) {
+  const errorMessage = error ? ` Error: ${error.message}` : '';
+  return {
+    success: true,
+    data: {
+      reply: `I could not complete the advanced analysis right now${errorMessage}. The AI Assistant is online. Please try a simpler fleet question.`,
+      chatId,
+      metadata: {
+        title: "AI Assistant",
+        metrics: {},
+        risks: [],
+        recommendedAction: "Try a simpler question",
+        confidence: "LOW",
+        dataFreshness: "UNKNOWN",
+        simulatedNote: null,
+        suggestedActions: []
+      }
+    }
+  };
+}
+
 export async function chat(req, res, next) {
+  logger.info('AI_CHAT_START', { userId: req.userId, message: req.body.message?.substring(0, 50) });
+  
+  let chat;
+  let chatId;
+  
   try {
-    const { message, vehicleId, chatId, stream = false } = req.body;
+    const { message, vehicleId, chatId: providedChatId, stream = false } = req.body;
     const userId = req.userId;
 
     if (!message || message.trim().length === 0) {
       throw new AppError('Message is required', 400, 'VALIDATION_ERROR');
     }
 
-    let chat;
     let chatHistory = [];
 
     // Get or create chat
-    if (chatId) {
-      chat = await aiService.getChatWithMessages(chatId, userId);
+    if (providedChatId) {
+      chat = await aiService.getChatWithMessages(providedChatId, userId);
       chatHistory = chat.messages.map((m) => ({
         role: m.role,
         content: m.content,
@@ -47,6 +74,8 @@ export async function chat(req, res, next) {
       const title = message.substring(0, 50) + (message.length > 50 ? '...' : '');
       chat = await aiService.createChat(userId, title);
     }
+    
+    chatId = chat.id;
 
     // Save user message with vehicleId
     await aiService.saveMessage(chat.id, 'user', message, {
@@ -88,18 +117,48 @@ export async function chat(req, res, next) {
 
         res.write('data: [DONE]\n\n');
         res.end();
+        logger.info('AI_RESPONSE_SENT', { userId, chatId, stream: true });
       } catch (streamError) {
+        logger.error('AI_STREAM_ERROR', { userId, chatId, error: streamError.message });
         res.write(`data: ${JSON.stringify({ error: streamError.message })}\n\n`);
         res.end();
       }
     } else {
-      // Non-streaming response
-      const { response, context, metadata } = await aiService.processChatMessage(
-        userId,
-        message,
-        vehicleId,
-        chatHistory
-      );
+      // Non-streaming response with timeout protection
+      let response, context, metadata;
+      
+      try {
+        const result = await Promise.race([
+          aiService.processChatMessage(userId, message, vehicleId, chatHistory),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('AI Orchestrator timeout after 20 seconds')), 20000)
+          )
+        ]);
+        
+        response = result.response;
+        context = result.context;
+        metadata = result.metadata;
+        
+        logger.info('AI_ORCHESTRATOR_SUCCESS', { userId, chatId });
+      } catch (orchestratorError) {
+        logger.error('AI_ORCHESTRATOR_ERROR', { userId, chatId, error: orchestratorError.message });
+        
+        // Return fallback response
+        const fallback = getFallbackResponse(chatId, orchestratorError);
+        
+        // Save fallback response
+        await aiService.saveMessage(chat.id, 'assistant', fallback.data.reply, {
+          vehicleId,
+          contextSummary: { hasVehicles: false, vehicleCount: 0 },
+          metadata: fallback.data.metadata,
+        });
+
+        // Audit log fallback response
+        await logAiInteraction(userId, chat.id, 'assistant', fallback.data.reply, vehicleId, req);
+
+        logger.info('AI_RESPONSE_SENT', { userId, chatId, fallback: true });
+        return res.json(fallback);
+      }
 
       // Save AI response
       await aiService.saveMessage(chat.id, 'assistant', response, {
@@ -117,17 +176,40 @@ export async function chat(req, res, next) {
       // Update chat timestamp
       await aiService.getChatWithMessages(chat.id, userId);
 
+      // Standardize response shape
       res.json({
         success: true,
         data: {
+          reply: response,
           chatId: chat.id,
-          response,
-          context,
-          metadata,
+          metadata: metadata || {
+            title: "AI Assistant",
+            metrics: {},
+            risks: [],
+            recommendedAction: null,
+            confidence: "MEDIUM",
+            dataFreshness: "UNKNOWN",
+            simulatedNote: null,
+            suggestedActions: []
+          }
         },
       });
+      
+      logger.info('AI_RESPONSE_SENT', { userId, chatId, fallback: false });
     }
   } catch (err) {
+    logger.error('AI_CHAT_ERROR', { userId: req.userId, chatId, error: err.message });
+    
+    // If we have a chatId, return fallback response
+    if (chatId) {
+      try {
+        const fallback = getFallbackResponse(chatId, err);
+        return res.json(fallback);
+      } catch (fallbackError) {
+        logger.error('FALLBACK_ERROR', { error: fallbackError.message });
+      }
+    }
+    
     next(err);
   }
 }

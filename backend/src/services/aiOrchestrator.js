@@ -24,38 +24,93 @@ import { generateSuggestedActions } from './aiResponseFormatter.js';
  */
 export async function orchestrateAI(userId, message, vehicleContext = null) {
   try {
-    logger.info('AI Orchestrator started', { userId, message });
+    logger.info('AI_ORCHESTRATOR_START', { userId, message });
 
     // Step 1: Resolve pronouns using conversation context
-    const resolvedMessage = await resolvePronouns(userId, message, vehicleContext);
+    let resolvedMessage;
+    try {
+      resolvedMessage = await resolvePronouns(userId, message, vehicleContext);
+    } catch (error) {
+      logger.warn('Pronoun resolution failed, using original message', { userId, error: error.message });
+      resolvedMessage = message;
+    }
 
     // Step 2: Detect intent
-    const intent = await detectIntent(resolvedMessage);
-    logger.info('Intent detected', { userId, intent: intent.type });
+    let intent;
+    try {
+      intent = await detectIntent(resolvedMessage);
+      logger.info('Intent detected', { userId, intent: intent.type });
+    } catch (error) {
+      logger.warn('Intent detection failed, using default', { userId, error: error.message });
+      intent = { type: 'GENERAL', confidence: 0.5 };
+    }
 
     // Step 3: Extract entities
-    const entities = await extractEntities(resolvedMessage, userId);
-    logger.info('Entities extracted', { userId, entities });
+    let entities;
+    try {
+      entities = await extractEntities(resolvedMessage, userId);
+      logger.info('Entities extracted', { userId, entities });
+    } catch (error) {
+      logger.warn('Entity extraction failed, using empty entities', { userId, error: error.message });
+      entities = { vehicles: [], metrics: [], timeframes: [] };
+    }
 
     // Step 4: Build execution plan
-    const plan = await buildExecutionPlan(intent, entities, userId);
-    logger.info('Execution plan built', { userId, plan });
+    let plan;
+    try {
+      plan = await buildExecutionPlan(intent, entities, userId);
+      logger.info('Execution plan built', { userId, plan });
+    } catch (error) {
+      logger.warn('Plan building failed, using fallback plan', { userId, error: error.message });
+      plan = { steps: [], estimatedDuration: 0 };
+    }
 
     // Step 5: Execute plan
-    const results = await executePlan(plan, userId, vehicleContext);
-    logger.info('Plan executed', { userId, resultCount: results.length });
+    let results;
+    try {
+      results = await executePlan(plan, userId, vehicleContext);
+      logger.info('Plan executed', { userId, resultCount: results.length });
+    } catch (error) {
+      logger.warn('Plan execution failed, using empty results', { userId, error: error.message });
+      results = [];
+    }
 
     // Step 6: Combine results
     const combinedResults = combineResults(results, intent);
 
     // Step 7: Format response
-    const formattedResponse = await formatResponse(combinedResults, intent, entities);
+    let formattedResponse;
+    try {
+      formattedResponse = await formatResponse(combinedResults, intent, entities);
+    } catch (error) {
+      logger.warn('Response formatting failed, using fallback format', { userId, error: error.message });
+      formattedResponse = {
+        message: 'I processed your request but encountered an issue formatting the detailed response. Please try again.',
+        title: 'AI Assistant',
+        metrics: {},
+        risks: [],
+        recommendedAction: 'Try again',
+        confidence: 'LOW',
+        dataFreshness: 'UNKNOWN',
+        simulatedNote: null,
+      };
+    }
 
     // Step 8: Generate suggested follow-up actions
-    const suggestedActions = await generateSuggestedActions(intent, entities, combinedResults);
+    let suggestedActions;
+    try {
+      suggestedActions = await generateSuggestedActions(intent, entities, combinedResults);
+    } catch (error) {
+      logger.warn('Suggested actions generation failed, using default actions', { userId, error: error.message });
+      suggestedActions = [];
+    }
 
     // Step 9: Save conversation context
-    await saveConversationContext(userId, resolvedMessage, formattedResponse, entities, vehicleContext);
+    try {
+      await saveConversationContext(userId, resolvedMessage, formattedResponse, entities, vehicleContext);
+    } catch (error) {
+      logger.warn('Conversation context save failed', { userId, error: error.message });
+    }
 
     // Step 10: Return final response
     return {
@@ -74,7 +129,7 @@ export async function orchestrateAI(userId, message, vehicleContext = null) {
       resolvedMessage: resolvedMessage !== message ? resolvedMessage : null,
     };
   } catch (error) {
-    logger.error('AI Orchestrator error', { userId, error: error.message });
+    logger.error('AI_ORCHESTRATOR_ERROR', { userId, error: error.message, stack: error.stack });
     throw error;
   }
 }

@@ -184,20 +184,28 @@ export default function AIAssistant() {
           chatId: currentChat?.id || null,
         });
 
-        const aiResponse = res.data.data.response;
-        const metadata = res.data.data.metadata || {};
+        // Handle multiple response shapes
+        const responseData = res.data.data || res.data;
+        const aiResponse = responseData.reply || responseData.response || responseData.message || 'No response received';
+        const metadata = responseData.metadata || res.data.metadata || {};
+        
+        if (import.meta.env.DEV) {
+          console.log('AI response:', responseData);
+          console.log('AI metadata:', metadata);
+        }
+
         setMessages((prev) => [...prev, { 
           role: 'assistant', 
           content: aiResponse,
-          confidence: metadata.confidence,
-          dataFreshness: metadata.dataFreshness,
-          simulatedNote: metadata.simulatedNote,
+          confidence: metadata.confidence || 'MEDIUM',
+          dataFreshness: metadata.dataFreshness || '🟢 Live',
+          simulatedNote: metadata.simulatedNote || null,
         }]);
         setTyping(false);
         setLastResponse(aiResponse);
 
         if (!currentChat) {
-          setCurrentChat({ id: res.data.data.chatId });
+          setCurrentChat({ id: responseData.chatId || res.data.chatId });
           await fetchChats();
         }
       }
@@ -400,19 +408,23 @@ export default function AIAssistant() {
                           </div>
                         )}
                         
-                        {/* AI Response Actions */}
-                        {!message.typing && index === messages.length - 1 && (
+                        {/* AI Response Actions - Only show if metadata exists */}
+                        {!message.typing && index === messages.length - 1 && (message.confidence || message.dataFreshness) && (
                           <div className="mt-4 border-t border-slate-600 pt-4">
                             <div className="flex items-center justify-between mb-3">
                               <div className="flex items-center gap-2">
                                 {/* Confidence Badge */}
-                                <span className="inline-flex items-center rounded-full bg-green-900/50 px-2 py-1 text-xs font-medium text-green-400">
-                                  Confidence: {message.confidence || 'High'}
-                                </span>
+                                {message.confidence && (
+                                  <span className="inline-flex items-center rounded-full bg-green-900/50 px-2 py-1 text-xs font-medium text-green-400">
+                                    Confidence: {message.confidence}
+                                  </span>
+                                )}
                                 {/* Data Freshness Badge */}
-                                <span className="inline-flex items-center rounded-full bg-blue-900/50 px-2 py-1 text-xs font-medium text-blue-400">
-                                  {message.dataFreshness || '🟢 Live'}
-                                </span>
+                                {message.dataFreshness && (
+                                  <span className="inline-flex items-center rounded-full bg-blue-900/50 px-2 py-1 text-xs font-medium text-blue-400">
+                                    {message.dataFreshness}
+                                  </span>
+                                )}
                               </div>
                               <div className="flex items-center gap-2">
                                 {/* Copy Button */}
