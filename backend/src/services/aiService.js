@@ -484,35 +484,113 @@ async function callAIStream(messages, onChunk) {
  * Process user message and get AI response
  */
 export async function processChatMessage(userId, message, vehicleId = null, chatHistory = []) {
+  console.log('AI SERVICE PROCESS START', { userId, message: message?.substring(0, 50) });
+  
   try {
     // Use AI Orchestrator for structured responses with metadata
-    const orchestratorResult = await orchestrateAI(userId, message, vehicleId);
+    let orchestratorResult;
+    try {
+      orchestratorResult = await orchestrateAI(userId, message, vehicleId);
+      console.log('AI ORCHESTRATOR COMPLETE');
+    } catch (orchestratorError) {
+      console.error('AI FAILED AT ORCHESTRATOR IN SERVICE', orchestratorError);
+      console.error(orchestratorError.stack);
+      // Return fallback response
+      return {
+        response: 'AI Assistant encountered an error during analysis. Please try a simpler question.',
+        context: { vehicleCount: 0, hasVehicles: false },
+        knowledgeResults: [],
+        metadata: {
+          title: "AI Assistant",
+          metrics: {},
+          risks: [],
+          recommendedAction: "Try again",
+          confidence: "LOW",
+          dataFreshness: "UNKNOWN",
+          simulatedNote: null,
+          suggestedActions: [],
+          entities: {},
+        },
+      };
+    }
     
     // Build context from user's fleet data
-    const context = await buildContext(userId, vehicleId);
+    let context;
+    try {
+      context = await buildContext(userId, vehicleId);
+    } catch (contextError) {
+      console.error('AI FAILED AT BUILD CONTEXT', contextError);
+      console.error(contextError.stack);
+      context = { vehicleCount: 0, hasVehicles: false };
+    }
 
     // Search knowledge base for relevant information
-    const knowledgeResults = searchKnowledgeBase(message);
+    let knowledgeResults;
+    try {
+      knowledgeResults = searchKnowledgeBase(message);
+    } catch (kbError) {
+      console.error('AI FAILED AT KNOWLEDGE BASE', kbError);
+      console.error(kbError.stack);
+      knowledgeResults = [];
+    }
+
+    // Validate orchestrator result
+    if (!orchestratorResult) {
+      console.error('AI FAILED AT ORCHESTRATOR RESULT VALIDATION - result is null');
+      return {
+        response: 'AI Assistant encountered an error. Please try again.',
+        context,
+        knowledgeResults,
+        metadata: {
+          title: "AI Assistant",
+          metrics: {},
+          risks: [],
+          recommendedAction: "Try again",
+          confidence: "LOW",
+          dataFreshness: "UNKNOWN",
+          simulatedNote: null,
+          suggestedActions: [],
+          entities: {},
+        },
+      };
+    }
 
     return {
-      response: orchestratorResult.message,
+      response: orchestratorResult.message || 'No response generated',
       context,
       knowledgeResults,
       metadata: {
-        title: orchestratorResult.title,
-        metrics: orchestratorResult.metrics,
-        risks: orchestratorResult.risks,
-        recommendedAction: orchestratorResult.recommendedAction,
-        confidence: orchestratorResult.confidence,
-        dataFreshness: orchestratorResult.dataFreshness,
-        simulatedNote: orchestratorResult.simulatedNote,
-        suggestedActions: orchestratorResult.suggestedActions,
-        entities: orchestratorResult.entities,
+        title: orchestratorResult.title || "AI Assistant",
+        metrics: orchestratorResult.metrics || {},
+        risks: orchestratorResult.risks || [],
+        recommendedAction: orchestratorResult.recommendedAction || null,
+        confidence: orchestratorResult.confidence || "MEDIUM",
+        dataFreshness: orchestratorResult.dataFreshness || "UNKNOWN",
+        simulatedNote: orchestratorResult.simulatedNote || null,
+        suggestedActions: orchestratorResult.suggestedActions || [],
+        entities: orchestratorResult.entities || {},
       },
     };
   } catch (error) {
-    logger.error('Error processing chat message', { error: error.message, userId });
-    throw error;
+    console.error('AI FAILED AT SERVICE', error);
+    console.error(error.stack);
+    // Return fallback instead of throwing
+    return {
+      response: 'AI Assistant encountered an error. Please try again.',
+      context: { vehicleCount: 0, hasVehicles: false },
+      knowledgeResults: [],
+      metadata: {
+        title: "AI Assistant",
+        metrics: {},
+        risks: [],
+        recommendedAction: "Try again",
+        confidence: "LOW",
+        dataFreshness: "UNKNOWN",
+        simulatedNote: null,
+        suggestedActions: [],
+        entities: {},
+      },
+    };
   }
 }
 

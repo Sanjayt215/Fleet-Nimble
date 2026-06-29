@@ -71,34 +71,49 @@ export function createFleetSummaryResponse(fleetData) {
  * Create vehicle status response
  */
 export function createVehicleStatusResponse(vehicle, telemetry) {
-  const healthScore = calculateVehicleHealthScore(vehicle, telemetry);
-  
-  return createStructuredResponse({
-    title: `Vehicle Status: ${vehicle.make} ${vehicle.model}`,
-    summary: `${vehicle.plateNumber || vehicle.vin} is ${vehicle.telemetryOnline ? 'online' : 'offline'} with ignition ${vehicle.liveState?.ignitionStatus ? 'ON' : 'OFF'}.`,
-    metrics: {
-      'Status': vehicle.liveState?.vehicleStatus || 'Unknown',
-      'Ignition': vehicle.liveState?.ignitionStatus ? 'ON' : 'OFF',
-      'Telemetry': vehicle.telemetryOnline ? 'Online' : 'Offline',
-      'Battery Voltage': telemetry?.batteryVoltage ? `${telemetry.batteryVoltage.toFixed(2)}V` : 'Score unavailable because live telemetry is missing',
-      'Coolant Temp': telemetry?.coolantTemp ? `${telemetry.coolantTemp.toFixed(1)}°C` : 'Score unavailable because live telemetry is missing',
-      'Fuel Level': telemetry?.fuelLevel ? `${telemetry.fuelLevel.toFixed(1)}%` : 'Score unavailable because live telemetry is missing',
-      'RPM': telemetry?.rpm || 'Score unavailable because live telemetry is missing',
-      'Speed': telemetry?.speed || 'Score unavailable because live telemetry is missing',
-      'Health Score': vehicle.telemetryOnline ? `${healthScore}/100` : 'Score unavailable because live telemetry is missing',
-    },
-    priority: healthScore < 50 ? 'Critical' : healthScore < 70 ? 'High' : 'Medium',
-    recommendations: [
-      !vehicle.telemetryOnline ? 'Check vehicle connectivity' : null,
-      telemetry?.batteryVoltage < 12 ? 'Check battery health' : null,
-      telemetry?.coolantTemp > 100 ? 'Check cooling system' : null,
-    ].filter(Boolean),
-    businessImpact: healthScore < 50 
-      ? 'High risk of vehicle failure and downtime'
-      : 'Low operational risk',
-    confidence: vehicle.telemetryOnline ? 'High' : 'Medium',
-    dataFreshness: vehicle.telemetryOnline ? '🟢 Live' : '🔴 Offline',
-  });
+  try {
+    const healthScore = calculateVehicleHealthScore(vehicle, telemetry);
+    
+    return createStructuredResponse({
+      title: `Vehicle Status: ${vehicle?.make || 'Unknown'} ${vehicle?.model || 'Unknown'}`,
+      summary: `${vehicle?.plateNumber || vehicle?.vin || 'Unknown'} is ${vehicle?.telemetryOnline ? 'online' : 'offline'} with ignition ${vehicle?.liveState?.ignitionStatus ? 'ON' : 'OFF'}.`,
+      metrics: {
+        'Status': vehicle?.liveState?.vehicleStatus || 'Unknown',
+        'Ignition': vehicle?.liveState?.ignitionStatus ? 'ON' : 'OFF',
+        'Telemetry': vehicle?.telemetryOnline ? 'Online' : 'Offline',
+        'Battery Voltage': telemetry?.batteryVoltage ? `${telemetry.batteryVoltage.toFixed(2)}V` : 'Score unavailable because live telemetry is missing',
+        'Coolant Temp': telemetry?.coolantTemp ? `${telemetry.coolantTemp.toFixed(1)}°C` : 'Score unavailable because live telemetry is missing',
+        'Fuel Level': telemetry?.fuelLevel ? `${telemetry.fuelLevel.toFixed(1)}%` : 'Score unavailable because live telemetry is missing',
+        'RPM': telemetry?.rpm || 'Score unavailable because live telemetry is missing',
+        'Speed': telemetry?.speed || 'Score unavailable because live telemetry is missing',
+        'Health Score': vehicle?.telemetryOnline ? `${healthScore}/100` : 'Score unavailable because live telemetry is missing',
+      },
+      priority: healthScore < 50 ? 'Critical' : healthScore < 70 ? 'High' : 'Medium',
+      recommendations: [
+        !vehicle?.telemetryOnline ? 'Check vehicle connectivity' : null,
+        telemetry?.batteryVoltage < 12 ? 'Check battery health' : null,
+        telemetry?.coolantTemp > 100 ? 'Check cooling system' : null,
+      ].filter(Boolean),
+      businessImpact: healthScore < 50 
+        ? 'High risk of vehicle failure and downtime'
+        : 'Low operational risk',
+      confidence: vehicle?.telemetryOnline ? 'High' : 'Medium',
+      dataFreshness: vehicle?.telemetryOnline ? '🟢 Live' : '🔴 Offline',
+    });
+  } catch (error) {
+    console.error('AI FAILED AT CREATE VEHICLE STATUS RESPONSE', error);
+    console.error(error.stack);
+    return createStructuredResponse({
+      title: 'Vehicle Status',
+      summary: 'Unable to retrieve vehicle status',
+      metrics: {},
+      priority: 'Medium',
+      recommendations: [],
+      businessImpact: null,
+      confidence: 'LOW',
+      dataFreshness: 'UNKNOWN',
+    });
+  }
 }
 
 /**
@@ -442,71 +457,82 @@ function extractKeyMetrics(combinedResults, intent) {
  * Extract top 2-3 risks only
  */
 function extractTopRisks(combinedResults, intent) {
-  const risks = [];
-  const summary = combinedResults.summary || {};
-  
-  switch (intent.type) {
-    case 'FLEET_SUMMARY':
-      if (summary.criticalAlerts > 0) {
-        risks.push({ type: 'Critical Alerts', count: summary.criticalAlerts, severity: 'CRITICAL' });
-      }
-      if (summary.offlineVehicles > 0) {
-        risks.push({ type: 'Offline Vehicles', count: summary.offlineVehicles, severity: 'HIGH' });
-      }
-      if (summary.healthScore < 60) {
-        risks.push({ type: 'Low Fleet Health', score: summary.healthScore, severity: 'HIGH' });
-      }
-      break;
+  try {
+    const risks = [];
+    const summary = combinedResults?.summary || {};
     
-    case 'DIAGNOSTICS':
-      if (summary.dtcCodes?.length > 0) {
-        risks.push({ type: 'Active DTC Codes', count: summary.dtcCodes.length, severity: 'HIGH' });
-      }
-      break;
+    switch (intent?.type) {
+      case 'FLEET_SUMMARY':
+        if (summary.criticalAlerts > 0) {
+          risks.push({ type: 'Critical Alerts', count: summary.criticalAlerts, severity: 'CRITICAL' });
+        }
+        if (summary.offlineVehicles > 0) {
+          risks.push({ type: 'Offline Vehicles', count: summary.offlineVehicles, severity: 'HIGH' });
+        }
+        if (summary.healthScore < 60) {
+          risks.push({ type: 'Low Fleet Health', score: summary.healthScore, severity: 'HIGH' });
+        }
+        break;
+      
+      case 'DIAGNOSTICS':
+        if ((summary.dtcCodes || []).length > 0) {
+          risks.push({ type: 'Active DTC Codes', count: summary.dtcCodes.length, severity: 'HIGH' });
+        }
+        break;
+      
+      case 'MAINTENANCE_QUERY':
+        if ((summary.urgentItems || []).length > 0) {
+          risks.push({ type: 'Urgent Maintenance', count: summary.urgentItems.length, severity: 'CRITICAL' });
+        }
+        break;
+      
+      case 'PREDICTIVE_ANALYSIS':
+        if (summary.riskLevel === 'CRITICAL' || summary.riskLevel === 'HIGH') {
+          risks.push({ type: 'Predicted Failure', level: summary.riskLevel, severity: summary.riskLevel });
+        }
+        break;
+    }
     
-    case 'MAINTENANCE_QUERY':
-      if (summary.urgentItems?.length > 0) {
-        risks.push({ type: 'Urgent Maintenance', count: summary.urgentItems.length, severity: 'CRITICAL' });
-      }
-      break;
-    
-    case 'PREDICTIVE_ANALYSIS':
-      if (summary.riskLevel === 'CRITICAL' || summary.riskLevel === 'HIGH') {
-        risks.push({ type: 'Predicted Failure', level: summary.riskLevel, severity: summary.riskLevel });
-      }
-      break;
+    return (risks || []).slice(0, 3);
+  } catch (error) {
+    console.error('AI FAILED AT EXTRACT TOP RISKS', error);
+    console.error(error.stack);
+    return [];
   }
-  
-  return risks.slice(0, 3);
 }
 
 /**
  * Generate one recommended next action
  */
 function generateRecommendedAction(combinedResults, intent) {
-  const summary = combinedResults.summary || {};
-  
-  switch (intent.type) {
-    case 'FLEET_SUMMARY':
-      if (summary.criticalAlerts > 0) return 'Address critical alerts immediately';
-      if (summary.offlineVehicles > 0) return 'Restore offline vehicle connectivity';
-      if (summary.pendingMaintenance > 0) return 'Schedule pending maintenance';
-      return 'Continue regular fleet monitoring';
+  try {
+    const summary = combinedResults?.summary || {};
     
-    case 'DIAGNOSTICS':
-      return 'Review DTC codes and schedule diagnostic inspection';
-    
-    case 'MAINTENANCE_QUERY':
-      return 'Prioritize urgent maintenance items';
-    
-    case 'PREDICTIVE_ANALYSIS':
-      return 'Schedule proactive maintenance based on predictions';
-    
-    case 'VEHICLE_COMPARISON':
-      return 'Review comparison results and adjust fleet strategy';
-    
-    default:
-      return 'Review insights and take appropriate action';
+    switch (intent?.type) {
+      case 'FLEET_SUMMARY':
+        if (summary.criticalAlerts > 0) return 'Address critical alerts immediately';
+        if (summary.offlineVehicles > 0) return 'Restore offline vehicle connectivity';
+        if (summary.pendingMaintenance > 0) return 'Schedule pending maintenance';
+        return 'Continue regular fleet monitoring';
+      
+      case 'DIAGNOSTICS':
+        return 'Review DTC codes and schedule diagnostic inspection';
+      
+      case 'MAINTENANCE_QUERY':
+        return 'Schedule maintenance for identified items';
+      
+      case 'PREDICTIVE_ANALYSIS':
+        if (summary.riskLevel === 'CRITICAL') return 'Immediate vehicle inspection required';
+        if (summary.riskLevel === 'HIGH') return 'Schedule preventive maintenance';
+        return 'Monitor vehicle performance';
+      
+      default:
+        return 'Review fleet status and take appropriate action';
+    }
+  } catch (error) {
+    console.error('AI FAILED AT GENERATE RECOMMENDED ACTION', error);
+    console.error(error.stack);
+    return 'Review fleet status';
   }
 }
 
@@ -514,13 +540,19 @@ function generateRecommendedAction(combinedResults, intent) {
  * Calculate confidence level
  */
 function calculateConfidence(combinedResults, intent) {
-  const dataCount = combinedResults.data?.length || 0;
-  const successCount = combinedResults.data?.filter(d => d.success !== false).length || 0;
-  
-  if (dataCount === 0) return 'LOW';
-  if (successCount === dataCount) return 'HIGH';
-  if (successCount / dataCount > 0.7) return 'MEDIUM';
-  return 'LOW';
+  try {
+    const dataCount = combinedResults?.data?.length || 0;
+    const successCount = combinedResults?.data?.filter(d => d.success !== false).length || 0;
+    
+    if (dataCount === 0) return 'LOW';
+    if (successCount === dataCount) return 'HIGH';
+    if (successCount / dataCount > 0.7) return 'MEDIUM';
+    return 'LOW';
+  } catch (error) {
+    console.error('AI FAILED AT CALCULATE CONFIDENCE', error);
+    console.error(error.stack);
+    return 'MEDIUM';
+  }
 }
 
 /**

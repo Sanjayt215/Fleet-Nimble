@@ -353,12 +353,14 @@ export async function saveConversationContext(userId, message, response, entitie
       },
     });
 
-    logger.info('Conversation context saved for follow-up', { userId, contextId: context.id });
+    console.log('AI CONVERSATION CONTEXT SAVED', { userId, contextId: context.id });
 
     return context;
   } catch (error) {
-    logger.error('Error saving conversation context', { userId, error: error.message });
-    throw error;
+    console.error('AI FAILED AT SAVE CONVERSATION CONTEXT', error);
+    console.error(error.stack);
+    // Don't throw - context save is not critical
+    return null;
   }
 }
 
@@ -377,7 +379,7 @@ export async function getConversationContext(userId, conversationId = null) {
     });
 
     if (!context) {
-      return null;
+      return null; // No history exists - start new conversation
     }
 
     return {
@@ -391,8 +393,10 @@ export async function getConversationContext(userId, conversationId = null) {
       timestamp: context.timestamp,
     };
   } catch (error) {
-    logger.error('Error getting conversation context', { userId, error: error.message });
-    throw error;
+    console.error('AI FAILED AT GET CONVERSATION CONTEXT', error);
+    console.error(error.stack);
+    // Return null to start new conversation
+    return null;
   }
 }
 
@@ -433,12 +437,13 @@ export async function resolvePronouns(userId, message, vehicleContext = null) {
     }
 
     if (resolvedMessage !== message) {
-      logger.info('Pronouns resolved', { userId, original: message, resolved: resolvedMessage });
+      console.log('AI PRONOUNS RESOLVED', { userId, original: message, resolved: resolvedMessage });
     }
 
     return resolvedMessage;
   } catch (error) {
-    logger.error('Error resolving pronouns', { userId, error: error.message });
+    console.error('AI FAILED AT RESOLVE PRONOUNS', error);
+    console.error(error.stack);
     return message; // Return original on error
   }
 }

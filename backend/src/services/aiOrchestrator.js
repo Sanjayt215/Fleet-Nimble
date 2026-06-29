@@ -23,15 +23,17 @@ import { generateSuggestedActions } from './aiResponseFormatter.js';
  * Main orchestrator function
  */
 export async function orchestrateAI(userId, message, vehicleContext = null) {
+  console.log('AI ORCHESTRATOR START', { userId, message });
+  
   try {
-    logger.info('AI_ORCHESTRATOR_START', { userId, message });
-
     // Step 1: Resolve pronouns using conversation context
     let resolvedMessage;
     try {
       resolvedMessage = await resolvePronouns(userId, message, vehicleContext);
+      console.log('AI PRONOUN RESOLUTION COMPLETE');
     } catch (error) {
-      logger.warn('Pronoun resolution failed, using original message', { userId, error: error.message });
+      console.error('AI FAILED AT PRONOUN RESOLUTION', error);
+      console.error(error.stack);
       resolvedMessage = message;
     }
 
@@ -39,9 +41,10 @@ export async function orchestrateAI(userId, message, vehicleContext = null) {
     let intent;
     try {
       intent = await detectIntent(resolvedMessage);
-      logger.info('Intent detected', { userId, intent: intent.type });
+      console.log('AI INTENT DETECTED', { intent: intent?.type });
     } catch (error) {
-      logger.warn('Intent detection failed, using default', { userId, error: error.message });
+      console.error('AI FAILED AT INTENT DETECTION', error);
+      console.error(error.stack);
       intent = { type: 'GENERAL', confidence: 0.5 };
     }
 
@@ -49,9 +52,10 @@ export async function orchestrateAI(userId, message, vehicleContext = null) {
     let entities;
     try {
       entities = await extractEntities(resolvedMessage, userId);
-      logger.info('Entities extracted', { userId, entities });
+      console.log('AI ENTITIES EXTRACTED');
     } catch (error) {
-      logger.warn('Entity extraction failed, using empty entities', { userId, error: error.message });
+      console.error('AI FAILED AT ENTITY EXTRACTION', error);
+      console.error(error.stack);
       entities = { vehicles: [], metrics: [], timeframes: [] };
     }
 
@@ -59,9 +63,10 @@ export async function orchestrateAI(userId, message, vehicleContext = null) {
     let plan;
     try {
       plan = await buildExecutionPlan(intent, entities, userId);
-      logger.info('Execution plan built', { userId, plan });
+      console.log('AI PLANNER COMPLETE');
     } catch (error) {
-      logger.warn('Plan building failed, using fallback plan', { userId, error: error.message });
+      console.error('AI FAILED AT PLANNER', error);
+      console.error(error.stack);
       plan = { steps: [], estimatedDuration: 0 };
     }
 
@@ -69,21 +74,31 @@ export async function orchestrateAI(userId, message, vehicleContext = null) {
     let results;
     try {
       results = await executePlan(plan, userId, vehicleContext);
-      logger.info('Plan executed', { userId, resultCount: results.length });
+      console.log('AI PLAN EXECUTION COMPLETE');
     } catch (error) {
-      logger.warn('Plan execution failed, using empty results', { userId, error: error.message });
+      console.error('AI FAILED AT PLAN EXECUTION', error);
+      console.error(error.stack);
       results = [];
     }
 
     // Step 6: Combine results
-    const combinedResults = combineResults(results, intent);
+    let combinedResults;
+    try {
+      combinedResults = combineResults(results, intent);
+    } catch (error) {
+      console.error('AI FAILED AT RESULTS COMBINATION', error);
+      console.error(error.stack);
+      combinedResults = { data: [], summary: {}, metadata: {} };
+    }
 
     // Step 7: Format response
     let formattedResponse;
     try {
       formattedResponse = await formatResponse(combinedResults, intent, entities);
+      console.log('AI FORMATTER COMPLETE');
     } catch (error) {
-      logger.warn('Response formatting failed, using fallback format', { userId, error: error.message });
+      console.error('AI FAILED AT FORMATTER', error);
+      console.error(error.stack);
       formattedResponse = {
         message: 'I processed your request but encountered an issue formatting the detailed response. Please try again.',
         title: 'AI Assistant',
@@ -101,7 +116,8 @@ export async function orchestrateAI(userId, message, vehicleContext = null) {
     try {
       suggestedActions = await generateSuggestedActions(intent, entities, combinedResults);
     } catch (error) {
-      logger.warn('Suggested actions generation failed, using default actions', { userId, error: error.message });
+      console.error('AI FAILED AT SUGGESTED ACTIONS', error);
+      console.error(error.stack);
       suggestedActions = [];
     }
 
@@ -109,28 +125,45 @@ export async function orchestrateAI(userId, message, vehicleContext = null) {
     try {
       await saveConversationContext(userId, resolvedMessage, formattedResponse, entities, vehicleContext);
     } catch (error) {
-      logger.warn('Conversation context save failed', { userId, error: error.message });
+      console.error('AI FAILED AT SAVE CONTEXT', error);
+      console.error(error.stack);
     }
 
-    // Step 10: Return final response
+    // Step 10: Return final response with validation
     return {
       success: true,
-      message: formattedResponse.message,
-      title: formattedResponse.title,
-      metrics: formattedResponse.metrics,
-      risks: formattedResponse.risks,
-      recommendedAction: formattedResponse.recommendedAction,
-      confidence: formattedResponse.confidence,
-      dataFreshness: formattedResponse.dataFreshness,
-      simulatedNote: formattedResponse.simulatedNote,
-      suggestedActions,
-      plan: plan.steps.map(s => s.description),
-      entities,
+      message: formattedResponse?.message || 'No response generated',
+      title: formattedResponse?.title || 'AI Assistant',
+      metrics: formattedResponse?.metrics || {},
+      risks: formattedResponse?.risks || [],
+      recommendedAction: formattedResponse?.recommendedAction || null,
+      confidence: formattedResponse?.confidence || 'MEDIUM',
+      dataFreshness: formattedResponse?.dataFreshness || 'UNKNOWN',
+      simulatedNote: formattedResponse?.simulatedNote || null,
+      suggestedActions: suggestedActions || [],
+      plan: plan?.steps ? plan.steps.map(s => s.description) : [],
+      entities: entities || {},
       resolvedMessage: resolvedMessage !== message ? resolvedMessage : null,
     };
   } catch (error) {
-    logger.error('AI_ORCHESTRATOR_ERROR', { userId, error: error.message, stack: error.stack });
-    throw error;
+    console.error('AI FAILED AT ORCHESTRATOR', error);
+    console.error(error.stack);
+    // Return fallback instead of throwing
+    return {
+      success: true,
+      message: 'AI Assistant encountered an error. Please try again.',
+      title: 'AI Assistant',
+      metrics: {},
+      risks: [],
+      recommendedAction: 'Try again',
+      confidence: 'LOW',
+      dataFreshness: 'UNKNOWN',
+      simulatedNote: null,
+      suggestedActions: [],
+      plan: [],
+      entities: {},
+      resolvedMessage: null,
+    };
   }
 }
 

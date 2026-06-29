@@ -47,7 +47,7 @@ function getFallbackResponse(chatId, error = null) {
 }
 
 export async function chat(req, res, next) {
-  logger.info('AI_CHAT_START', { userId: req.userId, message: req.body.message?.substring(0, 50) });
+  console.log('AI_REQUEST_START', { userId: req.userId, message: req.body.message?.substring(0, 50) });
   
   let chat;
   let chatId;
@@ -57,33 +57,55 @@ export async function chat(req, res, next) {
     const userId = req.userId;
 
     if (!message || message.trim().length === 0) {
-      throw new AppError('Message is required', 400, 'VALIDATION_ERROR');
+      return res.status(400).json({
+        success: false,
+        error: 'Message is required'
+      });
     }
 
     let chatHistory = [];
 
     // Get or create chat
-    if (providedChatId) {
-      chat = await aiService.getChatWithMessages(providedChatId, userId);
-      chatHistory = chat.messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
-    } else {
-      // Create new chat with title from first message
-      const title = message.substring(0, 50) + (message.length > 50 ? '...' : '');
-      chat = await aiService.createChat(userId, title);
+    try {
+      if (providedChatId) {
+        chat = await aiService.getChatWithMessages(providedChatId, userId);
+        if (chat && chat.messages) {
+          chatHistory = chat.messages.map((m) => ({
+            role: m.role,
+            content: m.content,
+          }));
+        }
+      } else {
+        // Create new chat with title from first message
+        const title = message.substring(0, 50) + (message.length > 50 ? '...' : '');
+        chat = await aiService.createChat(userId, title);
+      }
+    } catch (chatError) {
+      console.error('AI FAILED AT CHAT CREATION/RETRIEVAL', chatError);
+      console.error(chatError.stack);
+      // Create a minimal chat object to continue
+      chat = { id: 'fallback-' + Date.now() };
     }
     
     chatId = chat.id;
 
     // Save user message with vehicleId
-    await aiService.saveMessage(chat.id, 'user', message, {
-      vehicleId,
-    });
+    try {
+      await aiService.saveMessage(chat.id, 'user', message, {
+        vehicleId,
+      });
+    } catch (saveError) {
+      console.error('AI FAILED AT SAVE USER MESSAGE', saveError);
+      console.error(saveError.stack);
+    }
 
     // Audit log user message
-    await logAiInteraction(userId, chat.id, 'user', message, vehicleId, req);
+    try {
+      await logAiInteraction(userId, chat.id, 'user', message, vehicleId, req);
+    } catch (auditError) {
+      console.error('AI FAILED AT AUDIT LOG', auditError);
+      console.error(auditError.stack);
+    }
 
     // Streaming response
     if (stream) {
@@ -108,18 +130,29 @@ export async function chat(req, res, next) {
         );
 
         // Save complete AI response
-        await aiService.saveMessage(chat.id, 'assistant', fullResponse, {
-          vehicleId,
-        });
+        try {
+          await aiService.saveMessage(chat.id, 'assistant', fullResponse, {
+            vehicleId,
+          });
+        } catch (saveError) {
+          console.error('AI FAILED AT SAVE AI MESSAGE', saveError);
+          console.error(saveError.stack);
+        }
 
         // Audit log AI response
-        await logAiInteraction(userId, chat.id, 'assistant', fullResponse, vehicleId, req);
+        try {
+          await logAiInteraction(userId, chat.id, 'assistant', fullResponse, vehicleId, req);
+        } catch (auditError) {
+          console.error('AI FAILED AT AUDIT LOG', auditError);
+          console.error(auditError.stack);
+        }
 
         res.write('data: [DONE]\n\n');
         res.end();
-        logger.info('AI_RESPONSE_SENT', { userId, chatId, stream: true });
+        console.log('CONTROLLER RESPONSE SENT', { userId, chatId, stream: true });
       } catch (streamError) {
-        logger.error('AI_STREAM_ERROR', { userId, chatId, error: streamError.message });
+        console.error('AI FAILED AT STREAM', streamError);
+        console.error(streamError.stack);
         res.write(`data: ${JSON.stringify({ error: streamError.message })}\n\n`);
         res.end();
       }
@@ -139,66 +172,103 @@ export async function chat(req, res, next) {
         context = result.context;
         metadata = result.metadata;
         
-        logger.info('AI_ORCHESTRATOR_SUCCESS', { userId, chatId });
+        console.log('AI ORCHESTRATOR SUCCESS', { userId, chatId });
       } catch (orchestratorError) {
-        logger.error('AI_ORCHESTRATOR_ERROR', { userId, chatId, error: orchestratorError.message });
+        console.error('AI FAILED AT ORCHESTRATOR', orchestratorError);
+        console.error(orchestratorError.stack);
         
         // Return fallback response
         const fallback = getFallbackResponse(chatId, orchestratorError);
         
         // Save fallback response
-        await aiService.saveMessage(chat.id, 'assistant', fallback.data.reply, {
-          vehicleId,
-          contextSummary: { hasVehicles: false, vehicleCount: 0 },
-          metadata: fallback.data.metadata,
-        });
+        try {
+          await aiService.saveMessage(chat.id, 'assistant', fallback.data.reply, {
+            vehicleId,
+            contextSummary: { hasVehicles: false, vehicleCount: 0 },
+            metadata: fallback.data.metadata,
+          });
+        } catch (saveError) {
+          console.error('AI FAILED AT SAVE FALLBACK', saveError);
+          console.error(saveError.stack);
+        }
 
         // Audit log fallback response
-        await logAiInteraction(userId, chat.id, 'assistant', fallback.data.reply, vehicleId, req);
+        try {
+          await logAiInteraction(userId, chat.id, 'assistant', fallback.data.reply, vehicleId, req);
+        } catch (auditError) {
+          console.error('AI FAILED AT AUDIT LOG', auditError);
+          console.error(auditError.stack);
+        }
 
-        logger.info('AI_RESPONSE_SENT', { userId, chatId, fallback: true });
+        console.log('CONTROLLER RESPONSE SENT', { userId, chatId, fallback: true });
+        return res.json(fallback);
+      }
+
+      // Validate response object
+      if (!response) {
+        console.error('AI FAILED AT RESPONSE VALIDATION - response is null');
+        const fallback = getFallbackResponse(chatId, new Error('Response is null'));
         return res.json(fallback);
       }
 
       // Save AI response
-      await aiService.saveMessage(chat.id, 'assistant', response, {
-        vehicleId,
-        contextSummary: {
-          vehicleCount: context.vehicleCount,
-          hasVehicles: context.hasVehicles,
-        },
-        metadata,
-      });
+      try {
+        await aiService.saveMessage(chat.id, 'assistant', response, {
+          vehicleId,
+          contextSummary: {
+            vehicleCount: context?.vehicleCount || 0,
+            hasVehicles: context?.hasVehicles || false,
+          },
+          metadata,
+        });
+      } catch (saveError) {
+        console.error('AI FAILED AT SAVE AI RESPONSE', saveError);
+        console.error(saveError.stack);
+      }
 
       // Audit log AI response
-      await logAiInteraction(userId, chat.id, 'assistant', response, vehicleId, req);
+      try {
+        await logAiInteraction(userId, chat.id, 'assistant', response, vehicleId, req);
+      } catch (auditError) {
+        console.error('AI FAILED AT AUDIT LOG', auditError);
+        console.error(auditError.stack);
+      }
 
       // Update chat timestamp
-      await aiService.getChatWithMessages(chat.id, userId);
+      try {
+        await aiService.getChatWithMessages(chat.id, userId);
+      } catch (updateError) {
+        console.error('AI FAILED AT CHAT UPDATE', updateError);
+        console.error(updateError.stack);
+      }
 
-      // Standardize response shape
-      res.json({
+      // Standardize response shape with validation
+      const safeMetadata = metadata || {
+        title: "AI Assistant",
+        metrics: {},
+        risks: [],
+        recommendedAction: null,
+        confidence: "MEDIUM",
+        dataFreshness: "UNKNOWN",
+        simulatedNote: null,
+        suggestedActions: []
+      };
+
+      const responseData = {
         success: true,
         data: {
-          reply: response,
+          reply: response || 'No response generated',
           chatId: chat.id,
-          metadata: metadata || {
-            title: "AI Assistant",
-            metrics: {},
-            risks: [],
-            recommendedAction: null,
-            confidence: "MEDIUM",
-            dataFreshness: "UNKNOWN",
-            simulatedNote: null,
-            suggestedActions: []
-          }
+          metadata: safeMetadata
         },
-      });
+      };
       
-      logger.info('AI_RESPONSE_SENT', { userId, chatId, fallback: false });
+      console.log('CONTROLLER RESPONSE SENT', { userId, chatId, fallback: false });
+      return res.json(responseData);
     }
   } catch (err) {
-    logger.error('AI_CHAT_ERROR', { userId: req.userId, chatId, error: err.message });
+    console.error('AI FAILED AT CONTROLLER', err);
+    console.error(err.stack);
     
     // If we have a chatId, return fallback response
     if (chatId) {
@@ -206,11 +276,52 @@ export async function chat(req, res, next) {
         const fallback = getFallbackResponse(chatId, err);
         return res.json(fallback);
       } catch (fallbackError) {
-        logger.error('FALLBACK_ERROR', { error: fallbackError.message });
+        console.error('AI FAILED AT FALLBACK', fallbackError);
+        console.error(fallbackError.stack);
+        // Last resort - return simple response
+        return res.json({
+          success: true,
+          data: {
+            reply: 'AI Assistant encountered an error. Please try again.',
+            chatId: chatId,
+            metadata: {
+              title: "AI Assistant",
+              metrics: {},
+              risks: [],
+              recommendedAction: "Try again",
+              confidence: "LOW",
+              dataFreshness: "UNKNOWN",
+              simulatedNote: null,
+              suggestedActions: []
+            }
+          }
+        });
       }
     }
     
-    next(err);
+    // Only throw to Express for auth errors
+    if (err.message && err.message.includes('401')) {
+      return next(err);
+    }
+    
+    // For all other errors, return 200 with fallback
+    return res.json({
+      success: true,
+      data: {
+        reply: 'AI Assistant encountered an error. Please try again.',
+        chatId: 'unknown',
+        metadata: {
+          title: "AI Assistant",
+          metrics: {},
+          risks: [],
+          recommendedAction: "Try again",
+          confidence: "LOW",
+          dataFreshness: "UNKNOWN",
+          simulatedNote: null,
+          suggestedActions: []
+        }
+      }
+    });
   }
 }
 

@@ -108,22 +108,23 @@ const INTENT_PATTERNS = {
  */
 export async function detectIntent(message) {
   try {
-    const lowerMessage = message.toLowerCase();
+    const lowerMessage = message?.toLowerCase() || '';
 
     for (const [intent, patterns] of Object.entries(INTENT_PATTERNS)) {
       for (const pattern of patterns) {
         if (pattern.test(lowerMessage)) {
-          logger.info('Intent matched', { intent, pattern });
+          console.log('AI INTENT MATCHED', { intent, pattern });
           return { type: intent, confidence: 0.9 };
         }
       }
     }
 
     // Default to natural query if no pattern matches
-    logger.info('No intent matched, defaulting to NATURAL_QUERY');
+    console.log('AI NO INTENT MATCHED, DEFAULTING TO NATURAL_QUERY');
     return { type: INTENT_TYPES.NATURAL_QUERY, confidence: 0.5 };
   } catch (error) {
-    logger.error('Error detecting intent', { error: error.message });
+    console.error('AI FAILED AT INTENT DETECTION', error);
+    console.error(error.stack);
     return { type: INTENT_TYPES.NATURAL_QUERY, confidence: 0.3 };
   }
 }
@@ -134,12 +135,12 @@ export async function detectIntent(message) {
 export async function buildExecutionPlan(intent, entities, userId) {
   try {
     const plan = {
-      intent: intent.type,
+      intent: intent?.type || INTENT_TYPES.NATURAL_QUERY,
       steps: [],
       estimatedDuration: 0,
     };
 
-    switch (intent.type) {
+    switch (plan.intent) {
       case INTENT_TYPES.FLEET_SUMMARY:
         plan.steps = buildFleetSummaryPlan(entities);
         break;
@@ -177,14 +178,20 @@ export async function buildExecutionPlan(intent, entities, userId) {
         plan.steps = buildNaturalQueryPlan(entities);
     }
 
-    plan.estimatedDuration = plan.steps.length * 500; // 500ms per step
+    plan.estimatedDuration = (plan.steps?.length || 0) * 500; // 500ms per step
 
-    logger.info('Execution plan built', { intent: intent.type, stepCount: plan.steps.length });
+    console.log('AI EXECUTION PLAN BUILT', { intent: plan.intent, stepCount: plan.steps.length });
 
     return plan;
   } catch (error) {
-    logger.error('Error building execution plan', { intent, error: error.message });
-    throw error;
+    console.error('AI FAILED AT BUILD EXECUTION PLAN', error);
+    console.error(error.stack);
+    // Return minimal plan instead of throwing
+    return {
+      intent: intent?.type || INTENT_TYPES.NATURAL_QUERY,
+      steps: [],
+      estimatedDuration: 0,
+    };
   }
 }
 
@@ -452,11 +459,11 @@ export async function executePlan(plan, userId, vehicleContext = null) {
     const results = [];
     const availableTools = getAvailableTools();
 
-    for (const step of plan.steps) {
-      const tool = availableTools.find(t => t.name === step.tool);
+    for (const step of (plan?.steps || [])) {
+      const tool = availableTools?.find(t => t.name === step.tool);
       
       if (!tool) {
-        logger.warn('Tool not found', { tool: step.tool });
+        console.warn('AI TOOL NOT FOUND, SKIPPING', { tool: step.tool });
         results.push({
           success: false,
           tool: step.tool,
@@ -476,9 +483,10 @@ export async function executePlan(plan, userId, vehicleContext = null) {
           description: step.description,
         });
 
-        logger.info('Tool executed successfully', { tool: step.tool });
+        console.log('AI TOOL EXECUTED SUCCESSFULLY', { tool: step.tool });
       } catch (error) {
-        logger.error('Tool execution failed', { tool: step.tool, error: error.message });
+        console.error('AI TOOL EXECUTION FAILED', { tool: step.tool, error: error.message });
+        console.error(error.stack);
         results.push({
           success: false,
           tool: step.tool,
@@ -489,7 +497,9 @@ export async function executePlan(plan, userId, vehicleContext = null) {
 
     return results;
   } catch (error) {
-    logger.error('Error executing plan', { error: error.message });
-    throw error;
+    console.error('AI FAILED AT EXECUTE PLAN', error);
+    console.error(error.stack);
+    // Return empty results instead of throwing
+    return [];
   }
 }

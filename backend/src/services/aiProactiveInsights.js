@@ -34,20 +34,30 @@ export async function generateProactiveInsights(userId) {
 
     const insights = [];
 
-    for (const vehicle of vehicles) {
-      const vehicleInsights = await generateVehicleInsights(vehicle);
-      insights.push(...vehicleInsights);
+    for (const vehicle of (vehicles || [])) {
+      try {
+        const vehicleInsights = await generateVehicleInsights(vehicle);
+        insights.push(...(vehicleInsights || []));
+      } catch (vehicleError) {
+        console.error('AI FAILED AT GENERATE VEHICLE INSIGHTS', vehicleError);
+        console.error(vehicleError.stack);
+      }
     }
 
     // Fleet-level insights
-    const fleetInsights = await generateFleetInsights(userId, vehicles);
-    insights.push(...fleetInsights);
+    try {
+      const fleetInsights = await generateFleetInsights(userId, vehicles);
+      insights.push(...(fleetInsights || []));
+    } catch (fleetError) {
+      console.error('AI FAILED AT GENERATE FLEET INSIGHTS', fleetError);
+      console.error(fleetError.stack);
+    }
 
     // Sort by severity
     const severityOrder = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
-    insights.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+    insights.sort((a, b) => (severityOrder[a.severity] || 3) - (severityOrder[b.severity] || 3));
 
-    logger.info('Proactive insights generated', { userId, insightCount: insights.length });
+    console.log('AI PROACTIVE INSIGHTS GENERATED', { userId, insightCount: insights.length });
 
     return {
       userId,
@@ -60,8 +70,19 @@ export async function generateProactiveInsights(userId) {
       insights: insights.slice(0, 20), // Limit to top 20
     };
   } catch (error) {
-    logger.error('Error generating proactive insights', { userId, error: error.message });
-    throw error;
+    console.error('AI FAILED AT GENERATE PROACTIVE INSIGHTS', error);
+    console.error(error.stack);
+    // Return empty insights instead of throwing
+    return {
+      userId,
+      generatedAt: new Date().toISOString(),
+      totalInsights: 0,
+      criticalCount: 0,
+      highCount: 0,
+      mediumCount: 0,
+      lowCount: 0,
+      insights: [],
+    };
   }
 }
 
