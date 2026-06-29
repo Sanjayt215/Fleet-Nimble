@@ -19,10 +19,20 @@ export async function authenticate(req, res, next) {
     req.userId = user.id;
     next();
   } catch (err) {
+    console.error('AUTH ERROR', err);
+    console.error(err.stack);
+    // Always return 401 for auth errors, never 500
     if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
-      return next(new AppError('Invalid or expired token', 401, 'UNAUTHORIZED'));
+      return res.status(401).json({
+        success: false,
+        error: { code: 'UNAUTHORIZED', message: 'Invalid or expired token' }
+      });
     }
-    next(err);
+    // Convert any error to 401 to prevent 500
+    return res.status(401).json({
+      success: false,
+      error: { code: 'UNAUTHORIZED', message: err.message || 'Authentication failed' }
+    });
   }
 }
 
