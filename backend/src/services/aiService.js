@@ -5,6 +5,7 @@ import { searchKnowledgeBase, getKnowledgeBaseContext } from './aiKnowledgeBase.
 import { orchestrateAI } from './aiOrchestrator.js';
 import { buildCompactContext } from './aiCompactContext.js';
 import { AIContextBuilder } from './aiContextBuilder.js';
+import { getDeterministicFallback } from './aiDeterministicFallback.js';
 
 const AI_PROVIDER = process.env.AI_PROVIDER || 'openai';
 const AI_MODEL = process.env.AI_MODEL || 'gpt-4o-mini';
@@ -951,26 +952,16 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
       return await processChatMessageStable(userId, message, vehicleId, chatHistory);
     }
   } catch (error) {
-    console.error('AI FAILED AT SERVICE', error);
+    console.error('AI_PROVIDER_FAILED', error);
     console.error(error.stack);
-    // Return fallback instead of throwing
+    // Return intent-matched deterministic fallback
+    console.log('AI_DETERMINISTIC_FALLBACK_USED');
+    const fallbackResult = await getDeterministicFallback(userId, message, vehicleId);
     return {
-      response: 'FleetNimble AI is online, but the advanced analysis failed temporarily. Please try again or ask a simpler fleet question.',
-      context: { vehicleCount: 0, hasVehicles: false },
+      response: fallbackResult.data.reply,
+      context: fallbackResult.data.metadata,
       knowledgeResults: [],
-      metadata: {
-        title: "FleetNimble AI Assistant",
-        confidence: "LOW",
-        dataFreshness: "UNKNOWN",
-        simulatedNote: null,
-        suggestedActions: [
-          "Summarize my fleet health",
-          "Show critical alerts",
-          "Show vehicles needing maintenance",
-          "Show offline vehicles"
-        ],
-        entities: {},
-      },
+      metadata: fallbackResult.data.metadata,
     };
   }
 }
