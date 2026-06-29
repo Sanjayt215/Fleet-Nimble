@@ -18,4 +18,7 @@ router.get('/chats/:chatId', ctrl.getChat);
 // DELETE /api/ai/chats/:chatId - Delete a chat
 router.delete('/chats/:chatId', ctrl.deleteChat);
 
+// GET /api/ai/insights - Get proactive insights
+router.get('/insights', ctrl.getInsights);
+
 export default router;

@@ -335,3 +335,150 @@ setInterval(() => {
   cleanupOldConversationContexts().catch(err => logger.error('Cleanup failed', { error: err.message }));
   cleanupOldConversationSummaries().catch(err => logger.error('Cleanup failed', { error: err.message }));
 }, 24 * 60 * 60 * 1000);
+
+/**
+ * Save conversation context for follow-up support
+ */
+export async function saveConversationContext(userId, message, response, entities, vehicleContext) {
+  try {
+    const context = await prisma.aiConversationContext.create({
+      data: {
+        userId,
+        vehicleId: vehicleContext?.vehicleId || null,
+        lastMessage: message,
+        lastResponse: JSON.stringify(response),
+        lastEntities: JSON.stringify(entities),
+        lastVehicleContext: JSON.stringify(vehicleContext),
+        timestamp: new Date(),
+      },
+    });
+
+    logger.info('Conversation context saved for follow-up', { userId, contextId: context.id });
+
+    return context;
+  } catch (error) {
+    logger.error('Error saving conversation context', { userId, error: error.message });
+    throw error;
+  }
+}
+
+/**
+ * Get conversation context for pronoun resolution
+ */
+export async function getConversationContext(userId, conversationId = null) {
+  try {
+    const where = conversationId 
+      ? { userId, id: conversationId }
+      : { userId };
+
+    const context = await prisma.aiConversationContext.findFirst({
+      where,
+      orderBy: { timestamp: 'desc' },
+    });
+
+    if (!context) {
+      return null;
+    }
+
+    return {
+      id: context.id,
+      userId: context.userId,
+      vehicleId: context.vehicleId,
+      lastMessage: context.lastMessage,
+      lastResponse: context.lastResponse ? JSON.parse(context.lastResponse) : null,
+      lastEntities: context.lastEntities ? JSON.parse(context.lastEntities) : null,
+      lastVehicleContext: context.lastVehicleContext ? JSON.parse(context.lastVehicleContext) : null,
+      timestamp: context.timestamp,
+    };
+  } catch (error) {
+    logger.error('Error getting conversation context', { userId, error: error.message });
+    throw error;
+  }
+}
+
+/**
+ * Resolve pronouns in user message using conversation context
+ * Examples:
+ * - "Show Honda Amaze" -> "What about its battery?" -> "What about Honda Amaze's battery?"
+ * - "Compare Honda Amaze with Mazda 3" -> "Which is better?" -> "Which is better: Honda Amaze or Mazda 3?"
+ */
+export async function resolvePronouns(userId, message, vehicleContext = null) {
+  try {
+    const context = await getConversationContext(userId);
+    
+    if (!context || !context.lastEntities) {
+      return message; // No context to resolve from
+    }
+
+    let resolvedMessage = message;
+    const entities = context.lastEntities;
+    const lastVehicle = context.lastVehicleContext;
+
+    // Resolve "it", "its", "this", "that" to vehicle
+    const pronounPatterns = [
+      { pattern: /\bit\b/gi, replacement: lastVehicle?.name || entities.vehicles?.[0]?.name || 'it' },
+      { pattern: /\bits\b'?s?\b/gi, replacement: `${lastVehicle?.name || entities.vehicles?.[0]?.name || 'the vehicle'}'s` },
+      { pattern: /\bthis\b/gi, replacement: lastVehicle?.name || entities.vehicles?.[0]?.name || 'this vehicle' },
+      { pattern: /\bthat\b/gi, replacement: lastVehicle?.name || entities.vehicles?.[0]?.name || 'that vehicle' },
+    ];
+
+    pronounPatterns.forEach(({ pattern, replacement }) => {
+      resolvedMessage = resolvedMessage.replace(pattern, replacement);
+    });
+
+    // Resolve comparison pronouns
+    if (entities.vehicles && entities.vehicles.length >= 2) {
+      const vehicleNames = entities.vehicles.map(v => v.name).join(' or ');
+      resolvedMessage = resolvedMessage.replace(/\bwhich\b/gi, `which of ${vehicleNames}`);
+    }
+
+    if (resolvedMessage !== message) {
+      logger.info('Pronouns resolved', { userId, original: message, resolved: resolvedMessage });
+    }
+
+    return resolvedMessage;
+  } catch (error) {
+    logger.error('Error resolving pronouns', { userId, error: error.message });
+    return message; // Return original on error
+  }
+}
+
+/**
+ * Get recent conversation history for context
+ */
+export async function getConversationHistory(userId, limit = 5) {
+  try {
+    const contexts = await prisma.aiConversationContext.findMany({
+      where: { userId },
+      orderBy: { timestamp: 'desc' },
+      take: limit,
+    });
+
+    return contexts.map(ctx => ({
+      message: ctx.lastMessage,
+      vehicleId: ctx.vehicleId,
+      timestamp: ctx.timestamp,
+    }));
+  } catch (error) {
+    logger.error('Error getting conversation history', { userId, error: error.message });
+    throw error;
+  }
+}
+
+/**
+ * Clear conversation context for a user
+ */
+export async function clearConversationContext(userId) {
+  try {
+    const deleted = await prisma.aiConversationContext.deleteMany({
+      where: { userId },
+    });
+
+    logger.info('Conversation context cleared', { userId, count: deleted.count });
+
+    return deleted.count;
+  } catch (error) {
+    logger.error('Error clearing conversation context', { userId, error: error.message });
+    throw error;
+  }
+}

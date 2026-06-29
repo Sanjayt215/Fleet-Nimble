@@ -1,5 +1,6 @@
 import { AppError } from '../middleware/errorHandler.js';
 import * as aiService from '../services/aiService.js';
+import { generateProactiveInsights } from '../services/aiProactiveInsights.js';
 import prisma from '../utils/prisma.js';
 
 // Audit logging helper
@@ -169,6 +170,20 @@ export async function deleteChat(req, res, next) {
     res.json({
       success: true,
       message: 'Chat deleted',
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getInsights(req, res, next) {
+  try {
+    const userId = req.userId;
+    const insights = await generateProactiveInsights(userId);
+
+    res.json({
+      success: true,
+      data: insights,
     });
   } catch (err) {
     next(err);

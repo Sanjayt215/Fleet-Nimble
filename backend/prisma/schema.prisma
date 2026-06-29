@@ -755,18 +755,23 @@ enum DtcStatus {
 
 // AI Conversation Memory Models
 model AiConversationContext {
-  id              String   @id @default(uuid())
-  userId          String   @map("user_id")
-  vehicleId       String?  @map("vehicle_id")
-  batteryVoltage  Float?   @map("battery_voltage")
-  coolantTemp     Float?   @map("coolant_temp")
-  fuelLevel       Float?   @map("fuel_level")
-  odometer        Float?
-  rpm             Int?
-  speed           Float?
-  timestamp       DateTime @default(now())
+  id                 String   @id @default(uuid())
+  userId             String   @map("user_id")
+  vehicleId          String?  @map("vehicle_id")
+  batteryVoltage     Float?   @map("battery_voltage")
+  coolantTemp        Float?   @map("coolant_temp")
+  fuelLevel          Float?   @map("fuel_level")
+  odometer           Float?
+  rpm                Int?
+  speed              Float?
+  timestamp          DateTime @default(now())
+  lastMessage        String?  @map("last_message")
+  lastResponse       String?  @map("last_response")
+  lastEntities       String?  @map("last_entities")
+  lastVehicleContext String?  @map("last_vehicle_context")
 
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vehicle            Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([vehicleId])
@@ -1024,4 +1029,15 @@ model ApiUsageLog {
   @@index([endpoint])
   @@index([timestamp])
   @@map("api_usage_logs")
+}
+
+model AiInsight {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  insights   Json
+  generatedAt DateTime @map("generated_at")
+
+  @@index([userId])
+  @@index([generatedAt])
+  @@map("ai_insights")
 }

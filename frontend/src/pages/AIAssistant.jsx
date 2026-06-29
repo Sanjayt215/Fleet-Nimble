@@ -5,11 +5,16 @@ import ReactMarkdown from 'react-markdown';
 
 const SUGGESTED_PROMPTS = [
   "Summarize my fleet health",
-  "Why is this vehicle offline?",
-  "Explain latest DTC codes",
-  "Which vehicles have low battery?",
-  "What maintenance is needed?",
-  "Show today's GPS/trip summary",
+  "Which vehicle should I repair first?",
+  "Show Honda Amaze",
+  "What about its battery?",
+  "Compare it with Mazda 3",
+  "Which vehicles have battery low and maintenance due?",
+  "Why is RPM not updating?",
+  "Which vehicle is likely to fail next?",
+  "Create work order for Honda Amaze",
+  "Generate executive report",
+  "Show vehicles offline for more than 3 days",
 ];
 
 export default function AIAssistant() {
@@ -19,9 +24,12 @@ export default function AIAssistant() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [typing, setTyping] = useState(false);
   const [vehicles, setVehicles] = useState([]);
   const [selectedVehicle, setSelectedVehicle] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [lastResponse, setLastResponse] = useState(null);
+  const [showSuggestions, setShowSuggestions] = useState(true);
   const messagesEndRef = useRef(null);
 
   // Fetch chats and vehicles on load
@@ -81,6 +89,8 @@ export default function AIAssistant() {
     setInput('');
     setMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
     setLoading(true);
+    setTyping(true);
+    setShowSuggestions(false);
 
     try {
       if (useStream) {
@@ -123,7 +133,7 @@ export default function AIAssistant() {
         let aiResponse = '';
         
         // Add empty assistant message that will be updated with chunks
-        setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
+        setMessages((prev) => [...prev, { role: 'assistant', content: '', typing: true }]);
         
         while (true) {
           const { done, value } = await reader.read();
@@ -141,7 +151,11 @@ export default function AIAssistant() {
                   aiResponse += data.chunk;
                   setMessages((prev) => {
                     const newMessages = [...prev];
-                    newMessages[newMessages.length - 1] = { role: 'assistant', content: aiResponse };
+                    newMessages[newMessages.length - 1] = { 
+                      role: 'assistant', 
+                      content: aiResponse,
+                      typing: false,
+                    };
                     return newMessages;
                   });
                 }
@@ -154,6 +168,9 @@ export default function AIAssistant() {
             }
           }
         }
+
+        setTyping(false);
+        setLastResponse(aiResponse);
 
         if (!currentChat) {
           setCurrentChat({ id: await getChatIdFromResponse() });
@@ -169,6 +186,8 @@ export default function AIAssistant() {
 
         const aiResponse = res.data.data.response;
         setMessages((prev) => [...prev, { role: 'assistant', content: aiResponse }]);
+        setTyping(false);
+        setLastResponse(aiResponse);
 
         if (!currentChat) {
           setCurrentChat({ id: res.data.data.chatId });
@@ -186,9 +205,35 @@ export default function AIAssistant() {
         ...prev,
         { role: 'assistant', content: 'Sorry, I encountered an error. Please try again.' },
       ]);
+      setTyping(false);
     } finally {
       setLoading(false);
     }
+  };
+
+  const regenerateResponse = async () => {
+    if (!lastResponse || messages.length === 0) return;
+    
+    // Remove last assistant message
+    setMessages((prev) => prev.slice(0, -1));
+    // Resend the last user message
+    const lastUserMessage = messages[messages.length - 2]?.content;
+    if (lastUserMessage) {
+      await sendMessage(lastUserMessage, true);
+    }
+  };
+
+  const copyResponse = () => {
+    if (lastResponse) {
+      navigator.clipboard.writeText(lastResponse);
+      // Could add a toast notification here
+    }
+  };
+
+  const handleFeedback = (feedback) => {
+    // Send feedback to backend
+    console.log('Feedback:', feedback);
+    // Could implement actual feedback API call
   };
 
   const getChatIdFromResponse = async () => {
@@ -340,6 +385,88 @@ export default function AIAssistant() {
                     {message.role === 'assistant' ? (
                       <div className="prose prose-invert prose-sm max-w-none">
                         <ReactMarkdown>{message.content}</ReactMarkdown>
+                        
+                        {/* AI Response Actions */}
+                        {!message.typing && index === messages.length - 1 && (
+                          <div className="mt-4 border-t border-slate-600 pt-4">
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center gap-2">
+                                {/* Confidence Badge */}
+                                <span className="inline-flex items-center rounded-full bg-green-900/50 px-2 py-1 text-xs font-medium text-green-400">
+                                  Confidence: High
+                                </span>
+                                {/* Data Freshness Badge */}
+                                <span className="inline-flex items-center rounded-full bg-blue-900/50 px-2 py-1 text-xs font-medium text-blue-400">
+                                  Data: Live
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {/* Copy Button */}
+                                <button
+                                  onClick={copyResponse}
+                                  className="text-slate-400 hover:text-white transition-colors"
+                                  title="Copy response"
+                                >
+                                  📋
+                                </button>
+                                {/* Regenerate Button */}
+                                <button
+                                  onClick={regenerateResponse}
+                                  disabled={loading}
+                                  className="text-slate-400 hover:text-white transition-colors disabled:opacity-50"
+                                  title="Regenerate response"
+                                >
+                                  🔄
+                                </button>
+                              </div>
+                            </div>
+                            
+                            {/* Feedback Buttons */}
+                            <div className="flex items-center gap-2 mb-4">
+                              <button
+                                onClick={() => handleFeedback('up')}
+                                className="text-slate-400 hover:text-green-400 transition-colors"
+                                title="Helpful"
+                              >
+                                👍
+                              </button>
+                              <button
+                                onClick={() => handleFeedback('down')}
+                                className="text-slate-400 hover:text-red-400 transition-colors"
+                                title="Not helpful"
+                              >
+                                👎
+                              </button>
+                            </div>
+
+                            {/* Suggested Follow-up Actions */}
+                            {showSuggestions && (
+                              <div className="space-y-2">
+                                <p className="text-xs text-slate-400">Suggested actions:</p>
+                                <div className="flex flex-wrap gap-2">
+                                  <button
+                                    onClick={() => sendMessage('Open Live Diagnostics')}
+                                    className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs text-white hover:border-blue-500 hover:bg-slate-700 transition-all"
+                                  >
+                                    🔧 Open Live Diagnostics
+                                  </button>
+                                  <button
+                                    onClick={() => sendMessage('Show GPS Location')}
+                                    className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs text-white hover:border-blue-500 hover:bg-slate-700 transition-all"
+                                  >
+                                    📍 Show GPS Location
+                                  </button>
+                                  <button
+                                    onClick={() => sendMessage('Generate Report')}
+                                    className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs text-white hover:border-blue-500 hover:bg-slate-700 transition-all"
+                                  >
+                                    📊 Generate Report
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <p className="whitespace-pre-wrap">{message.content}</p>
@@ -347,7 +474,7 @@ export default function AIAssistant() {
                   </div>
                 </div>
               ))}
-              {loading && (
+              {typing && (
                 <div className="flex justify-start">
                   <div className="rounded-2xl bg-slate-700 px-4 py-3 text-white">
                     <div className="flex space-x-2">

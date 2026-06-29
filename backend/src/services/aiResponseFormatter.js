@@ -270,3 +270,319 @@ function calculateVehicleHealthScore(vehicle, telemetry) {
   
   return Math.max(0, score);
 }
+
+/**
+ * Format response with executive-quality concise format
+ * - 150-250 words
+ * - clean title
+ * - 3-6 key metrics
+ * - top 2-3 risks only
+ * - one recommended next action
+ * - confidence level
+ * - data freshness
+ */
+export async function formatResponse(combinedResults, intent, entities) {
+  try {
+    const formatted = {
+      title: generateTitle(intent, entities),
+      message: generateMessage(combinedResults, intent),
+      metrics: extractKeyMetrics(combinedResults, intent),
+      risks: extractTopRisks(combinedResults, intent),
+      recommendedAction: generateRecommendedAction(combinedResults, intent),
+      confidence: calculateConfidence(combinedResults, intent),
+      dataFreshness: calculateDataFreshness(combinedResults),
+    };
+
+    // Ensure message is 150-250 words
+    formatted.message = trimToWordCount(formatted.message, 150, 250);
+
+    return formatted;
+  } catch (error) {
+    throw new Error(`Error formatting response: ${error.message}`);
+  }
+}
+
+/**
+ * Generate title based on intent and entities
+ */
+function generateTitle(intent, entities) {
+  const vehicleNames = entities.vehicles?.map(v => v.name).join(', ') || 'Fleet';
+  
+  switch (intent.type) {
+    case 'FLEET_SUMMARY':
+      return 'Fleet Health Overview';
+    case 'VEHICLE_COMPARISON':
+      return `Vehicle Comparison: ${vehicleNames}`;
+    case 'DIAGNOSTICS':
+      return `Diagnostics: ${vehicleNames}`;
+    case 'PREDICTIVE_MAINTENANCE':
+      return 'Predictive Maintenance Analysis';
+    case 'BUSINESS_IMPACT':
+      return 'Business Impact Analysis';
+    case 'SUPPORT_TROUBLESHOOTING':
+      return 'Troubleshooting Guide';
+    case 'REPORT_GENERATION':
+      return 'Report Generated';
+    case 'VEHICLE_STATUS':
+      return `Vehicle Status: ${vehicleNames}`;
+    case 'MAINTENANCE_QUERY':
+      return 'Maintenance Status';
+    case 'PREDICTIVE_ANALYSIS':
+      return 'Predictive Analysis';
+    default:
+      return 'Fleet Operations Insight';
+  }
+}
+
+/**
+ * Generate concise message (150-250 words)
+ */
+function generateMessage(combinedResults, intent) {
+  const summary = combinedResults.summary || {};
+  
+  switch (intent.type) {
+    case 'FLEET_SUMMARY':
+      return `Your fleet consists of ${summary.totalVehicles || 0} vehicles with ${summary.onlineVehicles || 0} currently online. The overall health score is ${summary.healthScore || 'N/A'}/100 with a ${summary.riskLevel || 'UNKNOWN'} risk level. You have ${summary.criticalAlerts || 0} critical alerts requiring immediate attention and ${summary.pendingMaintenance || 0} pending maintenance items. Focus on addressing critical alerts first to minimize operational risk and ensure fleet availability.`;
+    
+    case 'VEHICLE_COMPARISON':
+      return `Comparing ${summary.vehicles?.length || 0} vehicles based on health, efficiency, and maintenance costs. The analysis reveals differences in performance metrics that can inform maintenance prioritization and operational decisions. Review the detailed comparison to identify the best-performing vehicle and areas requiring improvement.`;
+    
+    case 'DIAGNOSTICS':
+      return `Found ${summary.dtcCodes?.length || 0} active diagnostic trouble codes across your vehicles. The most critical issues require immediate attention to prevent further damage. Review the specific DTC codes and their descriptions to determine the appropriate repair actions.`;
+    
+    case 'PREDICTIVE_MAINTENANCE':
+      return `AI predictions indicate ${summary.predictions?.length || 0} potential maintenance requirements in the near future. The overall risk level is ${summary.riskLevel || 'UNKNOWN'}. Proactive maintenance based on these predictions can prevent unexpected failures and reduce downtime costs.`;
+    
+    case 'MAINTENANCE_QUERY':
+      return `You have ${summary.maintenanceItems?.length || 0} pending maintenance items with an estimated total cost of $${summary.estimatedCost || 0}. ${summary.urgentItems?.length || 0} items require urgent attention. Prioritize critical maintenance to prevent vehicle failures and ensure operational continuity.`;
+    
+    case 'PREDICTIVE_ANALYSIS':
+      return `Based on current fleet data, the vehicle most likely to fail next is identified with a ${summary.riskLevel || 'UNKNOWN'} risk level. The analysis considers health scores, predictions, and historical trends. Address the recommended maintenance items to mitigate this risk.`;
+    
+    default:
+      return `Analysis completed successfully. Review the metrics and recommendations below for detailed insights into your fleet operations. The data provides actionable information to optimize fleet performance and reduce operational risks.`;
+  }
+}
+
+/**
+ * Extract 3-6 key metrics
+ */
+function extractKeyMetrics(combinedResults, intent) {
+  const summary = combinedResults.summary || {};
+  const metrics = {};
+  
+  switch (intent.type) {
+    case 'FLEET_SUMMARY':
+      metrics['Total Vehicles'] = summary.totalVehicles || 0;
+      metrics['Online'] = summary.onlineVehicles || 0;
+      metrics['Health Score'] = `${summary.healthScore || 'N/A'}/100`;
+      metrics['Critical Alerts'] = summary.criticalAlerts || 0;
+      metrics['Pending Maintenance'] = summary.pendingMaintenance || 0;
+      metrics['Risk Level'] = summary.riskLevel || 'UNKNOWN';
+      break;
+    
+    case 'VEHICLE_COMPARISON':
+      if (summary.comparison?.healthScore) {
+        summary.comparison.healthScore.forEach(h => {
+          metrics[`${h.vehicle} Health`] = `${h.score}/100`;
+        });
+      }
+      if (summary.comparison?.fuelEfficiency) {
+        summary.comparison.fuelEfficiency.forEach(f => {
+          metrics[`${f.vehicle} Efficiency`] = f.efficiency || 'N/A';
+        });
+      }
+      break;
+    
+    case 'DIAGNOSTICS':
+      metrics['Total DTCs'] = summary.dtcCodes?.length || 0;
+      metrics['Critical Codes'] = summary.dtcCodes?.filter(d => d.code.startsWith('P0')).length || 0;
+      metrics['Affected Vehicles'] = summary.healthStatus?.length || 0;
+      break;
+    
+    case 'MAINTENANCE_QUERY':
+      metrics['Total Items'] = summary.maintenanceItems?.length || 0;
+      metrics['Urgent Items'] = summary.urgentItems?.length || 0;
+      metrics['Estimated Cost'] = `$${summary.estimatedCost || 0}`;
+      break;
+    
+    case 'PREDICTIVE_ANALYSIS':
+      metrics['Risk Level'] = summary.riskLevel || 'UNKNOWN';
+      metrics['Predictions'] = summary.predictions?.length || 0;
+      metrics['Recommendations'] = summary.recommendations?.length || 0;
+      break;
+    
+    default:
+      metrics['Items Analyzed'] = summary.count || 0;
+      metrics['Data Points'] = combinedResults.data?.length || 0;
+  }
+  
+  // Limit to 6 metrics
+  const metricKeys = Object.keys(metrics).slice(0, 6);
+  const limitedMetrics = {};
+  metricKeys.forEach(key => {
+    limitedMetrics[key] = metrics[key];
+  });
+  
+  return limitedMetrics;
+}
+
+/**
+ * Extract top 2-3 risks only
+ */
+function extractTopRisks(combinedResults, intent) {
+  const risks = [];
+  const summary = combinedResults.summary || {};
+  
+  switch (intent.type) {
+    case 'FLEET_SUMMARY':
+      if (summary.criticalAlerts > 0) {
+        risks.push({ type: 'Critical Alerts', count: summary.criticalAlerts, severity: 'CRITICAL' });
+      }
+      if (summary.offlineVehicles > 0) {
+        risks.push({ type: 'Offline Vehicles', count: summary.offlineVehicles, severity: 'HIGH' });
+      }
+      if (summary.healthScore < 60) {
+        risks.push({ type: 'Low Fleet Health', score: summary.healthScore, severity: 'HIGH' });
+      }
+      break;
+    
+    case 'DIAGNOSTICS':
+      if (summary.dtcCodes?.length > 0) {
+        risks.push({ type: 'Active DTC Codes', count: summary.dtcCodes.length, severity: 'HIGH' });
+      }
+      break;
+    
+    case 'MAINTENANCE_QUERY':
+      if (summary.urgentItems?.length > 0) {
+        risks.push({ type: 'Urgent Maintenance', count: summary.urgentItems.length, severity: 'CRITICAL' });
+      }
+      break;
+    
+    case 'PREDICTIVE_ANALYSIS':
+      if (summary.riskLevel === 'CRITICAL' || summary.riskLevel === 'HIGH') {
+        risks.push({ type: 'Predicted Failure', level: summary.riskLevel, severity: summary.riskLevel });
+      }
+      break;
+  }
+  
+  return risks.slice(0, 3);
+}
+
+/**
+ * Generate one recommended next action
+ */
+function generateRecommendedAction(combinedResults, intent) {
+  const summary = combinedResults.summary || {};
+  
+  switch (intent.type) {
+    case 'FLEET_SUMMARY':
+      if (summary.criticalAlerts > 0) return 'Address critical alerts immediately';
+      if (summary.offlineVehicles > 0) return 'Restore offline vehicle connectivity';
+      if (summary.pendingMaintenance > 0) return 'Schedule pending maintenance';
+      return 'Continue regular fleet monitoring';
+    
+    case 'DIAGNOSTICS':
+      return 'Review DTC codes and schedule diagnostic inspection';
+    
+    case 'MAINTENANCE_QUERY':
+      return 'Prioritize urgent maintenance items';
+    
+    case 'PREDICTIVE_ANALYSIS':
+      return 'Schedule proactive maintenance based on predictions';
+    
+    case 'VEHICLE_COMPARISON':
+      return 'Review comparison results and adjust fleet strategy';
+    
+    default:
+      return 'Review insights and take appropriate action';
+  }
+}
+
+/**
+ * Calculate confidence level
+ */
+function calculateConfidence(combinedResults, intent) {
+  const dataCount = combinedResults.data?.length || 0;
+  const successCount = combinedResults.data?.filter(d => d.success !== false).length || 0;
+  
+  if (dataCount === 0) return 'LOW';
+  if (successCount === dataCount) return 'HIGH';
+  if (successCount / dataCount > 0.7) return 'MEDIUM';
+  return 'LOW';
+}
+
+/**
+ * Calculate data freshness
+ */
+function calculateDataFreshness(combinedResults) {
+  const metadata = combinedResults.metadata || {};
+  const lastUpdate = metadata.lastUpdate || metadata.timestamp;
+  
+  if (!lastUpdate) return 'UNKNOWN';
+  
+  const age = Date.now() - new Date(lastUpdate).getTime();
+  
+  if (age < 5 * 60 * 1000) return 'LIVE'; // Less than 5 minutes
+  if (age < 60 * 60 * 1000) return 'RECENT'; // Less than 1 hour
+  if (age < 24 * 60 * 60 * 1000) return 'HISTORICAL'; // Less than 24 hours
+  return 'STALE';
+}
+
+/**
+ * Trim message to word count range
+ */
+function trimToWordCount(message, minWords, maxWords) {
+  const words = message.split(/\s+/);
+  
+  if (words.length <= maxWords && words.length >= minWords) {
+    return message;
+  }
+  
+  if (words.length > maxWords) {
+    return words.slice(0, maxWords).join(' ') + '...';
+  }
+  
+  // If too short, expand with generic text (shouldn't happen with proper generation)
+  return message + ' Additional analysis available upon request.';
+}
+
+/**
+ * Generate suggested follow-up actions based on context
+ */
+export async function generateSuggestedActions(intent, entities, combinedResults) {
+  const actions = [];
+  const vehicleNames = entities.vehicles?.map(v => v.name) || [];
+  
+  // Context-aware suggestions
+  if (intent.type === 'FLEET_SUMMARY') {
+    actions.push({ label: 'View Critical Alerts', action: 'show_alerts', params: { severity: 'CRITICAL' } });
+    actions.push({ label: 'Generate Fleet Report', action: 'generate_report', params: { type: 'fleet' } });
+    actions.push({ label: 'View Maintenance Schedule', action: 'show_maintenance', params: {} });
+  } else if (intent.type === 'VEHICLE_STATUS' && vehicleNames.length > 0) {
+    actions.push({ label: 'Open Live Diagnostics', action: 'show_diagnostics', params: { vehicle: vehicleNames[0] } });
+    actions.push({ label: 'Show GPS Location', action: 'show_gps', params: { vehicle: vehicleNames[0] } });
+    actions.push({ label: 'Generate Vehicle Report', action: 'generate_report', params: { vehicle: vehicleNames[0] } });
+  } else if (intent.type === 'DIAGNOSTICS') {
+    actions.push({ label: 'Explain DTC Codes', action: 'explain_dtc', params: {} });
+    actions.push({ label: 'Schedule Maintenance', action: 'schedule_maintenance', params: {} });
+    actions.push({ label: 'Compare Vehicles', action: 'compare_vehicles', params: {} });
+  } else if (intent.type === 'MAINTENANCE_QUERY') {
+    actions.push({ label: 'Schedule Maintenance', action: 'schedule_maintenance', params: {} });
+    actions.push({ label: 'View Cost Analysis', action: 'show_costs', params: {} });
+    actions.push({ label: 'Generate Maintenance Report', action: 'generate_report', params: { type: 'maintenance' } });
+  } else if (intent.type === 'PREDICTIVE_ANALYSIS') {
+    actions.push({ label: 'View Predictions', action: 'show_predictions', params: {} });
+    actions.push({ label: 'Schedule Proactive Maintenance', action: 'schedule_maintenance', params: {} });
+    actions.push({ label: 'Generate Risk Report', action: 'generate_report', params: { type: 'risk' } });
+  } else {
+    // Default suggestions
+    if (vehicleNames.length > 0) {
+      actions.push({ label: `View ${vehicleNames[0]} Details`, action: 'show_vehicle', params: { vehicle: vehicleNames[0] } });
+    }
+    actions.push({ label: 'Generate Fleet Report', action: 'generate_report', params: { type: 'fleet' } });
+    actions.push({ label: 'View Alerts', action: 'show_alerts', params: {} });
+  }
+  
+  return actions.slice(0, 3);
+}
