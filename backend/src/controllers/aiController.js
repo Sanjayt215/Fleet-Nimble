@@ -246,14 +246,19 @@ export async function chat(req, res, next) {
 
       // Standardize response shape with validation
       const safeMetadata = metadata || {
-        title: "AI Assistant",
+        title: "FleetNimble AI Assistant",
         metrics: {},
         risks: [],
         recommendedAction: null,
         confidence: "MEDIUM",
         dataFreshness: "UNKNOWN",
         simulatedNote: null,
-        suggestedActions: []
+        suggestedActions: [
+          "Summarize my fleet health",
+          "Show critical alerts",
+          "Show vehicles needing maintenance",
+          "Show offline vehicles"
+        ]
       };
 
       const responseData = {
@@ -272,58 +277,11 @@ export async function chat(req, res, next) {
     console.error('AI FAILED AT CONTROLLER', err);
     console.error(err.stack);
     
-    // If we have a chatId, return fallback response
-    if (chatId) {
-      try {
-        const fallback = getFallbackResponse(chatId, err);
-        return res.json(fallback);
-      } catch (fallbackError) {
-        console.error('AI FAILED AT FALLBACK', fallbackError);
-        console.error(fallbackError.stack);
-        // Last resort - return simple response
-        return res.json({
-          success: true,
-          data: {
-            reply: 'AI Assistant encountered an error. Please try again.',
-            chatId: chatId,
-            metadata: {
-              title: "AI Assistant",
-              metrics: {},
-              risks: [],
-              recommendedAction: "Try again",
-              confidence: "LOW",
-              dataFreshness: "UNKNOWN",
-              simulatedNote: null,
-              suggestedActions: []
-            }
-          }
-        });
-      }
-    }
-    
-    // Only throw to Express for auth errors
-    if (err.message && err.message.includes('401')) {
-      return next(err);
-    }
-    
-    // For all other errors, return 200 with fallback
-    return res.json({
-      success: true,
-      data: {
-        reply: 'AI Assistant encountered an error. Please try again.',
-        chatId: 'unknown',
-        metadata: {
-          title: "AI Assistant",
-          metrics: {},
-          risks: [],
-          recommendedAction: "Try again",
-          confidence: "LOW",
-          dataFreshness: "UNKNOWN",
-          simulatedNote: null,
-          suggestedActions: []
-        }
-      }
-    });
+    // Always return HTTP 200 with fallback response
+    // Auth errors are handled by middleware before reaching here
+    const fallback = getFallbackResponse(chatId || null, err);
+    console.log('CONTROLLER FALLBACK RESPONSE SENT', { userId: req.userId, chatId });
+    return res.json(fallback);
   }
 }
 
