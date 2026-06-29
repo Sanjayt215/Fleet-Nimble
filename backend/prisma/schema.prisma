@@ -56,6 +56,13 @@ model User {
   role          Role           @relation(fields: [roleId], references: [id])
   vehicles      Vehicle[]
   workOrders    WorkOrder[]    @relation("AssignedWorkOrders")
+  createdWorkOrders WorkOrder[] @relation("CreatedWorkOrders")
+  aiConversationContexts AiConversationContext[]
+  aiUserPreferences AiUserPreference[]
+  aiDashboards  AiDashboard[]
+  aiAnalytics   AiAnalytics[]
+  aiPerformance AiPerformance[]
+  aiErrorLogs   AiErrorLog[]
 
   @@index([email])
   @@index([roleId])
@@ -140,6 +147,10 @@ model Vehicle {
   company               Company?              @relation(fields: [companyId], references: [id])
   user                  User                  @relation(fields: [userId], references: [id])
   workOrders            WorkOrder[]
+  serviceTickets        ServiceTicket[]
+  invoices              Invoice[]
+  maintenanceReminders  MaintenanceReminder[]
+  aiConversationContexts AiConversationContext[]
 
   @@index([userId])
   @@index([companyId])
@@ -739,4 +750,219 @@ enum BehaviorEventType {
 enum DtcStatus {
   CONFIRMED
   PENDING
+}
+
+// AI Conversation Memory Models
+model AiConversationContext {
+  id              String   @id @default(uuid())
+  userId          String   @map("user_id")
+  vehicleId       String?  @map("vehicle_id")
+  batteryVoltage  Float?   @map("battery_voltage")
+  coolantTemp     Float?   @map("coolant_temp")
+  fuelLevel       Float?   @map("fuel_level")
+  odometer        Float?
+  rpm             Int?
+  speed           Float?
+  timestamp       DateTime @default(now())
+
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([vehicleId])
+  @@index([timestamp])
+  @@map("ai_conversation_contexts")
+}
+
+model AiUserPreference {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  key       String
+  value     String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@index([userId])
+  @@map("ai_user_preferences")
+}
+
+model AiConversationSummary {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  chatId      String   @map("chat_id")
+  summary     String
+  keyTopics   String[]
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([chatId])
+  @@index([createdAt])
+  @@map("ai_conversation_summaries")
+}
+
+model AiDashboard {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  date      String
+  data      Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([date])
+  @@map("ai_dashboards")
+}
+
+model AiAnalytics {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  action    String
+  metadata  Json?
+  timestamp DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([timestamp])
+  @@map("ai_analytics")
+}
+
+model AiPerformance {
+  id             String   @id @default(uuid())
+  userId         String   @map("user_id")
+  action         String
+  responseTimeMs Int      @map("response_time_ms")
+  timestamp      DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([timestamp])
+  @@map("ai_performance")
+}
+
+model AiErrorLog {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  action       String
+  errorMessage String   @map("error_message")
+  errorType    String   @map("error_type")
+  timestamp    DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([errorType])
+  @@index([timestamp])
+  @@map("ai_error_logs")
+}
+
+// Additional models for AI Actions
+model WorkOrder {
+  id          String        @id @default(uuid())
+  vehicleId   String        @map("vehicle_id")
+  description String
+  priority    String
+  assignedTo  String?       @map("assigned_to")
+  status      String        @default("PENDING")
+  createdBy   String        @map("created_by")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  vehicle     Vehicle       @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  assignedUser User?       @relation("AssignedWorkOrders", fields: [assignedTo], references: [id])
+  creator     User         @relation("CreatedWorkOrders", fields: [createdBy], references: [id])
+
+  @@index([vehicleId])
+  @@index([assignedTo])
+  @@index([status])
+  @@map("work_orders")
+}
+
+model ServiceTicket {
+  id          String   @id @default(uuid())
+  vehicleId   String   @map("vehicle_id")
+  issue       String
+  severity    String
+  category    String
+  status      String   @default("OPEN")
+  createdBy   String   @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  vehicle     Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId])
+  @@index([status])
+  @@index([severity])
+  @@map("service_tickets")
+}
+
+model EmailLog {
+  id        String   @id @default(uuid())
+  to        String
+  subject   String
+  body      String
+  priority  String   @default("NORMAL")
+  status    String   @default("SENT")
+  sentBy    String   @map("sent_by")
+  sentAt    DateTime @map("sent_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([to])
+  @@index([status])
+  @@index([sentAt])
+  @@map("email_logs")
+}
+
+model Invoice {
+  id          String   @id @default(uuid())
+  vehicleId   String   @map("vehicle_id")
+  items       Json
+  totalAmount Float    @map("total_amount")
+  dueDate     DateTime? @map("due_date")
+  notes       String?
+  status      String   @default("PENDING")
+  createdBy   String   @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  vehicle     Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("invoices")
+}
+
+model ReportExport {
+  id          String   @id @default(uuid())
+  reportType  String   @map("report_type")
+  format      String
+  dateRange   String?  @map("date_range")
+  status      String   @default("COMPLETED")
+  requestedBy String   @map("requested_by")
+  completedAt DateTime? @map("completed_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([reportType])
+  @@index([status])
+  @@index([requestedBy])
+  @@map("report_exports")
+}
+
+model MaintenanceReminder {
+  id              String   @id @default(uuid())
+  vehicleId       String   @map("vehicle_id")
+  maintenanceType String   @map("maintenance_type")
+  reminderDate    DateTime @map("reminder_date")
+  notes           String?
+  sent            Boolean  @default(false)
+  createdBy       String   @map("created_by")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  vehicle         Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId])
+  @@index([reminderDate])
+  @@index([sent])
+  @@map("maintenance_reminders")
 }
