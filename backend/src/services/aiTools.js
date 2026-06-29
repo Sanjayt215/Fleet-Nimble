@@ -1,5 +1,10 @@
 import prisma from '../utils/prisma.js';
 import logger from '../utils/logger.js';
+import { calculateFleetHealthScore, calculateAllVehicleHealthScores } from './aiAnalysisEngine.js';
+import { getAllPredictions } from './aiPredictions.js';
+import { getBusinessAnalytics } from './aiBusinessAnalytics.js';
+import { getMaintenanceAIAnalysis } from './aiMaintenanceAI.js';
+import { generateExecutiveReport, generateFleetHealthReport, generateFuelReport, generateMaintenanceReport } from './aiExecutiveReports.js';
 
 /**
  * AI Tool System
@@ -815,6 +820,133 @@ export const AI_TOOLS = {
         nearestVehicles: distances.slice(0, 5),
         recommendation: `Nearest vehicle is ${distances[0].vehicle} (${distances[0].plate}) at ${distances[0].distance.toFixed(2)} km`,
       };
+    },
+  },
+
+  analyze_fleet_health: {
+    name: 'analyze_fleet_health',
+    description: 'Analyze fleet health with comprehensive health scores and risk assessment',
+    parameters: {
+      type: 'object',
+      properties: {},
+    },
+    handler: async (userId, params) => {
+      const fleetHealth = await calculateFleetHealthScore(userId);
+      return fleetHealth;
+    },
+  },
+
+  analyze_vehicle_health: {
+    name: 'analyze_vehicle_health',
+    description: 'Analyze comprehensive vehicle health including battery, engine, maintenance, fuel efficiency, utilization, driver performance, and risk',
+    parameters: {
+      type: 'object',
+      properties: {
+        vehicleId: { type: 'string', description: 'Vehicle ID' },
+      },
+    },
+    handler: async (userId, params) => {
+      const healthScores = await calculateAllVehicleHealthScores(params.vehicleId);
+      return healthScores;
+    },
+  },
+
+  predict_failures: {
+    name: 'predict_failures',
+    description: 'Predict component failures including battery, coolant, brakes, tyres, alternator, engine, and transmission',
+    parameters: {
+      type: 'object',
+      properties: {
+        vehicleId: { type: 'string', description: 'Vehicle ID' },
+      },
+    },
+    handler: async (userId, params) => {
+      const predictions = await getAllPredictions(params.vehicleId);
+      return predictions;
+    },
+  },
+
+  analyze_business_metrics: {
+    name: 'analyze_business_metrics',
+    description: 'Analyze business metrics including fleet utilization, availability, downtime, idle time, fuel cost, maintenance cost, and top/worst performing vehicles',
+    parameters: {
+      type: 'object',
+      properties: {
+        days: { type: 'number', description: 'Number of days to analyze (default: 30)' },
+      },
+    },
+    handler: async (userId, params) => {
+      const days = params.days || 30;
+      const analytics = await getBusinessAnalytics(userId, days);
+      return analytics;
+    },
+  },
+
+  analyze_maintenance: {
+    name: 'analyze_maintenance',
+    description: 'Analyze maintenance with automatic prioritization, schedule suggestions, cost estimates, and duration estimates',
+    parameters: {
+      type: 'object',
+      properties: {},
+    },
+    handler: async (userId, params) => {
+      const maintenanceAnalysis = await getMaintenanceAIAnalysis(userId);
+      return maintenanceAnalysis;
+    },
+  },
+
+  generate_executive_report: {
+    name: 'generate_executive_report',
+    description: 'Generate comprehensive executive report including fleet health, fuel, maintenance, battery, and business analytics',
+    parameters: {
+      type: 'object',
+      properties: {},
+    },
+    handler: async (userId, params) => {
+      const executiveReport = await generateExecutiveReport(userId);
+      return executiveReport;
+    },
+  },
+
+  generate_fleet_health_report: {
+    name: 'generate_fleet_health_report',
+    description: 'Generate detailed fleet health report with vehicle breakdown and recommendations',
+    parameters: {
+      type: 'object',
+      properties: {},
+    },
+    handler: async (userId, params) => {
+      const fleetHealthReport = await generateFleetHealthReport(userId);
+      return fleetHealthReport;
+    },
+  },
+
+  generate_fuel_report: {
+    name: 'generate_fuel_report',
+    description: 'Generate fuel consumption report with efficiency analysis and vehicle breakdown',
+    parameters: {
+      type: 'object',
+      properties: {
+        days: { type: 'number', description: 'Number of days to analyze (default: 30)' },
+      },
+    },
+    handler: async (userId, params) => {
+      const days = params.days || 30;
+      const fuelReport = await generateFuelReport(userId, days);
+      return fuelReport;
+    },
+  },
+
+  generate_maintenance_report: {
+    name: 'generate_maintenance_report',
+    description: 'Generate maintenance report with pending items, completed items, and cost estimates',
+    parameters: {
+      type: 'object',
+      properties: {},
+    },
+    handler: async (userId, params) => {
+      const maintenanceReport = await generateMaintenanceReport(userId);
+      return maintenanceReport;
     },
   },
 };
