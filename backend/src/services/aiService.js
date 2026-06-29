@@ -2,6 +2,7 @@ import prisma from '../utils/prisma.js';
 import logger from '../utils/logger.js';
 import { executeTool, getAvailableTools } from './aiTools.js';
 import { searchKnowledgeBase, getKnowledgeBaseContext } from './aiKnowledgeBase.js';
+import { orchestrateAI } from './aiOrchestrator.js';
 
 const AI_PROVIDER = process.env.AI_PROVIDER || 'openai';
 const AI_MODEL = process.env.AI_MODEL || 'gpt-4o-mini';
@@ -484,35 +485,30 @@ async function callAIStream(messages, onChunk) {
  */
 export async function processChatMessage(userId, message, vehicleId = null, chatHistory = []) {
   try {
+    // Use AI Orchestrator for structured responses with metadata
+    const orchestratorResult = await orchestrateAI(userId, message, vehicleId);
+    
     // Build context from user's fleet data
     const context = await buildContext(userId, vehicleId);
 
     // Search knowledge base for relevant information
     const knowledgeResults = searchKnowledgeBase(message);
-    const knowledgeContext = knowledgeResults.length > 0
-      ? `\n\nKnowledge Base Results:\n${knowledgeResults.map(r => `${r.type}: ${r.question || r.section || r.issue}\n${r.answer || r.content || r.solution}`).join('\n\n')}`
-      : '';
-
-    // Prepare messages for AI
-    const messages = [
-      {
-        role: 'user',
-        content: `User Question: ${message}\n\nFleet Context: ${JSON.stringify(context, null, 2)}${knowledgeContext}`,
-      },
-    ];
-
-    // Add chat history if available
-    if (chatHistory && chatHistory.length > 0) {
-      messages.unshift(...chatHistory.slice(-10)); // Keep last 10 messages for context
-    }
-
-    // Call AI
-    const aiResponse = await callAI(messages);
 
     return {
-      response: aiResponse,
+      response: orchestratorResult.message,
       context,
       knowledgeResults,
+      metadata: {
+        title: orchestratorResult.title,
+        metrics: orchestratorResult.metrics,
+        risks: orchestratorResult.risks,
+        recommendedAction: orchestratorResult.recommendedAction,
+        confidence: orchestratorResult.confidence,
+        dataFreshness: orchestratorResult.dataFreshness,
+        simulatedNote: orchestratorResult.simulatedNote,
+        suggestedActions: orchestratorResult.suggestedActions,
+        entities: orchestratorResult.entities,
+      },
     };
   } catch (error) {
     logger.error('Error processing chat message', { error: error.message, userId });

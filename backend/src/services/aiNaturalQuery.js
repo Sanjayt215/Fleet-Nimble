@@ -391,6 +391,7 @@ async function queryHighestFuelUsage(userId) {
 
 /**
  * Query which vehicle should be repaired first
+ * Returns top 3 vehicles ranked by DTC severity + critical alerts + maintenance overdue + battery/coolant/fuel risk + telemetry freshness
  */
 async function queryRepairPriority(userId) {
   const vehicles = await prisma.vehicle.findMany({
@@ -405,39 +406,94 @@ async function queryRepairPriority(userId) {
 
   const scoredVehicles = vehicles.map(v => {
     let score = 0;
+    let riskFactors = [];
     
-    // Critical maintenance
-    score += v.maintenanceLogs.filter(log => log.priority === 'CRITICAL').length * 10;
-    score += v.maintenanceLogs.filter(log => log.priority === 'HIGH').length * 5;
+    // Critical maintenance (highest priority)
+    const criticalMaintenance = v.maintenanceLogs.filter(log => log.priority === 'CRITICAL').length;
+    const highMaintenance = v.maintenanceLogs.filter(log => log.priority === 'HIGH').length;
+    score += criticalMaintenance * 10;
+    score += highMaintenance * 5;
+    if (criticalMaintenance > 0) riskFactors.push(`${criticalMaintenance} critical maintenance items`);
     
-    // Critical alerts
-    score += v.alerts.filter(a => a.severity === 'CRITICAL').length * 8;
-    score += v.alerts.filter(a => a.severity === 'HIGH').length * 4;
+    // Critical alerts (high priority)
+    const criticalAlerts = v.alerts.filter(a => a.severity === 'CRITICAL').length;
+    const highAlerts = v.alerts.filter(a => a.severity === 'HIGH').length;
+    score += criticalAlerts * 8;
+    score += highAlerts * 4;
+    if (criticalAlerts > 0) riskFactors.push(`${criticalAlerts} critical alerts`);
     
-    // Critical DTC codes
-    score += v.dtcCodes.filter(d => d.code.startsWith('P0')).length * 6;
+    // Critical DTC codes (P0 codes are powertrain critical)
+    const criticalDTCs = v.dtcCodes.filter(d => d.code.startsWith('P0')).length;
+    const otherDTCs = v.dtcCodes.filter(d => !d.code.startsWith('P0')).length;
+    score += criticalDTCs * 6;
+    score += otherDTCs * 3;
+    if (criticalDTCs > 0) riskFactors.push(`${criticalDTCs} critical DTC codes`);
     
-    // Low battery
+    // Battery risk
     const latestData = v.liveData && v.liveData.length > 0 ? v.liveData[0] : null;
-    if (latestData && latestData.batteryVoltage && latestData.batteryVoltage < 12) {
-      score += 7;
+    if (latestData && latestData.batteryVoltage) {
+      if (latestData.batteryVoltage < 11) {
+        score += 10;
+        riskFactors.push('Critical battery voltage');
+      } else if (latestData.batteryVoltage < 12) {
+        score += 7;
+        riskFactors.push('Low battery voltage');
+      }
+    }
+    
+    // Coolant risk
+    if (latestData && latestData.coolantTemp) {
+      if (latestData.coolantTemp > 105) {
+        score += 10;
+        riskFactors.push('Critical coolant temperature');
+      } else if (latestData.coolantTemp > 100) {
+        score += 7;
+        riskFactors.push('High coolant temperature');
+      }
+    }
+    
+    // Fuel risk
+    if (latestData && latestData.fuelLevel) {
+      if (latestData.fuelLevel < 10) {
+        score += 5;
+        riskFactors.push('Critical fuel level');
+      } else if (latestData.fuelLevel < 20) {
+        score += 3;
+        riskFactors.push('Low fuel level');
+      }
+    }
+    
+    // Telemetry freshness (penalty for stale data)
+    const lastUpdate = latestData?.timestamp;
+    if (lastUpdate) {
+      const hoursSinceUpdate = (Date.now() - new Date(lastUpdate).getTime()) / (1000 * 60 * 60);
+      if (hoursSinceUpdate > 24) {
+        score -= 5; // Reduce score for stale data
+        riskFactors.push('Stale telemetry data');
+      } else if (hoursSinceUpdate > 12) {
+        score -= 2;
+      }
+    } else {
+      score -= 10; // Heavy penalty for no data
+      riskFactors.push('No telemetry data');
     }
 
     return {
       vehicle: v,
       score,
+      riskFactors,
     };
   });
 
   scoredVehicles.sort((a, b) => b.score - a.score);
 
-  const topVehicle = scoredVehicles[0];
+  const topVehicles = scoredVehicles.slice(0, 3);
 
-  if (!topVehicle || topVehicle.score === 0) {
+  if (topVehicles.length === 0 || topVehicles[0].score === 0) {
     return {
       success: true,
       queryType: 'REPAIR_PRIORITY',
-      vehicle: null,
+      vehicles: [],
       message: 'No vehicles require immediate repair',
     };
   }
@@ -445,15 +501,21 @@ async function queryRepairPriority(userId) {
   return {
     success: true,
     queryType: 'REPAIR_PRIORITY',
-    vehicle: {
-      id: topVehicle.vehicle.id,
-      name: `${topVehicle.vehicle.make} ${topVehicle.vehicle.model}`,
-      plate: topVehicle.vehicle.plateNumber || topVehicle.vehicle.vin,
-      priorityScore: topVehicle.score,
-      criticalMaintenance: topVehicle.vehicle.maintenanceLogs.filter(log => log.priority === 'CRITICAL').length,
-      criticalAlerts: topVehicle.vehicle.alerts.filter(a => a.severity === 'CRITICAL').length,
-      criticalDTCs: topVehicle.vehicle.dtcCodes.filter(d => d.code.startsWith('P0')).length,
-    },
+    vehicles: topVehicles.map((item, index) => ({
+      rank: index + 1,
+      id: item.vehicle.id,
+      name: `${item.vehicle.make} ${item.vehicle.model}`,
+      plate: item.vehicle.plateNumber || item.vehicle.vin,
+      priorityScore: item.score,
+      riskFactors: item.riskFactors,
+      criticalMaintenance: item.vehicle.maintenanceLogs.filter(log => log.priority === 'CRITICAL').length,
+      criticalAlerts: item.vehicle.alerts.filter(a => a.severity === 'CRITICAL').length,
+      criticalDTCs: item.vehicle.dtcCodes.filter(d => d.code.startsWith('P0')).length,
+      batteryVoltage: item.vehicle.liveData[0]?.batteryVoltage,
+      coolantTemp: item.vehicle.liveData[0]?.coolantTemp,
+      fuelLevel: item.vehicle.liveData[0]?.fuelLevel,
+    })),
+    count: topVehicles.length,
   };
 }
 

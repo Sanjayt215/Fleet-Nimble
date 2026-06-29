@@ -94,7 +94,7 @@ export async function chat(req, res, next) {
       }
     } else {
       // Non-streaming response
-      const { response, context } = await aiService.processChatMessage(
+      const { response, context, metadata } = await aiService.processChatMessage(
         userId,
         message,
         vehicleId,
@@ -108,6 +108,7 @@ export async function chat(req, res, next) {
           vehicleCount: context.vehicleCount,
           hasVehicles: context.hasVehicles,
         },
+        metadata,
       });
 
       // Audit log AI response
@@ -122,6 +123,7 @@ export async function chat(req, res, next) {
           chatId: chat.id,
           response,
           context,
+          metadata,
         },
       });
     }

@@ -62,8 +62,8 @@ export function createFleetSummaryResponse(fleetData) {
       : 'Low operational risk',
     confidence: 'High',
     dataFreshness: fleetData.lastTelemetryUpdate 
-      ? Date.now() - new Date(fleetData.lastTelemetryUpdate).getTime() < 3600000 ? 'Live' : 'Historical'
-      : 'Offline',
+      ? Date.now() - new Date(fleetData.lastTelemetryUpdate).getTime() < 3600000 ? '🟢 Live' : '🟡 Historical'
+      : '🔴 Offline',
   });
 }
 
@@ -80,12 +80,12 @@ export function createVehicleStatusResponse(vehicle, telemetry) {
       'Status': vehicle.liveState?.vehicleStatus || 'Unknown',
       'Ignition': vehicle.liveState?.ignitionStatus ? 'ON' : 'OFF',
       'Telemetry': vehicle.telemetryOnline ? 'Online' : 'Offline',
-      'Battery Voltage': telemetry?.batteryVoltage ? `${telemetry.batteryVoltage.toFixed(2)}V` : 'N/A',
-      'Coolant Temp': telemetry?.coolantTemp ? `${telemetry.coolantTemp.toFixed(1)}°C` : 'N/A',
-      'Fuel Level': telemetry?.fuelLevel ? `${telemetry.fuelLevel.toFixed(1)}%` : 'N/A',
-      'RPM': telemetry?.rpm || 'N/A',
-      'Speed': telemetry?.speed || 'N/A',
-      'Health Score': `${healthScore}/100`,
+      'Battery Voltage': telemetry?.batteryVoltage ? `${telemetry.batteryVoltage.toFixed(2)}V` : 'Score unavailable because live telemetry is missing',
+      'Coolant Temp': telemetry?.coolantTemp ? `${telemetry.coolantTemp.toFixed(1)}°C` : 'Score unavailable because live telemetry is missing',
+      'Fuel Level': telemetry?.fuelLevel ? `${telemetry.fuelLevel.toFixed(1)}%` : 'Score unavailable because live telemetry is missing',
+      'RPM': telemetry?.rpm || 'Score unavailable because live telemetry is missing',
+      'Speed': telemetry?.speed || 'Score unavailable because live telemetry is missing',
+      'Health Score': vehicle.telemetryOnline ? `${healthScore}/100` : 'Score unavailable because live telemetry is missing',
     },
     priority: healthScore < 50 ? 'Critical' : healthScore < 70 ? 'High' : 'Medium',
     recommendations: [
@@ -97,7 +97,7 @@ export function createVehicleStatusResponse(vehicle, telemetry) {
       ? 'High risk of vehicle failure and downtime'
       : 'Low operational risk',
     confidence: vehicle.telemetryOnline ? 'High' : 'Medium',
-    dataFreshness: vehicle.telemetryOnline ? 'Live' : 'Offline',
+    dataFreshness: vehicle.telemetryOnline ? '🟢 Live' : '🔴 Offline',
   });
 }
 
@@ -126,7 +126,7 @@ export function createAlertsResponse(alerts) {
       ? 'High risk of vehicle damage and safety incidents'
       : 'Moderate operational impact',
     confidence: 'High',
-    dataFreshness: 'Live',
+    dataFreshness: '🟢 Live',
     sections: alerts.slice(0, 5).map(alert => ({
       type: 'alert',
       vehicle: alert.vehicle.plateNumber,
@@ -165,7 +165,7 @@ export function createMaintenanceResponse(maintenanceItems) {
       ? 'High risk of vehicle failure and increased repair costs'
       : 'Low operational impact',
     confidence: 'High',
-    dataFreshness: 'Live',
+    dataFreshness: '🟢 Live',
     sections: maintenanceItems.slice(0, 5).map(item => ({
       type: 'maintenance',
       vehicle: item.vehicle.plateNumber,
@@ -198,7 +198,7 @@ export function createDiagnosticsResponse(dtcCodes) {
       ? 'Potential vehicle performance issues and emissions problems'
       : 'No operational impact',
     confidence: 'High',
-    dataFreshness: 'Live',
+    dataFreshness: '🟢 Live',
     sections: dtcCodes.slice(0, 5).map(dtc => ({
       type: 'dtc',
       vehicle: dtc.vehicle.plateNumber,
@@ -231,7 +231,7 @@ export function createGPSResponse(vehicle, location) {
     ].filter(Boolean),
     businessImpact: 'No immediate business impact',
     confidence: location ? 'High' : 'Low',
-    dataFreshness: location ? 'Live' : 'Offline',
+    dataFreshness: location ? '🟢 Live' : '🔴 Offline',
   });
 }
 
@@ -247,7 +247,7 @@ export function createSupportResponse(topic, steps) {
     recommendations: [],
     businessImpact: null,
     confidence: 'High',
-    dataFreshness: 'N/A',
+    dataFreshness: '⚪ Simulated',
     sections: steps.map((step, index) => ({
       type: 'step',
       step: index + 1,
@@ -293,8 +293,14 @@ export async function formatResponse(combinedResults, intent, entities) {
       dataFreshness: calculateDataFreshness(combinedResults),
     };
 
-    // Ensure message is 150-250 words
-    formatted.message = trimToWordCount(formatted.message, 150, 250);
+    // Ensure message is 150-220 words (unless detailed report requested)
+    const isDetailedReport = intent.type === 'REPORT_GENERATION' && entities.details === 'detailed';
+    formatted.message = trimToWordCount(formatted.message, isDetailedReport ? 300 : 150, isDetailedReport ? 500 : 220);
+
+    // Add simulated data note if data is not live
+    if (formatted.dataFreshness.includes('Historical') || formatted.dataFreshness.includes('Simulated') || formatted.dataFreshness.includes('Offline')) {
+      formatted.simulatedNote = 'Note: This recommendation is based on simulated/historical data, not live telemetry.';
+    }
 
     return formatted;
   } catch (error) {
@@ -342,25 +348,30 @@ function generateMessage(combinedResults, intent) {
   
   switch (intent.type) {
     case 'FLEET_SUMMARY':
-      return `Your fleet consists of ${summary.totalVehicles || 0} vehicles with ${summary.onlineVehicles || 0} currently online. The overall health score is ${summary.healthScore || 'N/A'}/100 with a ${summary.riskLevel || 'UNKNOWN'} risk level. You have ${summary.criticalAlerts || 0} critical alerts requiring immediate attention and ${summary.pendingMaintenance || 0} pending maintenance items. Focus on addressing critical alerts first to minimize operational risk and ensure fleet availability.`;
+      return `Your fleet has ${summary.totalVehicles || 0} vehicles with ${summary.onlineVehicles || 0} online. Health score: ${summary.healthScore || 'N/A'}/100. Risk level: ${summary.riskLevel || 'UNKNOWN'}. Critical alerts: ${summary.criticalAlerts || 0}. Pending maintenance: ${summary.pendingMaintenance || 0}. Address critical alerts first to minimize operational risk.`;
     
     case 'VEHICLE_COMPARISON':
-      return `Comparing ${summary.vehicles?.length || 0} vehicles based on health, efficiency, and maintenance costs. The analysis reveals differences in performance metrics that can inform maintenance prioritization and operational decisions. Review the detailed comparison to identify the best-performing vehicle and areas requiring improvement.`;
+      return `Comparing ${summary.vehicles?.length || 0} vehicles on health, efficiency, and maintenance costs. Analysis reveals performance differences for maintenance prioritization. Review comparison to identify best-performing vehicle and improvement areas.`;
     
     case 'DIAGNOSTICS':
-      return `Found ${summary.dtcCodes?.length || 0} active diagnostic trouble codes across your vehicles. The most critical issues require immediate attention to prevent further damage. Review the specific DTC codes and their descriptions to determine the appropriate repair actions.`;
+      return `Found ${summary.dtcCodes?.length || 0} active DTC codes across vehicles. Critical issues require immediate attention to prevent further damage. Review specific DTC codes and descriptions for appropriate repair actions.`;
     
     case 'PREDICTIVE_MAINTENANCE':
-      return `AI predictions indicate ${summary.predictions?.length || 0} potential maintenance requirements in the near future. The overall risk level is ${summary.riskLevel || 'UNKNOWN'}. Proactive maintenance based on these predictions can prevent unexpected failures and reduce downtime costs.`;
+      return `AI predictions indicate ${summary.predictions?.length || 0} potential maintenance requirements. Risk level: ${summary.riskLevel || 'UNKNOWN'}. Proactive maintenance prevents unexpected failures and reduces downtime costs.`;
     
     case 'MAINTENANCE_QUERY':
-      return `You have ${summary.maintenanceItems?.length || 0} pending maintenance items with an estimated total cost of $${summary.estimatedCost || 0}. ${summary.urgentItems?.length || 0} items require urgent attention. Prioritize critical maintenance to prevent vehicle failures and ensure operational continuity.`;
+      return `You have ${summary.maintenanceItems?.length || 0} pending maintenance items. Estimated cost: $${summary.estimatedCost || 0}. Urgent items: ${summary.urgentItems?.length || 0}. Prioritize critical maintenance to prevent failures.`;
     
     case 'PREDICTIVE_ANALYSIS':
-      return `Based on current fleet data, the vehicle most likely to fail next is identified with a ${summary.riskLevel || 'UNKNOWN'} risk level. The analysis considers health scores, predictions, and historical trends. Address the recommended maintenance items to mitigate this risk.`;
+      const topVehicles = summary.vehicles || [];
+      if (topVehicles.length > 0) {
+        const topVehicle = topVehicles[0];
+        return `Top risk vehicle: ${topVehicle.name} (${topVehicle.plate}). Priority score: ${topVehicle.priorityScore}. Risk factors: ${topVehicle.riskFactors?.join(', ') || 'None'}. Critical maintenance: ${topVehicle.criticalMaintenance}. Critical alerts: ${topVehicle.criticalAlerts}. Critical DTCs: ${topVehicle.criticalDTCs}. Address this vehicle immediately to prevent failure.`;
+      }
+      return `Based on fleet data, the vehicle most likely to fail next has ${summary.riskLevel || 'UNKNOWN'} risk level. Analysis considers health scores, predictions, and historical trends. Address recommended maintenance to mitigate risk.`;
     
     default:
-      return `Analysis completed successfully. Review the metrics and recommendations below for detailed insights into your fleet operations. The data provides actionable information to optimize fleet performance and reduce operational risks.`;
+      return `Analysis completed. Review metrics and recommendations for fleet operations insights. Data provides actionable information to optimize performance and reduce risks.`;
   }
 }
 
@@ -417,11 +428,11 @@ function extractKeyMetrics(combinedResults, intent) {
       metrics['Data Points'] = combinedResults.data?.length || 0;
   }
   
-  // Limit to 6 metrics
+  // Limit to 6 metrics and replace N/A with proper message
   const metricKeys = Object.keys(metrics).slice(0, 6);
   const limitedMetrics = {};
   metricKeys.forEach(key => {
-    limitedMetrics[key] = metrics[key];
+    limitedMetrics[key] = metrics[key] === 'N/A' ? 'Score unavailable because live telemetry is missing' : metrics[key];
   });
   
   return limitedMetrics;
@@ -523,10 +534,10 @@ function calculateDataFreshness(combinedResults) {
   
   const age = Date.now() - new Date(lastUpdate).getTime();
   
-  if (age < 5 * 60 * 1000) return 'LIVE'; // Less than 5 minutes
-  if (age < 60 * 60 * 1000) return 'RECENT'; // Less than 1 hour
-  if (age < 24 * 60 * 60 * 1000) return 'HISTORICAL'; // Less than 24 hours
-  return 'STALE';
+  if (age < 5 * 60 * 1000) return '🟢 Live'; // Less than 5 minutes
+  if (age < 60 * 60 * 1000) return '🟡 Historical'; // Less than 1 hour
+  if (age < 24 * 60 * 60 * 1000) return '🟡 Historical'; // Less than 24 hours
+  return '🔴 Offline';
 }
 
 /**
@@ -554,35 +565,11 @@ export async function generateSuggestedActions(intent, entities, combinedResults
   const actions = [];
   const vehicleNames = entities.vehicles?.map(v => v.name) || [];
   
-  // Context-aware suggestions
-  if (intent.type === 'FLEET_SUMMARY') {
-    actions.push({ label: 'View Critical Alerts', action: 'show_alerts', params: { severity: 'CRITICAL' } });
-    actions.push({ label: 'Generate Fleet Report', action: 'generate_report', params: { type: 'fleet' } });
-    actions.push({ label: 'View Maintenance Schedule', action: 'show_maintenance', params: {} });
-  } else if (intent.type === 'VEHICLE_STATUS' && vehicleNames.length > 0) {
-    actions.push({ label: 'Open Live Diagnostics', action: 'show_diagnostics', params: { vehicle: vehicleNames[0] } });
-    actions.push({ label: 'Show GPS Location', action: 'show_gps', params: { vehicle: vehicleNames[0] } });
-    actions.push({ label: 'Generate Vehicle Report', action: 'generate_report', params: { vehicle: vehicleNames[0] } });
-  } else if (intent.type === 'DIAGNOSTICS') {
-    actions.push({ label: 'Explain DTC Codes', action: 'explain_dtc', params: {} });
-    actions.push({ label: 'Schedule Maintenance', action: 'schedule_maintenance', params: {} });
-    actions.push({ label: 'Compare Vehicles', action: 'compare_vehicles', params: {} });
-  } else if (intent.type === 'MAINTENANCE_QUERY') {
-    actions.push({ label: 'Schedule Maintenance', action: 'schedule_maintenance', params: {} });
-    actions.push({ label: 'View Cost Analysis', action: 'show_costs', params: {} });
-    actions.push({ label: 'Generate Maintenance Report', action: 'generate_report', params: { type: 'maintenance' } });
-  } else if (intent.type === 'PREDICTIVE_ANALYSIS') {
-    actions.push({ label: 'View Predictions', action: 'show_predictions', params: {} });
-    actions.push({ label: 'Schedule Proactive Maintenance', action: 'schedule_maintenance', params: {} });
-    actions.push({ label: 'Generate Risk Report', action: 'generate_report', params: { type: 'risk' } });
-  } else {
-    // Default suggestions
-    if (vehicleNames.length > 0) {
-      actions.push({ label: `View ${vehicleNames[0]} Details`, action: 'show_vehicle', params: { vehicle: vehicleNames[0] } });
-    }
-    actions.push({ label: 'Generate Fleet Report', action: 'generate_report', params: { type: 'fleet' } });
-    actions.push({ label: 'View Alerts', action: 'show_alerts', params: {} });
-  }
+  // Standard action buttons for all responses
+  actions.push({ label: 'Open Diagnostics', action: 'show_diagnostics', params: { vehicle: vehicleNames[0] || null } });
+  actions.push({ label: 'Open GPS', action: 'show_gps', params: { vehicle: vehicleNames[0] || null } });
+  actions.push({ label: 'Create Work Order', action: 'create_work_order', params: { vehicle: vehicleNames[0] || null } });
+  actions.push({ label: 'Generate Report', action: 'generate_report', params: { type: 'fleet' } });
   
-  return actions.slice(0, 3);
+  return actions.slice(0, 4);
 }

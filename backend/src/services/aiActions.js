@@ -210,6 +210,7 @@ async function scheduleMaintenance(params, userId) {
 
 /**
  * Generate work order
+ * Creates a real DB record and returns workOrderId
  */
 async function generateWorkOrder(params, userId) {
   const { vehicleId, description, priority, assignedTo } = params;
@@ -232,6 +233,7 @@ async function generateWorkOrder(params, userId) {
     workOrderId: workOrder.id,
     status: workOrder.status,
     priority: workOrder.priority,
+    vehicleId: workOrder.vehicleId,
   };
 }
 

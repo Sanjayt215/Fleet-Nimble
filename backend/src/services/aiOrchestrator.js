@@ -67,6 +67,7 @@ export async function orchestrateAI(userId, message, vehicleContext = null) {
       recommendedAction: formattedResponse.recommendedAction,
       confidence: formattedResponse.confidence,
       dataFreshness: formattedResponse.dataFreshness,
+      simulatedNote: formattedResponse.simulatedNote,
       suggestedActions,
       plan: plan.steps.map(s => s.description),
       entities,

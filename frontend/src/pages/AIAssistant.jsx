@@ -185,7 +185,14 @@ export default function AIAssistant() {
         });
 
         const aiResponse = res.data.data.response;
-        setMessages((prev) => [...prev, { role: 'assistant', content: aiResponse }]);
+        const metadata = res.data.data.metadata || {};
+        setMessages((prev) => [...prev, { 
+          role: 'assistant', 
+          content: aiResponse,
+          confidence: metadata.confidence,
+          dataFreshness: metadata.dataFreshness,
+          simulatedNote: metadata.simulatedNote,
+        }]);
         setTyping(false);
         setLastResponse(aiResponse);
 
@@ -386,6 +393,13 @@ export default function AIAssistant() {
                       <div className="prose prose-invert prose-sm max-w-none">
                         <ReactMarkdown>{message.content}</ReactMarkdown>
                         
+                        {/* Simulated Data Note */}
+                        {message.simulatedNote && (
+                          <div className="mt-3 rounded-lg bg-yellow-900/30 border border-yellow-700/50 px-3 py-2 text-xs text-yellow-300">
+                            ⚠️ {message.simulatedNote}
+                          </div>
+                        )}
+                        
                         {/* AI Response Actions */}
                         {!message.typing && index === messages.length - 1 && (
                           <div className="mt-4 border-t border-slate-600 pt-4">
@@ -393,11 +407,11 @@ export default function AIAssistant() {
                               <div className="flex items-center gap-2">
                                 {/* Confidence Badge */}
                                 <span className="inline-flex items-center rounded-full bg-green-900/50 px-2 py-1 text-xs font-medium text-green-400">
-                                  Confidence: High
+                                  Confidence: {message.confidence || 'High'}
                                 </span>
                                 {/* Data Freshness Badge */}
                                 <span className="inline-flex items-center rounded-full bg-blue-900/50 px-2 py-1 text-xs font-medium text-blue-400">
-                                  Data: Live
+                                  {message.dataFreshness || '🟢 Live'}
                                 </span>
                               </div>
                               <div className="flex items-center gap-2">
@@ -445,16 +459,22 @@ export default function AIAssistant() {
                                 <p className="text-xs text-slate-400">Suggested actions:</p>
                                 <div className="flex flex-wrap gap-2">
                                   <button
-                                    onClick={() => sendMessage('Open Live Diagnostics')}
+                                    onClick={() => sendMessage('Open Diagnostics')}
                                     className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs text-white hover:border-blue-500 hover:bg-slate-700 transition-all"
                                   >
-                                    🔧 Open Live Diagnostics
+                                    🔧 Open Diagnostics
                                   </button>
                                   <button
-                                    onClick={() => sendMessage('Show GPS Location')}
+                                    onClick={() => sendMessage('Open GPS')}
                                     className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs text-white hover:border-blue-500 hover:bg-slate-700 transition-all"
                                   >
-                                    📍 Show GPS Location
+                                    📍 Open GPS
+                                  </button>
+                                  <button
+                                    onClick={() => sendMessage('Create Work Order')}
+                                    className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs text-white hover:border-blue-500 hover:bg-slate-700 transition-all"
+                                  >
+                                    📋 Create Work Order
                                   </button>
                                   <button
                                     onClick={() => sendMessage('Generate Report')}

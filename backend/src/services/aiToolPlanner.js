@@ -413,6 +413,11 @@ function buildMaintenanceQueryPlan(entities) {
 function buildPredictiveAnalysisPlan(entities) {
   return [
     {
+      tool: 'natural_query',
+      description: 'Get repair priority ranking',
+      params: { queryType: 'REPAIR_PRIORITY' },
+    },
+    {
       tool: 'get_all_predictions',
       description: 'Get all predictions',
       params: {},
