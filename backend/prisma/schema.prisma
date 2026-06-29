@@ -35,34 +35,37 @@ model Company {
 }
 
 model User {
-  id            String         @id @default(uuid())
-  name          String
-  email         String         @unique
-  passwordHash  String         @map("password_hash")
-  roleId        Int            @map("role_id")
-  deletedAt     DateTime?      @map("deleted_at")
-  createdAt     DateTime       @default(now()) @map("created_at")
-  updatedAt     DateTime       @updatedAt @map("updated_at")
-  companyId     String?        @map("company_id")
-  aiChats       AiChat[]
-  aiAuditLogs   AiAuditLog[]
-  auditLogs     AuditLog[]
-  deviceTokens  DeviceToken[]
-  notifications Notification[]
-  obdDevices    OBDDevice[]
-  refreshTokens RefreshToken[]
-  telemetries   Telemetry[]
-  company       Company?       @relation(fields: [companyId], references: [id])
-  role          Role           @relation(fields: [roleId], references: [id])
-  vehicles      Vehicle[]
-  workOrders    WorkOrder[]    @relation("AssignedWorkOrders")
-  createdWorkOrders WorkOrder[] @relation("CreatedWorkOrders")
-  aiConversationContexts AiConversationContext[]
-  aiUserPreferences AiUserPreference[]
-  aiDashboards  AiDashboard[]
-  aiAnalytics   AiAnalytics[]
-  aiPerformance AiPerformance[]
-  aiErrorLogs   AiErrorLog[]
+  id                      String                  @id @default(uuid())
+  name                    String
+  email                   String                  @unique
+  passwordHash            String                  @map("password_hash")
+  roleId                  Int                     @map("role_id")
+  deletedAt               DateTime?               @map("deleted_at")
+  createdAt               DateTime                @default(now()) @map("created_at")
+  updatedAt               DateTime                @updatedAt @map("updated_at")
+  companyId               String?                 @map("company_id")
+  aiChats                 AiChat[]
+  aiAuditLogs             AiAuditLog[]
+  auditLogs               AuditLog[]
+  deviceTokens            DeviceToken[]
+  notifications           Notification[]
+  obdDevices              OBDDevice[]
+  refreshTokens           RefreshToken[]
+  telemetries             Telemetry[]
+  company                 Company?                @relation(fields: [companyId], references: [id])
+  role                    Role                    @relation(fields: [roleId], references: [id])
+  vehicles                Vehicle[]
+  workOrders              WorkOrder[]             @relation("AssignedWorkOrders")
+  createdWorkOrders       WorkOrder[]             @relation("CreatedWorkOrders")
+  aiConversationContexts  AiConversationContext[]
+  aiUserPreferences       AiUserPreference[]
+  aiDashboards            AiDashboard[]           @relation("DashboardOwner")
+  aiAnalytics             AiAnalytics[]           @relation("AnalyticsOwner")
+  aiPerformance           AiPerformance[]         @relation("PerformanceOwner")
+  aiErrorLogs             AiErrorLog[]            @relation("ErrorLogOwner")
+  aiConversationSummaries AiConversationSummary[] @relation("ConversationSummaryOwner")
+  aiInsights              AiInsight[]             @relation("InsightOwner")
+  digitalTwins            VehicleDigitalTwin[]
 
   @@index([email])
   @@index([roleId])
@@ -83,75 +86,75 @@ model RefreshToken {
 }
 
 model Vehicle {
-  id                    String                @id @default(uuid())
-  userId                String                @map("user_id")
-  vin                   String?
-  plateNumber           String?               @map("plate_number")
-  make                  String?
-  model                 String?
-  year                  Int?
-  odometer              Float                 @default(0)
-  obdDeviceId           String?               @map("obd_device_id")
-  deletedAt             DateTime?             @map("deleted_at")
-  createdAt             DateTime              @default(now()) @map("created_at")
-  updatedAt             DateTime              @updatedAt @map("updated_at")
-  lastObdAt             DateTime?             @map("last_obd_at")
-  telemetryOnline       Boolean               @default(false) @map("telemetry_online")
-  companyId             String?               @map("company_id")
-  milOn                 Boolean?              @map("mil_on")
-  readinessMonitors     Json?                 @map("readiness_monitors")
-  engineHoursObd        Float?                @map("engine_hours_obd")
-  bodyClass             String?
-  engineModel           String?
-  fuelType              String?
-  gpsLastAt             DateTime?             @map("gps_last_at")
-  gpsLastLatitude       Float?                @map("gps_last_latitude")
-  gpsLastLongitude      Float?                @map("gps_last_longitude")
-  lastTelemetryAt       DateTime?             @map("last_telemetry_at")
-  manufacturer          String?
-  registrationNumber    String?               @map("registration_number")
-  status                VehicleStatus         @default(OFFLINE)
-  vehicleName           String?               @map("vehicle_name")
-  isPartialDecode       Boolean               @default(false) @map("is_partial_decode")
-  vinConfidence         String?               @map("vin_confidence")
-  vinCountry            String?               @map("vin_country")
-  vinDecodeSource       String?               @map("vin_decode_source")
-  vinDecodeType         String?               @map("vin_decode_type")
-  batteryProtectionMode String?               @map("battery_protection_mode")
-  engineState           String?               @map("engine_state")
-  ignitionStatus        String?               @map("ignition_status")
-  lastEngineOffAt       DateTime?             @map("last_engine_off_at")
-  lastEngineOnAt        DateTime?             @map("last_engine_on_at")
-  lastStandbyAt         DateTime?             @map("last_standby_at")
-  obdPollingActive      Boolean?              @map("obd_polling_active")
-  alerts                Alert[]
-  behaviorEvents        DriverBehaviorEvent[]
-  driverScores          DriverScore[]
-  dtcCodes              DtcCode[]
-  ecuSessions           EcuSession[]
-  fuelHistory           FuelHistory[]
-  fuelLogs              FuelLog[]
-  geofenceEvents        GeofenceEvent[]
-  gpsLocation           GpsLocation?
-  maintenanceLogs       MaintenanceLog[]
-  obdDevices            OBDDevice[]
-  liveData              ObdLiveData[]
-  rawBackups            ObdRawBackup[]
-  reports               Report[]
-  serviceHistory        ServiceHistory[]
-  telematicsDevice      TelematicsDevice?
-  telemetries           Telemetry[]
-  trips                 TripLog[]
-  connections           VehicleConnection[]
-  liveState             VehicleLiveState?
-  company               Company?              @relation(fields: [companyId], references: [id])
-  user                  User                  @relation(fields: [userId], references: [id])
-  workOrders            WorkOrder[]
-  serviceTickets        ServiceTicket[]
-  invoices              Invoice[]
-  maintenanceReminders  MaintenanceReminder[]
+  id                     String                  @id @default(uuid())
+  userId                 String                  @map("user_id")
+  vin                    String?
+  plateNumber            String?                 @map("plate_number")
+  make                   String?
+  model                  String?
+  year                   Int?
+  odometer               Float                   @default(0)
+  obdDeviceId            String?                 @map("obd_device_id")
+  deletedAt              DateTime?               @map("deleted_at")
+  createdAt              DateTime                @default(now()) @map("created_at")
+  updatedAt              DateTime                @updatedAt @map("updated_at")
+  lastObdAt              DateTime?               @map("last_obd_at")
+  telemetryOnline        Boolean                 @default(false) @map("telemetry_online")
+  companyId              String?                 @map("company_id")
+  milOn                  Boolean?                @map("mil_on")
+  readinessMonitors      Json?                   @map("readiness_monitors")
+  engineHoursObd         Float?                  @map("engine_hours_obd")
+  bodyClass              String?
+  engineModel            String?
+  fuelType               String?
+  gpsLastAt              DateTime?               @map("gps_last_at")
+  gpsLastLatitude        Float?                  @map("gps_last_latitude")
+  gpsLastLongitude       Float?                  @map("gps_last_longitude")
+  lastTelemetryAt        DateTime?               @map("last_telemetry_at")
+  manufacturer           String?
+  registrationNumber     String?                 @map("registration_number")
+  status                 VehicleStatus           @default(OFFLINE)
+  vehicleName            String?                 @map("vehicle_name")
+  isPartialDecode        Boolean                 @default(false) @map("is_partial_decode")
+  vinConfidence          String?                 @map("vin_confidence")
+  vinCountry             String?                 @map("vin_country")
+  vinDecodeSource        String?                 @map("vin_decode_source")
+  vinDecodeType          String?                 @map("vin_decode_type")
+  batteryProtectionMode  String?                 @map("battery_protection_mode")
+  engineState            String?                 @map("engine_state")
+  ignitionStatus         String?                 @map("ignition_status")
+  lastEngineOffAt        DateTime?               @map("last_engine_off_at")
+  lastEngineOnAt         DateTime?               @map("last_engine_on_at")
+  lastStandbyAt          DateTime?               @map("last_standby_at")
+  obdPollingActive       Boolean?                @map("obd_polling_active")
+  alerts                 Alert[]
+  behaviorEvents         DriverBehaviorEvent[]
+  driverScores           DriverScore[]
+  dtcCodes               DtcCode[]
+  ecuSessions            EcuSession[]
+  fuelHistory            FuelHistory[]
+  fuelLogs               FuelLog[]
+  geofenceEvents         GeofenceEvent[]
+  gpsLocation            GpsLocation?
+  maintenanceLogs        MaintenanceLog[]
+  obdDevices             OBDDevice[]
+  liveData               ObdLiveData[]
+  rawBackups             ObdRawBackup[]
+  reports                Report[]
+  serviceHistory         ServiceHistory[]
+  telematicsDevice       TelematicsDevice?
+  telemetries            Telemetry[]
+  trips                  TripLog[]
+  connections            VehicleConnection[]
+  liveState              VehicleLiveState?
+  company                Company?                @relation(fields: [companyId], references: [id])
+  user                   User                    @relation(fields: [userId], references: [id])
+  workOrders             WorkOrder[]             @relation("VehicleWorkOrders")
+  serviceTickets         ServiceTicket[]
+  invoices               Invoice[]
+  maintenanceReminders   MaintenanceReminder[]
   aiConversationContexts AiConversationContext[]
-  digitalTwin           VehicleDigitalTwin?
+  digitalTwin            VehicleDigitalTwin?
 
   @@index([userId])
   @@index([companyId])
@@ -497,11 +500,13 @@ model WorkOrder {
   description String
   status      WorkOrderStatus @default(OPEN)
   assignedTo  String?         @map("assigned_to")
+  createdBy   String?         @map("created_by")
   cost        Float?
   createdAt   DateTime        @default(now()) @map("created_at")
   updatedAt   DateTime        @updatedAt @map("updated_at")
   assignee    User?           @relation("AssignedWorkOrders", fields: [assignedTo], references: [id])
-  vehicle     Vehicle         @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  creator     User?           @relation("CreatedWorkOrders", fields: [createdBy], references: [id])
+  vehicle     Vehicle         @relation("VehicleWorkOrders", fields: [vehicleId], references: [id], onDelete: Cascade)
 
   @@index([vehicleId, status])
   @@map("work_orders")
@@ -770,8 +775,8 @@ model AiConversationContext {
   lastEntities       String?  @map("last_entities")
   lastVehicleContext String?  @map("last_vehicle_context")
 
-  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  vehicle            Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vehicle Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([vehicleId])
@@ -787,7 +792,7 @@ model AiUserPreference {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, key])
   @@index([userId])
@@ -795,12 +800,14 @@ model AiUserPreference {
 }
 
 model AiConversationSummary {
-  id          String   @id @default(uuid())
-  userId      String   @map("user_id")
-  chatId      String   @map("chat_id")
-  summary     String
-  keyTopics   String[]
-  createdAt   DateTime @default(now()) @map("created_at")
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  chatId    String   @map("chat_id")
+  summary   String
+  keyTopics String[]
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation("ConversationSummaryOwner", fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([chatId])
@@ -815,6 +822,8 @@ model AiDashboard {
   data      Json
   createdAt DateTime @default(now()) @map("created_at")
 
+  user User @relation("DashboardOwner", fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId])
   @@index([date])
   @@map("ai_dashboards")
@@ -826,6 +835,8 @@ model AiAnalytics {
   action    String
   metadata  Json?
   timestamp DateTime @default(now())
+
+  user User @relation("AnalyticsOwner", fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([action])
@@ -839,6 +850,8 @@ model AiPerformance {
   action         String
   responseTimeMs Int      @map("response_time_ms")
   timestamp      DateTime @default(now())
+
+  user User @relation("PerformanceOwner", fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([action])
@@ -854,6 +867,8 @@ model AiErrorLog {
   errorType    String   @map("error_type")
   timestamp    DateTime @default(now())
 
+  user User @relation("ErrorLogOwner", fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId])
   @@index([action])
   @@index([errorType])
@@ -861,40 +876,18 @@ model AiErrorLog {
   @@map("ai_error_logs")
 }
 
-// Additional models for AI Actions
-model WorkOrder {
-  id          String        @id @default(uuid())
-  vehicleId   String        @map("vehicle_id")
-  description String
-  priority    String
-  assignedTo  String?       @map("assigned_to")
-  status      String        @default("PENDING")
-  createdBy   String        @map("created_by")
-  createdAt   DateTime      @default(now()) @map("created_at")
-  updatedAt   DateTime      @updatedAt @map("updated_at")
-
-  vehicle     Vehicle       @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
-  assignedUser User?       @relation("AssignedWorkOrders", fields: [assignedTo], references: [id])
-  creator     User         @relation("CreatedWorkOrders", fields: [createdBy], references: [id])
-
-  @@index([vehicleId])
-  @@index([assignedTo])
-  @@index([status])
-  @@map("work_orders")
-}
-
 model ServiceTicket {
-  id          String   @id @default(uuid())
-  vehicleId   String   @map("vehicle_id")
-  issue       String
-  severity    String
-  category    String
-  status      String   @default("OPEN")
-  createdBy   String   @map("created_by")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id        String   @id @default(uuid())
+  vehicleId String   @map("vehicle_id")
+  issue     String
+  severity  String
+  category  String
+  status    String   @default("OPEN")
+  createdBy String   @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  vehicle     Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
 
   @@index([vehicleId])
   @@index([status])
@@ -920,18 +913,18 @@ model EmailLog {
 }
 
 model Invoice {
-  id          String   @id @default(uuid())
-  vehicleId   String   @map("vehicle_id")
+  id          String    @id @default(uuid())
+  vehicleId   String    @map("vehicle_id")
   items       Json
-  totalAmount Float    @map("total_amount")
+  totalAmount Float     @map("total_amount")
   dueDate     DateTime? @map("due_date")
   notes       String?
-  status      String   @default("PENDING")
-  createdBy   String   @map("created_by")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  status      String    @default("PENDING")
+  createdBy   String    @map("created_by")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
 
-  vehicle     Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
 
   @@index([vehicleId])
   @@index([status])
@@ -940,14 +933,14 @@ model Invoice {
 }
 
 model ReportExport {
-  id          String   @id @default(uuid())
-  reportType  String   @map("report_type")
+  id          String    @id @default(uuid())
+  reportType  String    @map("report_type")
   format      String
-  dateRange   String?  @map("date_range")
-  status      String   @default("COMPLETED")
-  requestedBy String   @map("requested_by")
+  dateRange   String?   @map("date_range")
+  status      String    @default("COMPLETED")
+  requestedBy String    @map("requested_by")
   completedAt DateTime? @map("completed_at")
-  createdAt   DateTime @default(now()) @map("created_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
 
   @@index([reportType])
   @@index([status])
@@ -965,7 +958,7 @@ model MaintenanceReminder {
   createdBy       String   @map("created_by")
   createdAt       DateTime @default(now()) @map("created_at")
 
-  vehicle         Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
 
   @@index([vehicleId])
   @@index([reminderDate])
@@ -981,7 +974,8 @@ model VehicleDigitalTwin {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  vehicle   Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([vehicleId])
@@ -990,11 +984,11 @@ model VehicleDigitalTwin {
 }
 
 model SystemMetric {
-  id        String   @id @default(uuid())
-  metricName String  @map("metric_name")
-  value     String
-  metadata  Json?
-  timestamp DateTime @default(now())
+  id         String   @id @default(uuid())
+  metricName String   @map("metric_name")
+  value      String
+  metadata   Json?
+  timestamp  DateTime @default(now())
 
   @@index([metricName])
   @@index([timestamp])
@@ -1004,7 +998,7 @@ model SystemMetric {
 model SecurityEvent {
   id        String   @id @default(uuid())
   userId    String   @map("user_id")
-  eventType String  @map("event_type")
+  eventType String   @map("event_type")
   details   Json
   severity  String
   timestamp DateTime @default(now())
@@ -1032,10 +1026,12 @@ model ApiUsageLog {
 }
 
 model AiInsight {
-  id         String   @id @default(uuid())
-  userId     String   @map("user_id")
-  insights   Json
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  insights    Json
   generatedAt DateTime @map("generated_at")
+
+  user User @relation("InsightOwner", fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([generatedAt])
