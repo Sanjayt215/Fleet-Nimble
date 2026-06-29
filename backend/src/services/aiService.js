@@ -4,6 +4,7 @@ import { executeTool, getAvailableTools } from './aiTools.js';
 import { searchKnowledgeBase, getKnowledgeBaseContext } from './aiKnowledgeBase.js';
 import { orchestrateAI } from './aiOrchestrator.js';
 import { buildCompactContext } from './aiCompactContext.js';
+import { AIContextBuilder } from './aiContextBuilder.js';
 
 const AI_PROVIDER = process.env.AI_PROVIDER || 'openai';
 const AI_MODEL = process.env.AI_MODEL || 'gpt-4o-mini';
@@ -281,28 +282,33 @@ async function callAIStream(messages, onChunk) {
 
 /**
  * Stable fallback chatbot implementation (without orchestrator)
- * Uses direct OpenAI/OpenRouter call with compact fleet context
+ * Uses direct OpenAI/OpenRouter call with intent-aware compact fleet context
  */
 async function processChatMessageStable(userId, message, vehicleId = null, chatHistory = []) {
   console.log('AI STABLE FALLBACK START', { userId, message: message?.substring(0, 50) });
   
   try {
-    // Build compact context based on intent
-    let context;
-    try {
-      context = await buildCompactContext(userId, message, vehicleId);
-    } catch (contextError) {
-      console.error('AI FAILED AT BUILD COMPACT CONTEXT', contextError);
-      console.error(contextError.stack);
-      context = { intent: 'error', dataSource: 'none', recordCounts: {} };
-    }
+    // Get user vehicles for entity extraction
+    const userVehicles = await prisma.vehicle.findMany({
+      where: { userId, deletedAt: null },
+      select: { id: true, name: true, plateNumber: true, vin: true },
+    });
+    
+    // Build intent-aware context
+    const contextBuilder = new AIContextBuilder(userId, message, userVehicles);
+    const context = await contextBuilder.build();
+    
+    console.log('AI_CONTEXT_BUILT', { 
+      intent: context.intent, 
+      dataSource: context.dataSource 
+    });
 
     // Search knowledge base for relevant information
     let knowledgeResults;
     try {
       knowledgeResults = searchKnowledgeBase(message);
     } catch (kbError) {
-      console.error('AI FAILED AT KNOWLEDGE BASE', kbError);
+      console.error('AI_FAILED_AT_KNOWLEDGE_BASE', kbError);
       console.error(kbError.stack);
       knowledgeResults = [];
     }
@@ -321,13 +327,13 @@ async function processChatMessageStable(userId, message, vehicleId = null, chatH
 
     // Token guard - check prompt size
     const promptSize = JSON.stringify(messages).length;
-    console.log('AI_CONTEXT_SIZE_CHARS', promptSize);
+    console.log('AI_PROMPT_SIZE_CHARS', promptSize);
     
     if (promptSize > MAX_PROMPT_CHARS) {
       console.log('AI_TOKEN_LIMIT_EXCEEDED', { promptSize, max: MAX_PROMPT_CHARS });
       // Truncate context - remove conversation history
       const truncatedMessages = [
-        { role: 'system', content: `${SYSTEM_PROMPT}\n\nFleet Context:\n${JSON.stringify({ intent: context.intent, dataSource: context.dataSource, recordCounts: context.recordCounts }, null, 2)}` },
+        { role: 'system', content: `${SYSTEM_PROMPT}\n\nFleet Context:\n${JSON.stringify({ intent: context.intent, dataSource: context.dataSource }, null, 2)}` },
         { role: 'user', content: message }
       ];
       
@@ -335,286 +341,481 @@ async function processChatMessageStable(userId, message, vehicleId = null, chatH
       console.log('AI_CONTEXT_TRUNCATED', { original: promptSize, truncated: truncatedSize });
       
       // Try with truncated context
-      return await callAIWithFallback(userId, truncatedMessages, context, knowledgeResults);
+      return await callAIWithRetry(userId, truncatedMessages, context, knowledgeResults, message);
     }
 
-    // Call AI provider
-    return await callAIWithFallback(userId, messages, context, knowledgeResults);
+    // Call AI provider with retry
+    return await callAIWithRetry(userId, messages, context, knowledgeResults, message);
   } catch (error) {
-    console.error('AI FAILED AT STABLE FALLBACK', error);
+    console.error('AI_FAILED_AT_STABLE_FALLBACK', error);
     console.error(error.stack);
-    // Return deterministic fallback
-    return await getDeterministicFallback(userId, message, vehicleId, context);
+    // Return intent-matched deterministic fallback
+    return await getIntentMatchedFallback(userId, message, vehicleId);
   }
 }
 
 /**
- * Call AI provider with fallback on error
+ * Call AI provider with retry logic
  */
-async function callAIWithFallback(userId, messages, context, knowledgeResults) {
-  console.log('AI_PROVIDER_CALL_START', { provider: AI_PROVIDER });
+async function callAIWithRetry(userId, messages, context, knowledgeResults, originalMessage, maxRetries = 1) {
+  console.log('AI_PROVIDER_CALL_START', { provider: AI_PROVIDER, retries: maxRetries });
   
-  try {
-    let response;
-    if (AI_PROVIDER === 'openrouter') {
-      response = await callOpenRouter(messages);
-    } else {
-      response = await callOpenAI(messages);
-    }
-    
-    console.log('AI_PROVIDER_CALL_SUCCESS');
-    
-    return {
-      response: response || 'No response generated',
-      context,
-      knowledgeResults,
-      metadata: {
-        title: "FleetNimble AI Assistant",
-        confidence: "MEDIUM",
-        dataFreshness: "LIVE",
-        simulatedNote: null,
-        suggestedActions: [
-          "Summarize my fleet health",
-          "Show critical alerts",
-          "Show vehicles needing maintenance",
-          "Show offline vehicles"
-        ],
-        entities: {},
-      },
-    };
-  } catch (aiError) {
-    console.error('AI_PROVIDER_CALL_FAILED', aiError);
-    console.error(aiError.stack);
-    
-    // Check for token limit or provider errors
-    const errorMessage = aiError.message?.toLowerCase() || '';
-    if (errorMessage.includes('402') || errorMessage.includes('token limit') || errorMessage.includes('insufficient credits') || errorMessage.includes('rate limit')) {
-      console.log('AI_PROVIDER_TOKEN_LIMIT_FALLBACK');
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      let response;
+      if (AI_PROVIDER === 'openrouter') {
+        response = await callOpenRouter(messages);
+      } else {
+        response = await callOpenAI(messages);
+      }
+      
+      console.log('AI_PROVIDER_CALL_SUCCESS', { attempt });
+      
       return {
-        response: 'FleetNimble AI could not use the external AI provider because the request exceeded the model limit. I generated a compact fleet summary from backend data instead.',
+        response: response || 'No response generated',
         context,
         knowledgeResults,
         metadata: {
           title: "FleetNimble AI Assistant",
           confidence: "MEDIUM",
-          dataFreshness: "HISTORICAL",
+          dataFreshness: "LIVE",
           simulatedNote: null,
-          suggestedActions: [
-            "Show critical alerts",
-            "Show vehicles needing maintenance",
-            "Show offline vehicles"
-          ],
+          suggestedActions: getSuggestedActions(context.intent),
           entities: {},
         },
       };
+    } catch (aiError) {
+      console.error('AI_PROVIDER_CALL_FAILED', { attempt, error: aiError.message });
+      console.error(aiError.stack);
+      
+      // Check if error is retryable
+      const errorMessage = aiError.message?.toLowerCase() || '';
+      const isRetryable = errorMessage.includes('timeout') || 
+                         errorMessage.includes('429') || 
+                         errorMessage.includes('rate limit') ||
+                         errorMessage.includes('5xx');
+      
+      // If not retryable or last attempt failed, use fallback
+      if (!isRetryable || attempt === maxRetries) {
+        console.log('AI_PROVIDER_FALLBACK_TRIGGERED', { 
+          reason: isRetryable ? 'max_retries_exceeded' : 'non_retryable_error',
+          error: errorMessage 
+        });
+        
+        // Check for token limit or provider errors
+        if (errorMessage.includes('402') || errorMessage.includes('token limit') || errorMessage.includes('insufficient credits')) {
+          console.log('AI_PROVIDER_TOKEN_LIMIT_FALLBACK');
+          return await getIntentMatchedFallback(userId, originalMessage, null, context);
+        }
+        
+        // For other errors, use intent-matched fallback
+        console.log('AI_DETERMINISTIC_FALLBACK_USED');
+        return await getIntentMatchedFallback(userId, originalMessage, null, context);
+      }
+      
+      // Wait before retry (exponential backoff)
+      const delay = Math.pow(2, attempt) * 1000;
+      console.log('AI_PROVIDER_RETRY', { attempt, delay });
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
-    
-    // For other errors, try deterministic fallback
-    console.log('AI_DETERMINISTIC_FALLBACK_USED');
-    return await getDeterministicFallback(userId, messages[messages.length - 1]?.content || '', null, context);
   }
 }
 
 /**
- * Deterministic fallback for common questions without LLM
+ * Get suggested actions based on intent
  */
-async function getDeterministicFallback(userId, message, vehicleId, context) {
-  console.log('AI_DETERMINISTIC_FALLBACK_START', { message: message?.substring(0, 50) });
+function getSuggestedActions(intent) {
+  switch (intent) {
+    case 'fleet_summary':
+      return [
+        "Show critical alerts",
+        "Show vehicles needing maintenance",
+        "Show offline vehicles"
+      ];
+    case 'vehicle_details':
+      return [
+        "Show vehicle maintenance",
+        "Show vehicle alerts",
+        "Show vehicle location"
+      ];
+    case 'vehicle_comparison':
+      return [
+        "Show vehicle details",
+        "Compare maintenance",
+        "Compare alerts"
+      ];
+    case 'dtc':
+      return [
+        "Show all DTCs",
+        "Clear DTCs",
+        "Schedule diagnostic"
+      ];
+    case 'maintenance':
+      return [
+        "Show critical alerts",
+        "Show vehicle details",
+        "Schedule maintenance"
+      ];
+    case 'gps':
+      return [
+        "Show vehicle details",
+        "Show nearby vehicles",
+        "Create geofence"
+      ];
+    case 'alerts':
+      return [
+        "Show vehicle details",
+        "Show maintenance",
+        "Acknowledge alerts"
+      ];
+    default:
+      return [
+        "Summarize my fleet health",
+        "Show critical alerts",
+        "Show vehicles needing maintenance"
+      ];
+  }
+}
+
+/**
+ * Intent-matched deterministic fallback
+ */
+async function getIntentMatchedFallback(userId, message, vehicleId, context = null) {
+  console.log('AI_INTENT_MATCHED_FALLBACK_START', { message: message?.substring(0, 50) });
   
-  const lowerMessage = message.toLowerCase();
+  // Get user vehicles for entity extraction
+  const userVehicles = await prisma.vehicle.findMany({
+    where: { userId, deletedAt: null },
+    select: { id: true, name: true, plateNumber: true, vin: true },
+  });
+  
+  const contextBuilder = new AIContextBuilder(userId, message, userVehicles);
+  const detectedContext = await contextBuilder.build();
+  
+  console.log('AI_FALLBACK_INTENT', { intent: detectedContext.intent });
   
   try {
-    // Common fleet questions
-    if (lowerMessage.includes('summary') || lowerMessage.includes('fleet health')) {
-      const vehicles = await prisma.vehicle.findMany({
-        where: { userId, deletedAt: null },
-        select: {
-          name: true,
-          liveState: { select: { status: true } },
-          _count: { select: { alerts: true, dtcCodes: true, maintenanceLogs: true } },
-        },
-      });
-      
-      const online = vehicles.filter(v => v.liveState?.status === 'online').length;
-      const offline = vehicles.filter(v => v.liveState?.status === 'offline').length;
-      const totalAlerts = vehicles.reduce((sum, v) => sum + v._count.alerts, 0);
-      
-      return {
-        response: `**Fleet Summary**\n\nTotal Vehicles: ${vehicles.length}\nOnline: ${online}\nOffline: ${offline}\nCritical Alerts: ${totalAlerts}\n\nThis is a summary from backend data. Ask a specific question for more details.`,
-        context,
-        knowledgeResults: [],
-        metadata: {
-          title: "FleetNimble AI Assistant",
-          confidence: "HIGH",
-          dataFreshness: "LIVE",
-          simulatedNote: null,
-          suggestedActions: [
-            "Show critical alerts",
-            "Show vehicles needing maintenance",
-            "Show offline vehicles"
-          ],
-          entities: {},
-        },
-      };
+    switch (detectedContext.intent) {
+      case 'fleet_summary':
+        return await getFleetSummaryFallback(userId, detectedContext);
+      case 'vehicle_details':
+        return await getVehicleDetailsFallback(userId, message, detectedContext);
+      case 'vehicle_comparison':
+        return await getVehicleComparisonFallback(userId, detectedContext);
+      case 'dtc':
+        return await getDTCFallback(userId, detectedContext);
+      case 'maintenance':
+        return await getMaintenanceFallback(userId, detectedContext);
+      case 'gps':
+        return await getGPSFallback(userId, detectedContext);
+      case 'alerts':
+        return await getAlertsFallback(userId, detectedContext);
+      default:
+        return await getGenericFallback(userId, detectedContext);
     }
-    
-    if (lowerMessage.includes('how many') && lowerMessage.includes('online')) {
-      const onlineCount = await prisma.vehicle.count({
-        where: { userId, deletedAt: null, liveState: { status: 'online' } },
-      });
-      
-      return {
-        response: `There are ${onlineCount} vehicles currently online.`,
-        context,
-        knowledgeResults: [],
-        metadata: {
-          title: "FleetNimble AI Assistant",
-          confidence: "HIGH",
-          dataFreshness: "LIVE",
-          simulatedNote: null,
-          suggestedActions: [
-            "Show offline vehicles",
-            "Summarize my fleet health"
-          ],
-          entities: {},
-        },
-      };
-    }
-    
-    if (lowerMessage.includes('offline')) {
-      const offlineVehicles = await prisma.vehicle.findMany({
-        where: { userId, deletedAt: null, liveState: { status: 'offline' } },
-        select: { name: true, plateNumber: true },
-        take: 10,
-      });
-      
-      const vehicleList = offlineVehicles.map(v => `- ${v.name} (${v.plateNumber})`).join('\n');
-      
-      return {
-        response: `**Offline Vehicles**\n\n${vehicleList || 'No offline vehicles.'}`,
-        context,
-        knowledgeResults: [],
-        metadata: {
-          title: "FleetNimble AI Assistant",
-          confidence: "HIGH",
-          dataFreshness: "LIVE",
-          simulatedNote: null,
-          suggestedActions: [
-            "Summarize my fleet health",
-            "Show critical alerts"
-          ],
-          entities: {},
-        },
-      };
-    }
-    
-    if (lowerMessage.includes('maintenance') || lowerMessage.includes('repair')) {
-      const maintenanceDue = await prisma.maintenanceLog.findMany({
-        where: {
-          vehicle: { userId, deletedAt: null },
-          completed: false,
-        },
-        include: {
-          vehicle: { select: { name: true, plateNumber: true } },
-        },
-        orderBy: { dueDate: 'asc' },
-        take: 10,
-      });
-      
-      const maintenanceList = maintenanceDue.map(m => `- ${m.vehicle.name}: ${m.description} (Due: ${m.dueDate})`).join('\n');
-      
-      return {
-        response: `**Vehicles Needing Maintenance**\n\n${maintenanceList || 'No maintenance due.'}`,
-        context,
-        knowledgeResults: [],
-        metadata: {
-          title: "FleetNimble AI Assistant",
-          confidence: "HIGH",
-          dataFreshness: "LIVE",
-          simulatedNote: null,
-          suggestedActions: [
-            "Show critical alerts",
-            "Summarize my fleet health"
-          ],
-          entities: {},
-        },
-      };
-    }
-    
-    if (lowerMessage.includes('critical alert') || lowerMessage.includes('alert')) {
-      const alerts = await prisma.alert.findMany({
-        where: {
-          vehicle: { userId, deletedAt: null },
-          read: false,
-          severity: 'CRITICAL',
-        },
-        include: {
-          vehicle: { select: { name: true, plateNumber: true } },
-        },
-        take: 10,
-      });
-      
-      const alertList = alerts.map(a => `- ${a.vehicle.name}: ${a.message}`).join('\n');
-      
-      return {
-        response: `**Critical Alerts**\n\n${alertList || 'No critical alerts.'}`,
-        context,
-        knowledgeResults: [],
-        metadata: {
-          title: "FleetNimble AI Assistant",
-          confidence: "HIGH",
-          dataFreshness: "LIVE",
-          simulatedNote: null,
-          suggestedActions: [
-            "Show vehicles needing maintenance",
-            "Summarize my fleet health"
-          ],
-          entities: {},
-        },
-      };
-    }
-    
-    // Generic fallback
-    return {
-      response: 'I apologize, but I encountered an error processing your request. Please try again or ask about fleet summary, online vehicles, offline vehicles, maintenance, or critical alerts.',
-      context,
-      knowledgeResults: [],
-      metadata: {
-        title: "FleetNimble AI Assistant",
-        confidence: "LOW",
-        dataFreshness: "UNKNOWN",
-        simulatedNote: null,
-        suggestedActions: [
-          "Summarize my fleet health",
-          "Show critical alerts",
-          "Show vehicles needing maintenance",
-          "Show offline vehicles"
-        ],
-        entities: {},
-      },
-    };
   } catch (error) {
-    console.error('AI_DETERMINISTIC_FALLBACK_ERROR', error);
-    console.error(error.stack);
+    console.error('AI_INTENT_MATCHED_FALLBACK_ERROR', error);
+    return await getGenericFallback(userId, detectedContext);
+  }
+}
+
+/**
+ * Fleet summary fallback
+ */
+async function getFleetSummaryFallback(userId, context) {
+  const vehicles = await prisma.vehicle.findMany({
+    where: { userId, deletedAt: null },
+    select: {
+      name: true,
+      liveState: { select: { status: true } },
+      _count: { select: { alerts: true, dtcCodes: true, maintenanceLogs: true } },
+    },
+  });
+  
+  const online = vehicles.filter(v => v.liveState?.status === 'online').length;
+  const offline = vehicles.filter(v => v.liveState?.status === 'offline').length;
+  const totalAlerts = vehicles.reduce((sum, v) => sum + v._count.alerts, 0);
+  
+  return {
+    response: `**Fleet Health Summary**\n\n**Total Vehicles:** ${vehicles.length}\n**Online:** ${online}\n**Offline:** ${offline}\n**Critical Alerts:** ${totalAlerts}\n\nThis is a real-time summary from your fleet data.`,
+    context: context || { intent: 'fleet_summary', dataSource: 'database' },
+    knowledgeResults: [],
+    metadata: {
+      title: "FleetNimble AI Assistant",
+      confidence: "HIGH",
+      dataFreshness: "LIVE",
+      simulatedNote: null,
+      suggestedActions: getSuggestedActions('fleet_summary'),
+      entities: {},
+    },
+  };
+}
+
+/**
+ * Vehicle details fallback
+ */
+async function getVehicleDetailsFallback(userId, message, context) {
+  const userVehicles = await prisma.vehicle.findMany({
+    where: { userId, deletedAt: null },
+    select: { id: true, name: true, plateNumber: true, make: true, model: true, year: true },
+  });
+  
+  const contextBuilder = new AIContextBuilder(userId, message, userVehicles);
+  const vehicleContext = await contextBuilder.build();
+  
+  if (!vehicleContext.vehicle) {
     return {
-      response: 'FleetNimble AI is online but encountered an error. Please try again.',
-      context: { intent: 'error', dataSource: 'none', recordCounts: {} },
+      response: 'Vehicle not found. Please specify the vehicle name.',
+      context: vehicleContext,
       knowledgeResults: [],
       metadata: {
         title: "FleetNimble AI Assistant",
         confidence: "LOW",
         dataFreshness: "UNKNOWN",
         simulatedNote: null,
-        suggestedActions: [
-          "Summarize my fleet health",
-          "Show critical alerts",
-          "Show vehicles needing maintenance",
-          "Show offline vehicles"
-        ],
+        suggestedActions: getSuggestedActions('vehicle_details'),
         entities: {},
       },
     };
   }
+  
+  const v = vehicleContext.vehicle;
+  const response = `**Vehicle: ${v.name}**\n\n**Plate:** ${v.plate}\n**Make/Model:** ${v.make} ${v.model} ${v.year}\n**Status:** ${v.status}\n**Odometer:** ${v.odometer?.toLocaleString() || 'N/A'} km\n\n**Latest Telemetry:**\n- Battery: ${v.latestTelemetry?.batteryVoltage || 'N/A'}V\n- Coolant: ${v.latestTelemetry?.coolantTemp || 'N/A'}°C\n- Fuel: ${v.latestTelemetry?.fuelLevel || 'N/A'}%\n\n**Active Alerts:** ${v.alerts?.length || 0}\n**Maintenance Due:** ${v.maintenance?.length || 0}\n**Active DTCs:** ${v.dtcCodes?.length || 0}`;
+  
+  return {
+    response,
+    context: vehicleContext,
+    knowledgeResults: [],
+    metadata: {
+      title: "FleetNimble AI Assistant",
+      confidence: "HIGH",
+      dataFreshness: "LIVE",
+      simulatedNote: null,
+      suggestedActions: getSuggestedActions('vehicle_details'),
+      entities: {},
+    },
+  };
+}
+
+/**
+ * Vehicle comparison fallback
+ */
+async function getVehicleComparisonFallback(userId, context) {
+  if (!context.vehicles || context.vehicles.length < 2) {
+    return {
+      response: 'Need at least 2 vehicles for comparison. Please specify the vehicle names.',
+      context: context,
+      knowledgeResults: [],
+      metadata: {
+        title: "FleetNimble AI Assistant",
+        confidence: "LOW",
+        dataFreshness: "UNKNOWN",
+        simulatedNote: null,
+        suggestedActions: getSuggestedActions('vehicle_comparison'),
+        entities: {},
+      },
+    };
+  }
+  
+  const [v1, v2] = context.vehicles;
+  const response = `**Vehicle Comparison**\n\n| Metric | ${v1.name} | ${v2.name} |\n|--------|-----------|-----------|\n| Status | ${v1.status} | ${v2.status} |\n| Battery | ${v1.batteryVoltage || 'N/A'}V | ${v2.batteryVoltage || 'N/A'}V |\n| Coolant | ${v1.coolantTemp || 'N/A'}°C | ${v2.coolantTemp || 'N/A'}°C |\n| Fuel | ${v1.fuelLevel || 'N/A'}% | ${v2.fuelLevel || 'N/A'}% |\n| Alerts | ${v1.alertCount} | ${v2.alertCount} |\n\n**Winner:** ${v1.alertCount <= v2.alertCount ? v1.name : v2.name} (fewer alerts)`;
+  
+  return {
+    response,
+    context: context,
+    knowledgeResults: [],
+    metadata: {
+      title: "FleetNimble AI Assistant",
+      confidence: "HIGH",
+      dataFreshness: "LIVE",
+      simulatedNote: null,
+      suggestedActions: getSuggestedActions('vehicle_comparison'),
+      entities: {},
+    },
+  };
+}
+
+/**
+ * DTC fallback
+ */
+async function getDTCFallback(userId, context) {
+  if (!context.dtc) {
+    return {
+      response: 'No DTC code found in your request. Please specify the DTC code (e.g., P0700).',
+      context: context,
+      knowledgeResults: [],
+      metadata: {
+        title: "FleetNimble AI Assistant",
+        confidence: "LOW",
+        dataFreshness: "UNKNOWN",
+        simulatedNote: null,
+        suggestedActions: getSuggestedActions('dtc'),
+        entities: {},
+      },
+    };
+  }
+  
+  const response = `**DTC: ${context.dtc.code}**\n\n**Description:** ${context.dtc.description}\n**Severity:** ${context.dtc.severity}\n${context.dtc.vehicle ? `**Vehicle:** ${context.dtc.vehicle.name} (${context.dtc.vehicle.plate})` : ''}\n\nThis code indicates a ${context.dtc.severity.toLowerCase()} issue that should be addressed.`;
+  
+  return {
+    response,
+    context: context,
+    knowledgeResults: [],
+    metadata: {
+      title: "FleetNimble AI Assistant",
+      confidence: "HIGH",
+      dataFreshness: "LIVE",
+      simulatedNote: null,
+      suggestedActions: getSuggestedActions('dtc'),
+      entities: {},
+    },
+  };
+}
+
+/**
+ * Maintenance fallback
+ */
+async function getMaintenanceFallback(userId, context) {
+  if (!context.maintenance || context.maintenance.length === 0) {
+    return {
+      response: 'No maintenance items due at this time.',
+      context: context,
+      knowledgeResults: [],
+      metadata: {
+        title: "FleetNimble AI Assistant",
+        confidence: "HIGH",
+        dataFreshness: "LIVE",
+        simulatedNote: null,
+        suggestedActions: getSuggestedActions('maintenance'),
+        entities: {},
+      },
+    };
+  }
+  
+  const items = context.maintenance.slice(0, 5).map(m => 
+    `- ${m.vehicle}: ${m.type} (Due: ${m.dueDate})`
+  ).join('\n');
+  
+  const response = `**Maintenance Due**\n\n${items}\n\n**Total Items:** ${context.maintenance.length}`;
+  
+  return {
+    response,
+    context: context,
+    knowledgeResults: [],
+    metadata: {
+      title: "FleetNimble AI Assistant",
+      confidence: "HIGH",
+      dataFreshness: "LIVE",
+      simulatedNote: null,
+      suggestedActions: getSuggestedActions('maintenance'),
+      entities: {},
+    },
+  };
+}
+
+/**
+ * GPS fallback
+ */
+async function getGPSFallback(userId, context) {
+  if (!context.location) {
+    return {
+      response: 'Location data not available for this vehicle.',
+      context: context,
+      knowledgeResults: [],
+      metadata: {
+        title: "FleetNimble AI Assistant",
+        confidence: "LOW",
+        dataFreshness: "UNKNOWN",
+        simulatedNote: null,
+        suggestedActions: getSuggestedActions('gps'),
+        entities: {},
+      },
+    };
+  }
+  
+  const response = `**Vehicle Location**\n\n**Vehicle:** ${context.vehicle.name}\n**Plate:** ${context.vehicle.plate}\n**Address:** ${context.location.address || 'N/A'}\n**Coordinates:** ${context.location.latitude}, ${context.location.longitude}\n**Last Updated:** ${context.location.timestamp}`;
+  
+  return {
+    response,
+    context: context,
+    knowledgeResults: [],
+    metadata: {
+      title: "FleetNimble AI Assistant",
+      confidence: "HIGH",
+      dataFreshness: "LIVE",
+      simulatedNote: null,
+      suggestedActions: getSuggestedActions('gps'),
+      entities: {},
+    },
+  };
+}
+
+/**
+ * Alerts fallback
+ */
+async function getAlertsFallback(userId, context) {
+  if (!context.alerts || context.alerts.length === 0) {
+    return {
+      response: 'No active alerts at this time.',
+      context: context,
+      knowledgeResults: [],
+      metadata: {
+        title: "FleetNimble AI Assistant",
+        confidence: "HIGH",
+        dataFreshness: "LIVE",
+        simulatedNote: null,
+        suggestedActions: getSuggestedActions('alerts'),
+        entities: {},
+      },
+    };
+  }
+  
+  const alerts = context.alerts.slice(0, 5).map(a => 
+    `- ${a.vehicle}: ${a.severity} - ${a.message}`
+  ).join('\n');
+  
+  const response = `**Active Alerts**\n\n${alerts}\n\n**Total Alerts:** ${context.alerts.length}`;
+  
+  return {
+    response,
+    context: context,
+    knowledgeResults: [],
+    metadata: {
+      title: "FleetNimble AI Assistant",
+      confidence: "HIGH",
+      dataFreshness: "LIVE",
+      simulatedNote: null,
+      suggestedActions: getSuggestedActions('alerts'),
+      entities: {},
+    },
+  };
+}
+
+/**
+ * Generic fallback
+ */
+async function getGenericFallback(userId, context) {
+  return {
+    response: 'I apologize, but I encountered an error processing your request. Please try again or ask about fleet summary, vehicle details, maintenance, or alerts.',
+    context: context || { intent: 'general', dataSource: 'none' },
+    knowledgeResults: [],
+    metadata: {
+      title: "FleetNimble AI Assistant",
+      confidence: "LOW",
+      dataFreshness: "UNKNOWN",
+      simulatedNote: null,
+      suggestedActions: getSuggestedActions('general'),
+      entities: {},
+    },
+  };
+}
+
+/**
+ * Deterministic fallback for common questions without LLM (deprecated - use getIntentMatchedFallback)
+ */
+async function getDeterministicFallback(userId, message, vehicleId, context) {
+  console.log('AI_DETERMINISTIC_FALLBACK_START', { message: message?.substring(0, 50) });
+  return await getIntentMatchedFallback(userId, message, vehicleId, context);
 }
 
 /**
