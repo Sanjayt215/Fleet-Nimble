@@ -8,6 +8,9 @@ import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 
 const app = express();
 
+// Fix Render X-Forwarded-For express-rate-limit warnings
+app.set('trust proxy', 1);
+
 // Global unhandled rejection handler
 process.on('unhandledRejection', (reason, promise) => {
   console.error('UNHANDLED REJECTION', reason);

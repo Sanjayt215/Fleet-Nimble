@@ -3,6 +3,7 @@ import logger from '../utils/logger.js';
 import { executeTool, getAvailableTools } from './aiTools.js';
 import { searchKnowledgeBase, getKnowledgeBaseContext } from './aiKnowledgeBase.js';
 import { orchestrateAI } from './aiOrchestrator.js';
+import { buildCompactContext } from './aiCompactContext.js';
 
 const AI_PROVIDER = process.env.AI_PROVIDER || 'openai';
 const AI_MODEL = process.env.AI_MODEL || 'gpt-4o-mini';
@@ -10,213 +11,10 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const AI_ORCHESTRATOR_ENABLED = process.env.AI_ORCHESTRATOR_ENABLED === 'true';
 
-// Enterprise-grade system prompt for FleetNimble AI Assistant
-const SYSTEM_PROMPT = `You are FleetNimble AI Assistant, an enterprise-grade Fleet Operations Copilot. You provide executive-friendly, concise, visually structured responses for fleet managers.
+// Compact system prompt for FleetNimble AI Assistant
+const SYSTEM_PROMPT = `You are FleetNimble AI Assistant. Answer using only provided fleet context. Be concise, professional, and actionable. If data is unavailable, say so. Do not invent data.`;
 
-CAPABILITIES:
-You have access to tools that can retrieve real-time fleet data. Use these tools automatically when needed to answer questions accurately.
-
-AVAILABLE TOOLS:
-${getAvailableTools().map(t => `- ${t.name}: ${t.description}`).join('\n')}
-
-=========================================
-RESPONSE FORMAT RULES (STRICT)
-=========================================
-
-1. WORD COUNT:
-Default: 150-250 words
-Detailed reports: Only when user explicitly requests
-
-2. START WITH EXECUTIVE SUMMARY:
-Always begin with:
-**Fleet Health Score:** [0-100]
-**Risk Level:** Good / Moderate / High / Critical
-
-3. FLEET SNAPSHOT TABLE:
-For fleet-wide questions, include:
-| Metric | Value |
-|--------|-------|
-| Total Vehicles | [count] |
-| Online | [count] |
-| Offline | [count] |
-| Standby | [count] |
-| Critical Alerts | [count] |
-| Maintenance Due | [count] |
-| Active DTCs | [count] |
-| Last Telemetry | [time] |
-
-4. ISSUE CATEGORIZATION:
-Group issues into sections with icons:
-🚨 **Immediate Attention** - Critical issues requiring action now
-⚠ **Risks** - Potential issues to monitor
-📅 **Maintenance** - Scheduled maintenance items
-💰 **Business Impact** - Cost and downtime implications
-
-5. FOCUS ON TOP 2-3 CRITICAL VEHICLES:
-Highlight only the most critical vehicles. Do not list every vehicle.
-
-6. DATA FRESHNESS INDICATORS:
-Use icons to label data:
-🟢 Live - Real-time telemetry
-🟡 Historical - Historical records
-⚪ Simulated - Demo/simulated data
-🔴 Offline - No data available
-
-7. INTENT-BASED RESPONSE ADAPTATION:
-- Fleet summary → Dashboard format with snapshot table
-- DTC question → Diagnostic explanation only
-- Vehicle question → Vehicle health card
-- Maintenance question → Maintenance schedule
-- GPS question → Location summary
-- Comparison question → Side-by-side comparison table
-
-8. CONVERSATIONAL MEMORY:
-Maintain context from previous messages. Follow-up questions should NOT regenerate full fleet summary.
-
-9. BUSINESS LANGUAGE:
-Use business-oriented terms:
-- Estimated downtime (hours)
-- Estimated repair cost ($)
-- Fleet availability (%)
-- Operational impact
-- Risk mitigation
-
-10. VISUAL STRUCTURE:
-Use:
-- Markdown tables
-- Icons (🚨 ⚠ 📅 💰 🟢 🟡 ⚪ 🔴)
-- Badges [CRITICAL] [HIGH] [MEDIUM] [LOW]
-- Concise bullet points
-- Short paragraphs
-
-11. ENDING:
-Every response must end with exactly one:
-**Recommended Next Action:** [specific, actionable step]
-
-12. CONFIDENCE:
-Include confidence (High/Medium/Low or %) only when appropriate for predictions or estimates.
-
-13. NO REPETITION:
-Avoid repeating fleet statistics in unrelated answers. Reference context instead.
-
-14. SCANABILITY:
-Structure responses to be scannable in under 15 seconds while maintaining technical accuracy.
-
-=========================================
-CONVERSATIONAL MEMORY
-=========================================
-- Maintain context from previous messages
-- Understand follow-up questions (e.g., "Why?" refers to previously mentioned vehicles)
-- Allow natural conversation flow without repeating full fleet summaries
-
-=========================================
-DYNAMIC RESPONSE ENGINE
-=========================================
-- NEVER use fixed templates
-- Generate responses based on user intent and context
-- If user asks "What is P0700?" - Only explain P0700, do not print fleet summary
-- If user asks "Fleet summary" - Generate dashboard format with snapshot
-- If user asks "Compare vehicles" - Generate side-by-side comparison table
-
-=========================================
-EXECUTIVE DASHBOARD FORMAT
-=========================================
-When user asks for: Fleet Summary, Dashboard, Overview, Today's Report
-Generate:
-**Fleet Health Score:** [0-100]
-**Risk Level:** Good / Moderate / High / Critical
-
-**Fleet Snapshot:**
-[Table with metrics]
-
-🚨 **Immediate Attention:**
-- [Top 2-3 critical issues]
-
-⚠ **Risks:**
-- [Potential issues]
-
-📅 **Maintenance:**
-- [Upcoming maintenance]
-
-💰 **Business Impact:**
-- [Cost and downtime estimates]
-
-**Recommended Next Action:** [specific action]
-
-=========================================
-PREDICTIVE AI
-=========================================
-Use telemetry trends to predict:
-- Battery failure risk (days)
-- Coolant overheating risk
-- Engine failure probability
-- Fuel exhaustion prediction
-- Maintenance requirement timing
-
-Output format:
-**Prediction:** [What will happen]
-**Confidence:** [XX%]
-**Reason:** [Why]
-**Recommendation:** [What to do]
-
-=========================================
-ROOT CAUSE ANALYSIS
-=========================================
-Analyze possible causes with confidence scores:
-- Cause 1: [XX%]
-- Cause 2: [XX%]
-- Cause 3: [XX%]
-
-=========================================
-VEHICLE COMPARISON FORMAT
-=========================================
-| Metric | Vehicle A | Vehicle B |
-|--------|-----------|-----------|
-| Health Score | [score] | [score] |
-| Battery | [voltage] | [voltage] |
-| Coolant | [temp] | [temp] |
-| Fuel | [level] | [level] |
-| Alerts | [count] | [count] |
-
-**Winner:** [Vehicle name]
-**Recommended Next Action:** [specific action]
-
-=========================================
-DRIVER INSIGHTS FORMAT
-=========================================
-**Driver Score:** [0-100]
-**Fuel Efficiency:** [km/L or mpg]
-**Safety Score:** Excellent/Good/Fair/Poor
-
-**Behavior Events:**
-- Harsh Braking: [count]
-- Harsh Acceleration: [count]
-- Speeding: [count]
-
-**Recommended Next Action:** [specific action]
-
-=========================================
-DATA SOURCE TRANSPARENCY
-=========================================
-Always indicate with icons:
-🟢 Live - Real-time telemetry
-🟡 Historical - Historical records
-⚪ Simulated - Demo/simulated
-🔴 Offline - No data
-
-=========================================
-SECURITY
-=========================================
-NEVER expose:
-- JWT tokens
-- Database IDs
-- Internal API endpoints
-- Secrets or passwords
-
-NEVER hallucinate data. If unavailable, say:
-"I don't have enough live telemetry to answer accurately."
-
-Remember: You are an executive Fleet Operations Copilot. Be concise, visual, actionable, and professional. Responses should be scannable in under 15 seconds.`;
+const MAX_PROMPT_CHARS = 12000;
 
 /**
  * Build context from user's fleet data with conversational memory support
@@ -483,20 +281,20 @@ async function callAIStream(messages, onChunk) {
 
 /**
  * Stable fallback chatbot implementation (without orchestrator)
- * Uses direct OpenAI/OpenRouter call with fleet context
+ * Uses direct OpenAI/OpenRouter call with compact fleet context
  */
 async function processChatMessageStable(userId, message, vehicleId = null, chatHistory = []) {
   console.log('AI STABLE FALLBACK START', { userId, message: message?.substring(0, 50) });
   
   try {
-    // Build context from user's fleet data
+    // Build compact context based on intent
     let context;
     try {
-      context = await buildContext(userId, vehicleId);
+      context = await buildCompactContext(userId, message, vehicleId);
     } catch (contextError) {
-      console.error('AI FAILED AT BUILD CONTEXT', contextError);
+      console.error('AI FAILED AT BUILD COMPACT CONTEXT', contextError);
       console.error(contextError.stack);
-      context = { vehicleCount: 0, hasVehicles: false };
+      context = { intent: 'error', dataSource: 'none', recordCounts: {} };
     }
 
     // Search knowledge base for relevant information
@@ -509,36 +307,99 @@ async function processChatMessageStable(userId, message, vehicleId = null, chatH
       knowledgeResults = [];
     }
 
+    // Limit conversation history to last 4 messages (2 user, 2 assistant)
+    const limitedHistory = chatHistory.slice(-4);
+    console.log('AI_HISTORY_LIMITED', { original: chatHistory.length, limited: limitedHistory.length });
+
     // Build messages for OpenAI/OpenRouter
+    const contextString = JSON.stringify(context, null, 2);
     const messages = [
-      { role: 'system', content: SYSTEM_PROMPT },
-      ...chatHistory,
+      { role: 'system', content: `${SYSTEM_PROMPT}\n\nFleet Context:\n${contextString}` },
+      ...limitedHistory,
       { role: 'user', content: message }
     ];
 
+    // Token guard - check prompt size
+    const promptSize = JSON.stringify(messages).length;
+    console.log('AI_CONTEXT_SIZE_CHARS', promptSize);
+    
+    if (promptSize > MAX_PROMPT_CHARS) {
+      console.log('AI_TOKEN_LIMIT_EXCEEDED', { promptSize, max: MAX_PROMPT_CHARS });
+      // Truncate context - remove conversation history
+      const truncatedMessages = [
+        { role: 'system', content: `${SYSTEM_PROMPT}\n\nFleet Context:\n${JSON.stringify({ intent: context.intent, dataSource: context.dataSource, recordCounts: context.recordCounts }, null, 2)}` },
+        { role: 'user', content: message }
+      ];
+      
+      const truncatedSize = JSON.stringify(truncatedMessages).length;
+      console.log('AI_CONTEXT_TRUNCATED', { original: promptSize, truncated: truncatedSize });
+      
+      // Try with truncated context
+      return await callAIWithFallback(userId, truncatedMessages, context, knowledgeResults);
+    }
+
     // Call AI provider
+    return await callAIWithFallback(userId, messages, context, knowledgeResults);
+  } catch (error) {
+    console.error('AI FAILED AT STABLE FALLBACK', error);
+    console.error(error.stack);
+    // Return deterministic fallback
+    return await getDeterministicFallback(userId, message, vehicleId, context);
+  }
+}
+
+/**
+ * Call AI provider with fallback on error
+ */
+async function callAIWithFallback(userId, messages, context, knowledgeResults) {
+  console.log('AI_PROVIDER_CALL_START', { provider: AI_PROVIDER });
+  
+  try {
     let response;
-    try {
-      if (AI_PROVIDER === 'openrouter') {
-        response = await callOpenRouter(messages);
-      } else {
-        response = await callOpenAI(messages);
-      }
-    } catch (aiError) {
-      console.error('AI FAILED AT OPENAI/OPENROUTER CALL', aiError);
-      console.error(aiError.stack);
-      // Return simple fallback response
+    if (AI_PROVIDER === 'openrouter') {
+      response = await callOpenRouter(messages);
+    } else {
+      response = await callOpenAI(messages);
+    }
+    
+    console.log('AI_PROVIDER_CALL_SUCCESS');
+    
+    return {
+      response: response || 'No response generated',
+      context,
+      knowledgeResults,
+      metadata: {
+        title: "FleetNimble AI Assistant",
+        confidence: "MEDIUM",
+        dataFreshness: "LIVE",
+        simulatedNote: null,
+        suggestedActions: [
+          "Summarize my fleet health",
+          "Show critical alerts",
+          "Show vehicles needing maintenance",
+          "Show offline vehicles"
+        ],
+        entities: {},
+      },
+    };
+  } catch (aiError) {
+    console.error('AI_PROVIDER_CALL_FAILED', aiError);
+    console.error(aiError.stack);
+    
+    // Check for token limit or provider errors
+    const errorMessage = aiError.message?.toLowerCase() || '';
+    if (errorMessage.includes('402') || errorMessage.includes('token limit') || errorMessage.includes('insufficient credits') || errorMessage.includes('rate limit')) {
+      console.log('AI_PROVIDER_TOKEN_LIMIT_FALLBACK');
       return {
-        response: 'I apologize, but I encountered an error processing your request. Please try again.',
+        response: 'FleetNimble AI could not use the external AI provider because the request exceeded the model limit. I generated a compact fleet summary from backend data instead.',
         context,
         knowledgeResults,
         metadata: {
           title: "FleetNimble AI Assistant",
-          confidence: "LOW",
-          dataFreshness: "UNKNOWN",
+          confidence: "MEDIUM",
+          dataFreshness: "HISTORICAL",
           simulatedNote: null,
           suggestedActions: [
-            "Summarize my fleet health",
             "Show critical alerts",
             "Show vehicles needing maintenance",
             "Show offline vehicles"
@@ -547,14 +408,180 @@ async function processChatMessageStable(userId, message, vehicleId = null, chatH
         },
       };
     }
+    
+    // For other errors, try deterministic fallback
+    console.log('AI_DETERMINISTIC_FALLBACK_USED');
+    return await getDeterministicFallback(userId, messages[messages.length - 1]?.content || '', null, context);
+  }
+}
 
+/**
+ * Deterministic fallback for common questions without LLM
+ */
+async function getDeterministicFallback(userId, message, vehicleId, context) {
+  console.log('AI_DETERMINISTIC_FALLBACK_START', { message: message?.substring(0, 50) });
+  
+  const lowerMessage = message.toLowerCase();
+  
+  try {
+    // Common fleet questions
+    if (lowerMessage.includes('summary') || lowerMessage.includes('fleet health')) {
+      const vehicles = await prisma.vehicle.findMany({
+        where: { userId, deletedAt: null },
+        select: {
+          name: true,
+          liveState: { select: { status: true } },
+          _count: { select: { alerts: true, dtcCodes: true, maintenanceLogs: true } },
+        },
+      });
+      
+      const online = vehicles.filter(v => v.liveState?.status === 'online').length;
+      const offline = vehicles.filter(v => v.liveState?.status === 'offline').length;
+      const totalAlerts = vehicles.reduce((sum, v) => sum + v._count.alerts, 0);
+      
+      return {
+        response: `**Fleet Summary**\n\nTotal Vehicles: ${vehicles.length}\nOnline: ${online}\nOffline: ${offline}\nCritical Alerts: ${totalAlerts}\n\nThis is a summary from backend data. Ask a specific question for more details.`,
+        context,
+        knowledgeResults: [],
+        metadata: {
+          title: "FleetNimble AI Assistant",
+          confidence: "HIGH",
+          dataFreshness: "LIVE",
+          simulatedNote: null,
+          suggestedActions: [
+            "Show critical alerts",
+            "Show vehicles needing maintenance",
+            "Show offline vehicles"
+          ],
+          entities: {},
+        },
+      };
+    }
+    
+    if (lowerMessage.includes('how many') && lowerMessage.includes('online')) {
+      const onlineCount = await prisma.vehicle.count({
+        where: { userId, deletedAt: null, liveState: { status: 'online' } },
+      });
+      
+      return {
+        response: `There are ${onlineCount} vehicles currently online.`,
+        context,
+        knowledgeResults: [],
+        metadata: {
+          title: "FleetNimble AI Assistant",
+          confidence: "HIGH",
+          dataFreshness: "LIVE",
+          simulatedNote: null,
+          suggestedActions: [
+            "Show offline vehicles",
+            "Summarize my fleet health"
+          ],
+          entities: {},
+        },
+      };
+    }
+    
+    if (lowerMessage.includes('offline')) {
+      const offlineVehicles = await prisma.vehicle.findMany({
+        where: { userId, deletedAt: null, liveState: { status: 'offline' } },
+        select: { name: true, plateNumber: true },
+        take: 10,
+      });
+      
+      const vehicleList = offlineVehicles.map(v => `- ${v.name} (${v.plateNumber})`).join('\n');
+      
+      return {
+        response: `**Offline Vehicles**\n\n${vehicleList || 'No offline vehicles.'}`,
+        context,
+        knowledgeResults: [],
+        metadata: {
+          title: "FleetNimble AI Assistant",
+          confidence: "HIGH",
+          dataFreshness: "LIVE",
+          simulatedNote: null,
+          suggestedActions: [
+            "Summarize my fleet health",
+            "Show critical alerts"
+          ],
+          entities: {},
+        },
+      };
+    }
+    
+    if (lowerMessage.includes('maintenance') || lowerMessage.includes('repair')) {
+      const maintenanceDue = await prisma.maintenanceLog.findMany({
+        where: {
+          vehicle: { userId, deletedAt: null },
+          completed: false,
+        },
+        include: {
+          vehicle: { select: { name: true, plateNumber: true } },
+        },
+        orderBy: { dueDate: 'asc' },
+        take: 10,
+      });
+      
+      const maintenanceList = maintenanceDue.map(m => `- ${m.vehicle.name}: ${m.description} (Due: ${m.dueDate})`).join('\n');
+      
+      return {
+        response: `**Vehicles Needing Maintenance**\n\n${maintenanceList || 'No maintenance due.'}`,
+        context,
+        knowledgeResults: [],
+        metadata: {
+          title: "FleetNimble AI Assistant",
+          confidence: "HIGH",
+          dataFreshness: "LIVE",
+          simulatedNote: null,
+          suggestedActions: [
+            "Show critical alerts",
+            "Summarize my fleet health"
+          ],
+          entities: {},
+        },
+      };
+    }
+    
+    if (lowerMessage.includes('critical alert') || lowerMessage.includes('alert')) {
+      const alerts = await prisma.alert.findMany({
+        where: {
+          vehicle: { userId, deletedAt: null },
+          read: false,
+          severity: 'CRITICAL',
+        },
+        include: {
+          vehicle: { select: { name: true, plateNumber: true } },
+        },
+        take: 10,
+      });
+      
+      const alertList = alerts.map(a => `- ${a.vehicle.name}: ${a.message}`).join('\n');
+      
+      return {
+        response: `**Critical Alerts**\n\n${alertList || 'No critical alerts.'}`,
+        context,
+        knowledgeResults: [],
+        metadata: {
+          title: "FleetNimble AI Assistant",
+          confidence: "HIGH",
+          dataFreshness: "LIVE",
+          simulatedNote: null,
+          suggestedActions: [
+            "Show vehicles needing maintenance",
+            "Summarize my fleet health"
+          ],
+          entities: {},
+        },
+      };
+    }
+    
+    // Generic fallback
     return {
-      response: response || 'No response generated',
+      response: 'I apologize, but I encountered an error processing your request. Please try again or ask about fleet summary, online vehicles, offline vehicles, maintenance, or critical alerts.',
       context,
-      knowledgeResults,
+      knowledgeResults: [],
       metadata: {
         title: "FleetNimble AI Assistant",
-        confidence: "MEDIUM",
+        confidence: "LOW",
         dataFreshness: "UNKNOWN",
         simulatedNote: null,
         suggestedActions: [
@@ -567,11 +594,11 @@ async function processChatMessageStable(userId, message, vehicleId = null, chatH
       },
     };
   } catch (error) {
-    console.error('AI FAILED AT STABLE FALLBACK', error);
+    console.error('AI_DETERMINISTIC_FALLBACK_ERROR', error);
     console.error(error.stack);
     return {
-      response: 'FleetNimble AI is online, but encountered an error. Please try again.',
-      context: { vehicleCount: 0, hasVehicles: false },
+      response: 'FleetNimble AI is online but encountered an error. Please try again.',
+      context: { intent: 'error', dataSource: 'none', recordCounts: {} },
       knowledgeResults: [],
       metadata: {
         title: "FleetNimble AI Assistant",
