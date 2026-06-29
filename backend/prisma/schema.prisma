@@ -151,6 +151,7 @@ model Vehicle {
   invoices              Invoice[]
   maintenanceReminders  MaintenanceReminder[]
   aiConversationContexts AiConversationContext[]
+  digitalTwin           VehicleDigitalTwin?
 
   @@index([userId])
   @@index([companyId])
@@ -965,4 +966,62 @@ model MaintenanceReminder {
   @@index([reminderDate])
   @@index([sent])
   @@map("maintenance_reminders")
+}
+
+model VehicleDigitalTwin {
+  id        String   @id @default(uuid())
+  vehicleId String   @unique @map("vehicle_id")
+  userId    String   @map("user_id")
+  data      Json
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  vehicle   Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([vehicleId])
+  @@index([updatedAt])
+  @@map("vehicle_digital_twins")
+}
+
+model SystemMetric {
+  id        String   @id @default(uuid())
+  metricName String  @map("metric_name")
+  value     String
+  metadata  Json?
+  timestamp DateTime @default(now())
+
+  @@index([metricName])
+  @@index([timestamp])
+  @@map("system_metrics")
+}
+
+model SecurityEvent {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  eventType String  @map("event_type")
+  details   Json
+  severity  String
+  timestamp DateTime @default(now())
+
+  @@index([userId])
+  @@index([eventType])
+  @@index([severity])
+  @@index([timestamp])
+  @@map("security_events")
+}
+
+model ApiUsageLog {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  endpoint     String
+  method       String
+  statusCode   Int      @map("status_code")
+  responseTime Int      @map("response_time")
+  timestamp    DateTime @default(now())
+
+  @@index([userId])
+  @@index([endpoint])
+  @@index([timestamp])
+  @@map("api_usage_logs")
 }

@@ -597,6 +597,353 @@ Contact support for webhook setup.
 5. Report bug to support
 `,
   },
+
+  training_guides: {
+    getting_started: `
+# FleetNimble Getting Started Guide
+
+## Introduction
+
+FleetNimble is a comprehensive fleet management platform that helps you monitor, manage, and optimize your fleet operations.
+
+## Account Setup
+
+1. **Create Account**
+   - Visit fleetnimble.com
+   - Click "Sign Up"
+   - Enter your information
+   - Verify email address
+
+2. **Complete Profile**
+   - Add company information
+   - Set up user roles
+   - Configure preferences
+
+## Adding Your First Vehicle
+
+1. **Connect OBD Device**
+   - Locate OBD-II port (under dashboard)
+   - Plug in FleetNimble adapter
+   - Enable Bluetooth on mobile device
+   - Pair with adapter (PIN: 1234)
+
+2. **Add Vehicle to Dashboard**
+   - Go to Vehicles > Add Vehicle
+   - Enter vehicle details (Make, Model, Year, VIN)
+   - Select connected OBD device
+   - Save and verify connection
+
+3. **Verify Data**
+   - Check live telemetry
+   - Verify GPS tracking
+   - Test alerts
+
+## Basic Navigation
+
+- **Dashboard**: Overview of fleet status
+- **Vehicles**: Manage vehicle list
+- **Telemetry**: View live data
+- **GPS**: Track vehicle locations
+- **Alerts**: View notifications
+- **Maintenance**: Schedule service
+- **Reports**: Generate insights
+- **Settings**: Configure preferences
+
+## Next Steps
+
+- Add remaining vehicles
+- Set up alerts
+- Configure geofences
+- Schedule first report
+- Invite team members
+`,
+    advanced_features: `
+# FleetNimble Advanced Features Guide
+
+## AI Assistant
+
+The AI Assistant provides intelligent insights and answers questions about your fleet.
+
+**Features:**
+- Natural language queries
+- Predictive analytics
+- Maintenance recommendations
+- Performance analysis
+
+**Usage:**
+- Click AI Assistant icon
+- Ask questions in natural language
+- Review AI responses
+- Take suggested actions
+
+## Predictive Maintenance
+
+AI predicts component failures before they occur.
+
+**Supported Predictions:**
+- Battery failure
+- Coolant system failure
+- Brake wear
+- Tyre replacement
+- Engine overheating
+- Transmission issues
+
+**Setup:**
+- Enable predictive maintenance in settings
+- Review predictions daily
+- Schedule proactive repairs
+
+## Route Optimization
+
+Optimize routes for efficiency and cost savings.
+
+**Features:**
+- Automatic route planning
+- Traffic integration
+- Fuel efficiency optimization
+- Time estimation
+
+**Usage:**
+- Create route in dashboard
+- Add waypoints
+- Optimize route
+- Share with drivers
+
+## Driver Scorecards
+
+Track and improve driver performance.
+
+**Metrics:**
+- Safety score
+- Efficiency score
+- Harsh braking
+- Harsh acceleration
+- Speeding incidents
+
+**Setup:**
+- Assign drivers to vehicles
+- Enable behavior tracking
+- Review scorecards weekly
+- Provide feedback
+
+## Custom Reports
+
+Create tailored reports for your needs.
+
+**Report Types:**
+- Fleet health
+- Fuel efficiency
+- Maintenance summary
+- Driver behavior
+- Cost analysis
+- Custom metrics
+
+**Creation:**
+- Go to Reports > Create Custom
+- Select metrics
+- Set date range
+- Add filters
+- Save and schedule
+`,
+    best_practices: `
+# FleetNimble Best Practices
+
+## Vehicle Management
+
+**Regular Updates:**
+- Keep vehicle information current
+- Update odometer readings monthly
+- Review vehicle status weekly
+
+**OBD Device Care:**
+- Check device connection regularly
+- Update firmware when available
+- Replace batteries annually
+- Clean OBD port periodically
+
+## Maintenance
+
+**Preventive Maintenance:**
+- Follow manufacturer schedules
+- Use AI predictions proactively
+- Address critical alerts immediately
+- Keep detailed maintenance records
+
+**Cost Management:**
+- Track maintenance costs per vehicle
+- Compare costs across fleet
+- Identify high-cost vehicles
+- Optimize maintenance schedules
+
+## Driver Management
+
+**Training:**
+- Provide regular driver training
+- Share scorecards with drivers
+- Address behavior issues promptly
+- Reward good performance
+
+**Safety:**
+- Monitor safety metrics closely
+- Address speeding immediately
+- Review harsh braking events
+- Implement safety policies
+
+## Data Management
+
+**Regular Reviews:**
+- Review dashboard daily
+- Check alerts hourly
+- Generate reports weekly
+- Analyze trends monthly
+
+**Data Quality:**
+- Ensure accurate data entry
+- Verify GPS tracking
+- Check telemetry accuracy
+- Report data issues promptly
+
+## Security
+
+**Access Control:**
+- Use role-based permissions
+- Review user access regularly
+- Remove inactive users
+- Enable two-factor authentication
+
+**Data Protection:**
+- Use strong passwords
+- Enable data encryption
+- Regular security audits
+- Keep software updated
+`,
+  },
+
+  support_articles: {
+    integration_guide: `
+# FleetNimble Integration Guide
+
+## API Integration
+
+FleetNimble provides REST APIs for custom integrations.
+
+**Authentication:**
+- JWT token required
+- Token obtained via login endpoint
+- Include in Authorization header
+
+**Rate Limits:**
+- Standard: 100 requests/minute
+- Enterprise: Custom limits available
+- Contact support for increases
+
+## Webhooks
+
+Configure webhooks for real-time notifications.
+
+**Supported Events:**
+- Alert triggered
+- Vehicle status change
+- Maintenance due
+- Geofence entry/exit
+- Trip completed
+
+**Setup:**
+1. Contact support
+2. Provide webhook URL
+3. Select event types
+4. Test configuration
+5. Monitor delivery
+
+## Third-Party Integrations
+
+**Supported Platforms:**
+- ERP systems
+- Accounting software
+- Fuel card providers
+- Insurance providers
+- Dispatch systems
+
+**Integration Process:**
+1. Assess requirements
+2. Design integration
+3. Develop API client
+4. Test thoroughly
+5. Deploy to production
+6. Monitor performance
+
+## Custom Development
+
+For custom development needs:
+
+1. Review API documentation
+2. Request API access
+3. Use sandbox environment
+4. Test thoroughly
+5. Request production access
+6. Deploy and monitor
+`,
+    security_guide: `
+# FleetNimble Security Guide
+
+## Data Security
+
+**Encryption:**
+- All data encrypted in transit
+- Data encrypted at rest
+- AES-256 encryption
+- TLS 1.3 for communications
+
+**Access Control:**
+- Role-based permissions
+- User authentication
+- Session management
+- Audit logging
+
+## Account Security
+
+**Best Practices:**
+- Use strong passwords
+- Enable two-factor authentication
+- Review access logs regularly
+- Update passwords periodically
+- Report suspicious activity
+
+**User Management:**
+- Assign appropriate roles
+- Remove inactive users
+- Review permissions regularly
+- Use least privilege principle
+
+## API Security
+
+**Authentication:**
+- JWT token authentication
+- Token expiration
+- Refresh token rotation
+- API key management
+
+**Rate Limiting:**
+- Request rate limits
+- Burst protection
+- IP-based restrictions
+- User-based limits
+
+## Compliance
+
+**GDPR:**
+- Data processing agreements
+- Right to be forgotten
+- Data portability
+- Consent management
+
+**SOC 2:**
+- Security controls
+- Availability monitoring
+- Processing integrity
+- Confidentiality
+`,
+  },
 };
 
 /**
@@ -647,13 +994,24 @@ export function searchKnowledgeBase(query) {
     }
   }
 
-  // Search troubleshooting
-  for (const [issue, solution] of Object.entries(KNOWLEDGE_BASE.troubleshooting)) {
-    if (issue.toLowerCase().includes(lowerQuery) || solution.toLowerCase().includes(lowerQuery)) {
+  // Search training guides
+  for (const [guide, content] of Object.entries(KNOWLEDGE_BASE.training_guides)) {
+    if (guide.toLowerCase().includes(lowerQuery) || content.toLowerCase().includes(lowerQuery)) {
       results.push({
-        type: 'troubleshooting',
-        issue,
-        solution,
+        type: 'training_guide',
+        guide,
+        content,
+      });
+    }
+  }
+
+  // Search support articles
+  for (const [article, content] of Object.entries(KNOWLEDGE_BASE.support_articles)) {
+    if (article.toLowerCase().includes(lowerQuery) || content.toLowerCase().includes(lowerQuery)) {
+      results.push({
+        type: 'support_article',
+        article,
+        content,
       });
     }
   }
@@ -685,6 +1043,8 @@ export function getKnowledgeBaseContext() {
     faqs: Object.keys(KNOWLEDGE_BASE.faqs),
     documentation: Object.keys(KNOWLEDGE_BASE.documentation),
     troubleshooting: Object.keys(KNOWLEDGE_BASE.troubleshooting),
+    training_guides: Object.keys(KNOWLEDGE_BASE.training_guides),
+    support_articles: Object.keys(KNOWLEDGE_BASE.support_articles),
   };
 }
 
