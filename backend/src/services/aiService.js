@@ -3,22 +3,46 @@
  * Coordinates AI intent detection, context building, provider calls, and fallbacks
  */
 
+import prisma from '../utils/prisma.js';
+import logger from '../utils/logger.js';
 import { detectIntent, extractEntities } from './ai/aiIntentDetector.js';
 import { AIContextBuilder } from './ai/aiContextBuilder.js';
 import { callAIWithRetry, buildAIMessages, getProviderInfo } from './ai/aiProvider.js';
 import { formatSuccessResponse, formatErrorResponse, getSuggestedActions } from './ai/aiResponseFormatter.js';
 import { getDeterministicFallback } from './ai/aiDeterministicFallback.js';
-import { getConversationHistory, saveConversationMessage, limitChatHistory } from './aiConversationMemory.js';
+import { limitChatHistory } from './aiConversationMemory.js';
 import { searchKnowledgeBase } from './aiKnowledgeBase.js';
 
 const AI_ORCHESTRATOR_ENABLED = process.env.AI_ORCHESTRATOR_ENABLED === 'true';
-const MAX_PROMPT_CHARS = 12000;
+const MAX_PROMPT_CHARS = 6000;
 
 /**
  * Process user message and get AI response
  */
 export async function processChatMessage(userId, message, vehicleId = null, chatHistory = []) {
-  console.log('AI_SERVICE_PROCESS_START', { userId, message: message?.substring(0, 50) });
+  logger.info('AI_REQUEST_RECEIVED', { userId, message: message?.substring(0, 50) });
+  
+  // Validate inputs
+  if (!message || typeof message !== 'string' || message.trim() === '') {
+    logger.warn('AI_INVALID_INPUT', { userId, message });
+    return {
+      response: 'Please provide a valid message.',
+      context: null,
+      knowledgeResults: [],
+      metadata: {
+        title: "FleetNimble AI Assistant",
+        confidence: "LOW",
+        dataFreshness: "UNKNOWN",
+        simulatedNote: null,
+        suggestedActions: [
+          "Summarize my fleet health",
+          "Show critical alerts",
+          "Show vehicles needing maintenance",
+        ],
+        entities: {},
+      },
+    };
+  }
   
   try {
     // Step 1: Detect intent
@@ -30,9 +54,9 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
         entities: extractEntities(message, userId, userVehicles),
         userVehicles,
       };
-      console.log('AI_STEP_INTENT_OK', { intent: intentResult.intent });
+      logger.info('AI_INTENT_DETECTED', { userId, intent: intentResult.intent });
     } catch (intentError) {
-      console.error('AI_STEP_INTENT_FAILED', intentError);
+      logger.error('AI_INTENT_DETECTION_FAILED', { userId, error: intentError.message });
       intentResult = { intent: 'general', entities: {}, userVehicles: [] };
     }
     
@@ -41,9 +65,9 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
     try {
       const contextBuilder = new AIContextBuilder(userId, message, intentResult.userVehicles);
       context = await contextBuilder.build();
-      console.log('AI_STEP_CONTEXT_OK', { intent: context.intent });
+      logger.info('AI_CONTEXT_BUILT', { userId, intent: context.intent });
     } catch (contextError) {
-      console.error('AI_STEP_CONTEXT_FAILED', contextError);
+      logger.error('AI_CONTEXT_BUILD_FAILED', { userId, error: contextError.message });
       context = null;
     }
     
@@ -52,7 +76,7 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
     try {
       knowledgeResults = searchKnowledgeBase(message);
     } catch (kbError) {
-      console.error('AI_FAILED_AT_KNOWLEDGE_BASE', kbError);
+      logger.error('AI_KNOWLEDGE_BASE_FAILED', { userId, error: kbError.message });
       knowledgeResults = [];
     }
     
@@ -64,40 +88,102 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
     
     // Step 6: Check prompt size
     const promptSize = JSON.stringify(messages).length;
-    console.log('AI_PROMPT_SIZE_CHARS', promptSize);
+    logger.info('AI_PROMPT_SIZE', { userId, chars: promptSize, max: MAX_PROMPT_CHARS });
     
     if (promptSize > MAX_PROMPT_CHARS) {
-      console.log('AI_TOKEN_LIMIT_EXCEEDED', { promptSize, max: MAX_PROMPT_CHARS });
+      logger.warn('AI_TOKEN_LIMIT_EXCEEDED', { userId, promptSize, max: MAX_PROMPT_CHARS });
       // Use deterministic fallback for large prompts
       const fallbackResult = await getDeterministicFallback(userId, message, vehicleId);
-      return formatSuccessResponse(fallbackResult.data.reply, context, fallbackResult.data.metadata);
+      const reply = fallbackResult?.data?.reply || 'Unable to process request due to size constraints.';
+      logger.info('AI_FALLBACK_USED', { userId, reason: 'token_limit' });
+      return {
+        response: reply,
+        context,
+        knowledgeResults,
+        metadata: fallbackResult?.data?.metadata || {
+          title: "FleetNimble AI Assistant",
+          confidence: "LOW",
+          dataFreshness: "UNKNOWN",
+          simulatedNote: null,
+          suggestedActions: [
+            "Summarize my fleet health",
+            "Show critical alerts",
+            "Show vehicles needing maintenance",
+          ],
+          entities: {},
+        },
+      };
     }
     
     // Step 7: Call AI provider with retry
+    logger.info('AI_PROVIDER_CALL_START', { userId });
     const aiResult = await callAIWithRetry(messages, context, 1);
     
-    if (aiResult.success) {
+    if (aiResult?.success && aiResult?.response) {
       // Step 8: Format successful response
       const suggestedActions = getSuggestedActions(context?.intent || intentResult.intent);
-      return formatSuccessResponse(aiResult.response, context, {
-        confidence: "MEDIUM",
-        dataFreshness: "LIVE",
-        suggestedActions,
-      });
+      logger.info('AI_RESPONSE_SUCCESS', { userId, provider: aiResult.provider, length: aiResult.response.length });
+      return {
+        response: aiResult.response,
+        context,
+        knowledgeResults,
+        metadata: {
+          title: "FleetNimble AI Assistant",
+          confidence: "MEDIUM",
+          dataFreshness: "LIVE",
+          simulatedNote: null,
+          suggestedActions,
+          entities: {},
+        },
+      };
     } else {
       // Step 9: Use deterministic fallback on provider failure
-      console.log('AI_PROVIDER_FAILED', aiResult.error);
-      console.log('AI_DETERMINISTIC_FALLBACK_USED');
+      logger.warn('AI_PROVIDER_FAILED', { userId, error: aiResult?.error });
       const fallbackResult = await getDeterministicFallback(userId, message, vehicleId);
-      return formatSuccessResponse(fallbackResult.data.reply, context, fallbackResult.data.metadata);
+      const reply = fallbackResult?.data?.reply || 'I apologize, but I encountered an error processing your request. Please try again.';
+      logger.info('AI_FALLBACK_USED', { userId, reason: 'provider_failure' });
+      return {
+        response: reply,
+        context,
+        knowledgeResults,
+        metadata: fallbackResult?.data?.metadata || {
+          title: "FleetNimble AI Assistant",
+          confidence: "LOW",
+          dataFreshness: "UNKNOWN",
+          simulatedNote: null,
+          suggestedActions: [
+            "Summarize my fleet health",
+            "Show critical alerts",
+            "Show vehicles needing maintenance",
+          ],
+          entities: {},
+        },
+      };
     }
   } catch (error) {
-    console.error('AI_SERVICE_ERROR', error);
-    console.error(error.stack);
+    logger.error('AI_SERVICE_ERROR', { userId, error: error.message, stack: error.stack });
     
     // Final fallback
     const fallbackResult = await getDeterministicFallback(userId, message, vehicleId);
-    return formatSuccessResponse(fallbackResult.data.reply, null, fallbackResult.data.metadata);
+    const reply = fallbackResult?.data?.reply || 'I apologize, but I encountered an error processing your request. Please try again.';
+    logger.info('AI_FALLBACK_USED', { userId, reason: 'service_error' });
+    return {
+      response: reply,
+      context: null,
+      knowledgeResults: [],
+      metadata: fallbackResult?.data?.metadata || {
+        title: "FleetNimble AI Assistant",
+        confidence: "LOW",
+        dataFreshness: "UNKNOWN",
+        simulatedNote: null,
+        suggestedActions: [
+          "Summarize my fleet health",
+          "Show critical alerts",
+          "Show vehicles needing maintenance",
+        ],
+        entities: {},
+      },
+    };
   }
 }
 
@@ -113,7 +199,7 @@ export async function processChatMessageStream(userId, message, vehicleId = null
     const result = await processChatMessage(userId, message, vehicleId, chatHistory);
     
     // Simulate streaming by sending chunks
-    const chunks = result.data.reply.split(' ');
+    const chunks = result.response.split(' ');
     for (const chunk of chunks) {
       onChunk(chunk + ' ');
       await new Promise(resolve => setTimeout(resolve, 50));
@@ -128,10 +214,187 @@ export async function processChatMessageStream(userId, message, vehicleId = null
 }
 
 /**
+ * Get user chats
+ */
+export async function getUserChats(userId) {
+  try {
+    const chats = await prisma.aiChat.findMany({
+      where: { userId },
+      orderBy: { updatedAt: 'desc' },
+      include: {
+        _count: {
+          select: { messages: true },
+        },
+      },
+    });
+    
+    return chats.map(chat => ({
+      id: chat.id,
+      title: chat.title,
+      createdAt: chat.createdAt,
+      updatedAt: chat.updatedAt,
+      messageCount: chat._count.messages,
+    }));
+  } catch (error) {
+    console.error('Error getting user chats', error);
+    return [];
+  }
+}
+
+/**
+ * Get chat with messages
+ */
+export async function getChatWithMessages(chatId, userId) {
+  try {
+    const chat = await prisma.aiChat.findFirst({
+      where: { id: chatId, userId },
+      include: {
+        messages: {
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
+    
+    if (!chat) {
+      throw new Error('Chat not found');
+    }
+    
+    return chat;
+  } catch (error) {
+    console.error('Error getting chat with messages', error);
+    throw error;
+  }
+}
+
+/**
+ * Save message to chat
+ */
+export async function saveMessage(chatId, role, content, metadata = {}) {
+  try {
+    const message = await prisma.aiMessage.create({
+      data: {
+        conversationId: chatId,
+        role,
+        content,
+        metadata,
+      },
+    });
+    
+    // Update chat timestamp
+    await prisma.aiChat.update({
+      where: { id: chatId },
+      data: { updatedAt: new Date() },
+    });
+    
+    return message;
+  } catch (error) {
+    console.error('Error saving message', error);
+    throw error;
+  }
+}
+
+/**
+ * Create new chat
+ */
+export async function createChat(userId, title) {
+  try {
+    const chat = await prisma.aiChat.create({
+      data: {
+        userId,
+        title,
+      },
+    });
+    
+    return chat;
+  } catch (error) {
+    console.error('Error creating chat', error);
+    throw error;
+  }
+}
+
+/**
+ * Delete chat
+ */
+export async function deleteChat(chatId, userId) {
+  try {
+    // Delete messages first
+    await prisma.aiMessage.deleteMany({
+      where: { conversationId: chatId },
+    });
+    
+    // Delete chat
+    await prisma.aiChat.deleteMany({
+      where: { id: chatId, userId },
+    });
+    
+    return true;
+  } catch (error) {
+    console.error('Error deleting chat', error);
+    throw error;
+  }
+}
+
+/**
+ * Generate title for chat
+ */
+export async function generateTitle(chatId) {
+  try {
+    const chat = await prisma.aiChat.findUnique({
+      where: { id: chatId },
+      include: {
+        messages: {
+          orderBy: { createdAt: 'asc' },
+          take: 1,
+        },
+      },
+    });
+    
+    if (!chat || chat.messages.length === 0) {
+      return 'New Chat';
+    }
+    
+    const firstMessage = chat.messages[0].content;
+    return firstMessage.substring(0, 50) + (firstMessage.length > 50 ? '...' : '');
+  } catch (error) {
+    console.error('Error generating title', error);
+    return 'New Chat';
+  }
+}
+
+/**
+ * Summarize conversation
+ */
+export async function summarizeConversation(chatId) {
+  try {
+    const chat = await prisma.aiChat.findUnique({
+      where: { id: chatId },
+      include: {
+        messages: {
+          orderBy: { createdAt: 'asc' },
+          take: 10,
+        },
+      },
+    });
+    
+    if (!chat || chat.messages.length === 0) {
+      return 'No messages to summarize';
+    }
+    
+    const messageCount = chat.messages.length;
+    const userMessages = chat.messages.filter(m => m.role === 'user').length;
+    const assistantMessages = chat.messages.filter(m => m.role === 'assistant').length;
+    
+    return `Chat with ${messageCount} messages (${userMessages} user, ${assistantMessages} assistant).`;
+  } catch (error) {
+    console.error('Error summarizing conversation', error);
+    return 'Unable to summarize conversation';
+  }
+}
+
+/**
  * Get user vehicles for entity extraction
  */
 async function getUserVehicles(userId) {
-  const prisma = (await import('../utils/prisma.js')).default;
   return prisma.vehicle.findMany({
     where: { userId, deletedAt: null },
     select: { id: true, name: true, plateNumber: true, vin: true },

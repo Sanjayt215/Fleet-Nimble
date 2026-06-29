@@ -1,6 +1,6 @@
 /**
  * AI Intent Detection System
- * Detects user intent from natural language queries
+ * Detects user intent from natural language queries with confidence scoring
  */
 
 export const INTENTS = {
@@ -14,14 +14,27 @@ export const INTENTS = {
   DTC: 'dtc',
   REPORT: 'report',
   SUPPORT: 'support',
+  BATTERY: 'battery',
+  FUEL: 'fuel',
+  TRIP: 'trip',
+  DRIVER: 'driver',
+  OFFLINE_VEHICLES: 'offline_vehicles',
+  STANDBY_VEHICLES: 'standby_vehicles',
+  ENGINE_STATE: 'engine_state',
+  PREDICTIVE_MAINTENANCE: 'predictive_maintenance',
+  BUSINESS_IMPACT: 'business_impact',
+  RECOMMENDATIONS: 'recommendations',
+  COMPANY_INFO: 'company_info',
   GENERAL: 'general',
 };
 
 /**
- * Detect intent from user message
+ * Detect intent from user message with confidence score
  */
 export function detectIntent(message) {
   const lowerMessage = message.toLowerCase();
+  let intent = INTENTS.GENERAL;
+  let confidence = 0.5;
   
   // Fleet summary intent
   if (lowerMessage.includes('summary') || 
@@ -29,77 +42,191 @@ export function detectIntent(message) {
       lowerMessage.includes('overview') || 
       lowerMessage.includes('dashboard') ||
       lowerMessage.includes('fleet status')) {
-    return INTENTS.FLEET_SUMMARY;
+    intent = INTENTS.FLEET_SUMMARY;
+    confidence = 0.9;
   }
   
   // Vehicle comparison intent
-  if (lowerMessage.includes('compare') || 
-      lowerMessage.includes('vs') || 
-      lowerMessage.includes('versus') ||
-      lowerMessage.includes('difference between')) {
-    return INTENTS.VEHICLE_COMPARISON;
+  else if (lowerMessage.includes('compare') || 
+           lowerMessage.includes('vs') || 
+           lowerMessage.includes('versus') ||
+           lowerMessage.includes('difference between')) {
+    intent = INTENTS.VEHICLE_COMPARISON;
+    confidence = 0.85;
   }
   
   // DTC/diagnostics intent
-  if (lowerMessage.includes('dtc') || 
-      lowerMessage.includes('diagnostic') || 
-      lowerMessage.includes('error code') ||
-      lowerMessage.includes('p0') ||
-      lowerMessage.includes('trouble code')) {
-    return INTENTS.DTC;
+  else if (lowerMessage.includes('dtc') || 
+           lowerMessage.includes('diagnostic') || 
+           lowerMessage.includes('error code') ||
+           lowerMessage.includes('p0') ||
+           lowerMessage.includes('trouble code')) {
+    intent = INTENTS.DTC;
+    confidence = 0.95;
   }
   
   // Maintenance intent
-  if (lowerMessage.includes('maintenance') || 
-      lowerMessage.includes('repair') || 
-      lowerMessage.includes('service') ||
-      lowerMessage.includes('service due') ||
-      lowerMessage.includes('needs maintenance')) {
-    return INTENTS.MAINTENANCE;
+  else if (lowerMessage.includes('maintenance') || 
+           lowerMessage.includes('repair') || 
+           lowerMessage.includes('service') ||
+           lowerMessage.includes('service due') ||
+           lowerMessage.includes('needs maintenance')) {
+    intent = INTENTS.MAINTENANCE;
+    confidence = 0.9;
+  }
+  
+  // Predictive maintenance intent
+  else if (lowerMessage.includes('predictive') ||
+           lowerMessage.includes('likely to fail') ||
+           lowerMessage.includes('repair priority') ||
+           lowerMessage.includes('which vehicle should i repair')) {
+    intent = INTENTS.PREDICTIVE_MAINTENANCE;
+    confidence = 0.85;
   }
   
   // GPS/location intent
-  if (lowerMessage.includes('location') || 
-      lowerMessage.includes('gps') || 
-      lowerMessage.includes('where is') ||
-      lowerMessage.includes('position')) {
-    return INTENTS.GPS;
+  else if (lowerMessage.includes('location') || 
+           lowerMessage.includes('gps') || 
+           lowerMessage.includes('where is') ||
+           lowerMessage.includes('position')) {
+    intent = INTENTS.GPS;
+    confidence = 0.9;
   }
   
   // Alerts intent
-  if (lowerMessage.includes('alert') || 
-      lowerMessage.includes('warning') || 
-      lowerMessage.includes('critical') ||
-      lowerMessage.includes('notification')) {
-    return INTENTS.ALERTS;
+  else if (lowerMessage.includes('alert') || 
+           lowerMessage.includes('warning') || 
+           lowerMessage.includes('critical') ||
+           lowerMessage.includes('notification')) {
+    intent = INTENTS.ALERTS;
+    confidence = 0.9;
+  }
+  
+  // Offline vehicles intent
+  else if (lowerMessage.includes('offline') ||
+           lowerMessage.includes('not responding') ||
+           lowerMessage.includes('disconnected')) {
+    intent = INTENTS.OFFLINE_VEHICLES;
+    confidence = 0.9;
+  }
+  
+  // Standby vehicles intent
+  else if (lowerMessage.includes('standby') ||
+           lowerMessage.includes('idle') ||
+           lowerMessage.includes('parked')) {
+    intent = INTENTS.STANDBY_VEHICLES;
+    confidence = 0.85;
+  }
+  
+  // Battery intent
+  else if (lowerMessage.includes('battery') ||
+           lowerMessage.includes('voltage') ||
+           lowerMessage.includes('power')) {
+    intent = INTENTS.BATTERY;
+    confidence = 0.85;
+  }
+  
+  // Fuel intent
+  else if (lowerMessage.includes('fuel') ||
+           lowerMessage.includes('gas') ||
+           lowerMessage.includes('petrol') ||
+           lowerMessage.includes('tank')) {
+    intent = INTENTS.FUEL;
+    confidence = 0.85;
+  }
+  
+  // Trip intent
+  else if (lowerMessage.includes('trip') ||
+           lowerMessage.includes('journey') ||
+           lowerMessage.includes('route')) {
+    intent = INTENTS.TRIP;
+    confidence = 0.8;
+  }
+  
+  // Driver intent
+  else if (lowerMessage.includes('driver') ||
+           lowerMessage.includes('who is driving')) {
+    intent = INTENTS.DRIVER;
+    confidence = 0.8;
+  }
+  
+  // Engine state intent
+  else if (lowerMessage.includes('engine') ||
+           lowerMessage.includes('ignition') ||
+           lowerMessage.includes('motor')) {
+    intent = INTENTS.ENGINE_STATE;
+    confidence = 0.85;
   }
   
   // Report intent
-  if (lowerMessage.includes('report') || 
-      lowerMessage.includes('generate') || 
-      lowerMessage.includes('export')) {
-    return INTENTS.REPORT;
+  else if (lowerMessage.includes('report') || 
+           lowerMessage.includes('generate') || 
+           lowerMessage.includes('export')) {
+    intent = INTENTS.REPORT;
+    confidence = 0.85;
+  }
+  
+  // Business impact intent
+  else if (lowerMessage.includes('business impact') ||
+           lowerMessage.includes('cost') ||
+           lowerMessage.includes('revenue') ||
+           lowerMessage.includes('profit')) {
+    intent = INTENTS.BUSINESS_IMPACT;
+    confidence = 0.8;
+  }
+  
+  // Recommendations intent
+  else if (lowerMessage.includes('recommend') ||
+           lowerMessage.includes('suggest') ||
+           lowerMessage.includes('advice') ||
+           lowerMessage.includes('should i')) {
+    intent = INTENTS.RECOMMENDATIONS;
+    confidence = 0.8;
+  }
+  
+  // Company information intent
+  else if (lowerMessage.includes('company') ||
+           lowerMessage.includes('organization') ||
+           lowerMessage.includes('fleetnimble')) {
+    intent = INTENTS.COMPANY_INFO;
+    confidence = 0.85;
   }
   
   // Support/help intent
-  if (lowerMessage.includes('help') || 
-      lowerMessage.includes('how to') || 
-      lowerMessage.includes('support') ||
-      lowerMessage.includes('guide') ||
-      lowerMessage.includes('tutorial')) {
-    return INTENTS.SUPPORT;
+  else if (lowerMessage.includes('help') || 
+           lowerMessage.includes('how to') || 
+           lowerMessage.includes('support') ||
+           lowerMessage.includes('guide') ||
+           lowerMessage.includes('tutorial') ||
+           lowerMessage.includes('what is') ||
+           lowerMessage.includes('how does') ||
+           lowerMessage.includes('explain') ||
+           lowerMessage.includes('troubleshoot') ||
+           lowerMessage.includes('login') ||
+           lowerMessage.includes('subscription') ||
+           lowerMessage.includes('pricing') ||
+           lowerMessage.includes('mobile app') ||
+           lowerMessage.includes('obd device') ||
+           lowerMessage.includes('gps tracking') ||
+           lowerMessage.includes('digital twin') ||
+           lowerMessage.includes('geofence') ||
+           lowerMessage.includes('vin') ||
+           lowerMessage.includes('battery protection') ||
+           lowerMessage.includes('engine standby')) {
+    intent = INTENTS.SUPPORT;
+    confidence = 0.9;
   }
   
   // Vehicle details intent (default for vehicle-specific queries)
-  if (lowerMessage.includes('show') || 
-      lowerMessage.includes('vehicle') || 
-      lowerMessage.includes('status') ||
-      lowerMessage.includes('health')) {
-    return INTENTS.VEHICLE_DETAILS;
+  else if (lowerMessage.includes('show') || 
+           lowerMessage.includes('vehicle') || 
+           lowerMessage.includes('status') ||
+           lowerMessage.includes('health')) {
+    intent = INTENTS.VEHICLE_DETAILS;
+    confidence = 0.75;
   }
   
-  // Default to general
-  return INTENTS.GENERAL;
+  return intent;
 }
 
 /**

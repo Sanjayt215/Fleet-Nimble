@@ -1,4 +1,5 @@
 import prisma from '../../utils/prisma.js';
+import logger from '../../utils/logger.js';
 import { detectIntent, extractEntities } from './aiIntentDetector.js';
 import { AIContextBuilder } from './aiContextBuilder.js';
 
@@ -11,7 +12,7 @@ import { AIContextBuilder } from './aiContextBuilder.js';
  * Main entry point for deterministic fallback
  */
 export async function getDeterministicFallback(userId, message, vehicleId = null) {
-  console.log('AI_DETERMINISTIC_FALLBACK_USED', { message: message?.substring(0, 50) });
+  logger.info('AI_DETERMINISTIC_FALLBACK_USED', { message: message?.substring(0, 50) });
   
   try {
     // Step 1: Detect intent
@@ -27,9 +28,9 @@ export async function getDeterministicFallback(userId, message, vehicleId = null
         entities: extractEntities(message, userId, userVehicles),
         userVehicles,
       };
-      console.log('AI_STEP_INTENT_OK', { intent: intentResult.intent });
+      logger.info('AI_FALLBACK_INTENT_DETECTED', { intent: intentResult.intent });
     } catch (intentError) {
-      console.error('AI_STEP_INTENT_FAILED', intentError);
+      logger.error('AI_FALLBACK_INTENT_FAILED', { error: intentError.message });
       intentResult = { intent: 'general', entities: {}, userVehicles: [] };
     }
     
@@ -38,9 +39,9 @@ export async function getDeterministicFallback(userId, message, vehicleId = null
     try {
       const contextBuilder = new AIContextBuilder(userId, message, intentResult.userVehicles);
       context = await contextBuilder.build();
-      console.log('AI_STEP_CONTEXT_OK', { intent: context.intent });
+      logger.info('AI_FALLBACK_CONTEXT_BUILT', { intent: context.intent });
     } catch (contextError) {
-      console.error('AI_STEP_CONTEXT_FAILED', contextError);
+      logger.error('AI_FALLBACK_CONTEXT_FAILED', { error: contextError.message });
       context = null;
     }
     
@@ -85,7 +86,7 @@ export async function getDeterministicFallback(userId, message, vehicleId = null
 async function buildIntentMatchedFallback(userId, message, intentResult, context) {
   const { intent, entities, userVehicles } = intentResult;
   
-  console.log('AI_FALLBACK_INTENT', { intent });
+  logger.info('AI_FALLBACK_INTENT_MATCH', { intent });
   
   try {
     switch (intent) {
@@ -103,6 +104,18 @@ async function buildIntentMatchedFallback(userId, message, intentResult, context
         return await getAlertsFallback(userId, entities);
       case 'gps':
         return await getGPSFallback(userId, entities, userVehicles);
+      case 'offline_vehicles':
+        return await getOfflineVehiclesFallback(userId);
+      case 'standby_vehicles':
+        return await getStandbyVehiclesFallback(userId);
+      case 'battery':
+        return await getBatteryFallback(userId, entities, userVehicles);
+      case 'fuel':
+        return await getFuelFallback(userId, entities, userVehicles);
+      case 'predictive_maintenance':
+        return await getRepairPriorityFallback(userId);
+      case 'support':
+        return await getSupportFallback(message);
       case 'general':
         if (message.toLowerCase().includes('likely to fail') || message.toLowerCase().includes('repair priority')) {
           return await getRepairPriorityFallback(userId);
@@ -115,7 +128,7 @@ async function buildIntentMatchedFallback(userId, message, intentResult, context
         return await getFleetSummaryFallback(userId);
     }
   } catch (error) {
-    console.error('INTENT_MATCHED_FALLBACK_ERROR', { intent, error: error.message });
+    logger.error('AI_FALLBACK_INTENT_ERROR', { intent, error: error.message });
     return await getFleetSummaryFallback(userId);
   }
 }
@@ -768,6 +781,241 @@ async function getOfflineVehiclesFallback(userId) {
 }
 
 /**
+ * Standby vehicles fallback
+ */
+async function getStandbyVehiclesFallback(userId) {
+  const standbyVehicles = await prisma.vehicle.findMany({
+    where: {
+      userId,
+      deletedAt: null,
+      liveState: { status: 'standby' },
+    },
+    select: {
+      name: true,
+      plateNumber: true,
+      make: true,
+      model: true,
+      liveState: { select: { ignitionStatus: true } },
+    },
+    take: 10,
+  });
+  
+  if (standbyVehicles.length === 0) {
+    return {
+      response: 'No vehicles are currently in standby mode.',
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'LIVE',
+        simulatedNote: null,
+        suggestedActions: [
+          'Summarize my fleet health',
+          'Show offline vehicles',
+        ],
+      },
+    };
+  }
+  
+  const vehicleList = standbyVehicles.map(v => 
+    `- ${v.name} (${v.plateNumber}): Ignition ${v.liveState?.ignitionStatus ? 'ON' : 'OFF'}`
+  ).join('\n');
+  
+  const response = `**Standby Vehicles**\n\n${vehicleList}\n\n**Total Standby:** ${standbyVehicles.length}\n\n**Recommended Action:** Monitor standby vehicles for deployment`;
+  
+  return {
+    response,
+    metadata: {
+      confidence: 'HIGH',
+      dataFreshness: 'LIVE',
+      simulatedNote: null,
+      suggestedActions: [
+        'Summarize my fleet health',
+        'Show offline vehicles',
+      ],
+    },
+  };
+}
+
+/**
+ * Battery fallback
+ */
+async function getBatteryFallback(userId, entities, userVehicles) {
+  let vehicle = entities.vehicles[0];
+  
+  if (!vehicle) {
+    const vehicleName = extractVehicleName(entities.message || '', userVehicles);
+    if (vehicleName) {
+      vehicle = await prisma.vehicle.findFirst({
+        where: {
+          userId,
+          deletedAt: null,
+          name: { contains: vehicleName, mode: 'insensitive' },
+        },
+        select: { id: true, name: true, plateNumber: true },
+      });
+    }
+  }
+  
+  if (!vehicle) {
+    // Get all vehicles with battery data
+    const vehicles = await prisma.vehicle.findMany({
+      where: { userId, deletedAt: null },
+      select: { id: true, name: true, plateNumber: true },
+      take: 10,
+    });
+    
+    const batteryData = await Promise.all(
+      vehicles.map(async (v) => {
+        const telemetry = await prisma.telemetry.findFirst({
+          where: { vehicleId: v.id },
+          orderBy: { timestamp: 'desc' },
+          select: { batteryVoltage: true, timestamp: true },
+        });
+        
+        return {
+          name: v.name,
+          plate: v.plateNumber,
+          voltage: telemetry?.batteryVoltage,
+          timestamp: telemetry?.timestamp,
+        };
+      })
+    );
+    
+    const batteryList = batteryData.map(v => 
+      `- ${v.name} (${v.plate}): ${v.voltage || 'N/A'}V`
+    ).join('\n');
+    
+    const response = `**Battery Status**\n\n${batteryList}\n\n**Recommended Action:** Check vehicles with low battery voltage`;
+    
+    return {
+      response,
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'LIVE',
+        simulatedNote: null,
+        suggestedActions: [
+          'Show vehicle details',
+          'Show fuel status',
+        ],
+      },
+    };
+  }
+  
+  const telemetry = await prisma.telemetry.findFirst({
+    where: { vehicleId: vehicle.id },
+    orderBy: { timestamp: 'desc' },
+    select: { batteryVoltage: true, timestamp: true },
+  });
+  
+  const voltage = telemetry?.batteryVoltage;
+  const status = voltage && voltage < 12 ? 'LOW' : voltage && voltage < 13 ? 'NORMAL' : 'GOOD';
+  
+  const response = `**Battery Status: ${vehicle.name}**\n\n**Plate:** ${vehicle.plateNumber}\n**Voltage:** ${voltage || 'N/A'}V\n**Status:** ${status}\n**Last Updated:** ${telemetry?.timestamp || 'N/A'}\n\n**Recommended Action:** ${status === 'LOW' ? 'Charge battery immediately' : 'Battery is in good condition'}`;
+  
+  return {
+    response,
+    metadata: {
+      confidence: 'HIGH',
+      dataFreshness: 'LIVE',
+      simulatedNote: null,
+      suggestedActions: [
+        'Show vehicle details',
+        'Show fuel status',
+      ],
+    },
+  };
+}
+
+/**
+ * Fuel fallback
+ */
+async function getFuelFallback(userId, entities, userVehicles) {
+  let vehicle = entities.vehicles[0];
+  
+  if (!vehicle) {
+    const vehicleName = extractVehicleName(entities.message || '', userVehicles);
+    if (vehicleName) {
+      vehicle = await prisma.vehicle.findFirst({
+        where: {
+          userId,
+          deletedAt: null,
+          name: { contains: vehicleName, mode: 'insensitive' },
+        },
+        select: { id: true, name: true, plateNumber: true },
+      });
+    }
+  }
+  
+  if (!vehicle) {
+    // Get all vehicles with fuel data
+    const vehicles = await prisma.vehicle.findMany({
+      where: { userId, deletedAt: null },
+      select: { id: true, name: true, plateNumber: true },
+      take: 10,
+    });
+    
+    const fuelData = await Promise.all(
+      vehicles.map(async (v) => {
+        const telemetry = await prisma.telemetry.findFirst({
+          where: { vehicleId: v.id },
+          orderBy: { timestamp: 'desc' },
+          select: { fuelLevel: true, timestamp: true },
+        });
+        
+        return {
+          name: v.name,
+          plate: v.plateNumber,
+          fuelLevel: telemetry?.fuelLevel,
+          timestamp: telemetry?.timestamp,
+        };
+      })
+    );
+    
+    const fuelList = fuelData.map(v => 
+      `- ${v.name} (${v.plate}): ${v.fuelLevel || 'N/A'}%`
+    ).join('\n');
+    
+    const response = `**Fuel Status**\n\n${fuelList}\n\n**Recommended Action:** Refuel vehicles with low fuel`;
+    
+    return {
+      response,
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'LIVE',
+        simulatedNote: null,
+        suggestedActions: [
+          'Show vehicle details',
+          'Show battery status',
+        ],
+      },
+    };
+  }
+  
+  const telemetry = await prisma.telemetry.findFirst({
+    where: { vehicleId: vehicle.id },
+    orderBy: { timestamp: 'desc' },
+    select: { fuelLevel: true, timestamp: true },
+  });
+  
+  const fuelLevel = telemetry?.fuelLevel;
+  const status = fuelLevel && fuelLevel < 20 ? 'LOW' : fuelLevel && fuelLevel < 50 ? 'NORMAL' : 'GOOD';
+  
+  const response = `**Fuel Status: ${vehicle.name}**\n\n**Plate:** ${vehicle.plateNumber}\n**Fuel Level:** ${fuelLevel || 'N/A'}%\n**Status:** ${status}\n**Last Updated:** ${telemetry?.timestamp || 'N/A'}\n\n**Recommended Action:** ${status === 'LOW' ? 'Refuel immediately' : 'Fuel level is adequate'}`;
+  
+  return {
+    response,
+    metadata: {
+      confidence: 'HIGH',
+      dataFreshness: 'LIVE',
+      simulatedNote: null,
+      suggestedActions: [
+        'Show vehicle details',
+        'Show battery status',
+      ],
+    },
+  };
+}
+
+/**
  * Repair priority fallback (which vehicle is likely to fail next)
  */
 async function getRepairPriorityFallback(userId) {
@@ -878,8 +1126,204 @@ function extractVehicleName(message, userVehicles) {
 }
 
 /**
- * Extract multiple vehicle names from message
+ * Customer support fallback
  */
+async function getSupportFallback(message) {
+  const lowerMessage = message.toLowerCase();
+  
+  // FleetNimble overview
+  if (lowerMessage.includes('fleetnimble') || lowerMessage.includes('what is fleetnimble') || lowerMessage.includes('how does fleetnimble work')) {
+    return {
+      response: `**FleetNimble Overview**\n\nFleetNimble is a comprehensive fleet management platform that provides real-time vehicle tracking, diagnostics, maintenance scheduling, and AI-powered insights.\n\n**Key Features:**\n- Real-time GPS tracking\n- OBD device integration\n- Predictive maintenance\n- Digital twin technology\n- AI-powered analytics\n- Alert management\n- Geofencing\n\n**Recommended Action:** Explore the dashboard to see your fleet in action`,
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'STATIC',
+        simulatedNote: null,
+        suggestedActions: [
+          'Summarize my fleet health',
+          'Show vehicle details',
+          'Show critical alerts',
+        ],
+      },
+    };
+  }
+  
+  // OBD device
+  if (lowerMessage.includes('obd') || lowerMessage.includes('device')) {
+    return {
+      response: `**OBD Device Information**\n\nFleetNimble uses OBD-II devices to connect to your vehicle's onboard computer and collect real-time data.\n\n**Installation:**\n1. Plug the OBD device into your vehicle's OBD-II port (usually under the dashboard)\n2. The device will automatically connect to our servers\n3. Data will start appearing in your dashboard\n\n**Supported Data:**\n- Engine diagnostics\n- Fuel consumption\n- Battery voltage\n- Temperature readings\n- Speed and RPM\n- Error codes (DTCs)\n\n**Troubleshooting:**\n- Ensure the device is properly plugged in\n- Check that the vehicle ignition is on\n- Verify the device has cellular signal\n\n**Recommended Action:** Check your vehicle's OBD port location`,
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'STATIC',
+        simulatedNote: null,
+        suggestedActions: [
+          'Show vehicle details',
+          'Show offline vehicles',
+        ],
+      },
+    };
+  }
+  
+  // GPS tracking
+  if (lowerMessage.includes('gps') || lowerMessage.includes('tracking') || lowerMessage.includes('location')) {
+    return {
+      response: `**GPS Tracking Information**\n\nFleetNimble provides real-time GPS tracking for all your vehicles.\n\n**Features:**\n- Live location updates\n- Historical route tracking\n- Geofencing capabilities\n- Speed monitoring\n- Distance traveled\n- Estimated arrival times\n\n**Accuracy:**\n- GPS accuracy: ~5-10 meters\n- Update frequency: Every 30-60 seconds\n- Works with cellular and satellite\n\n**Recommended Action:** Create a geofence for your vehicles`,
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'STATIC',
+        simulatedNote: null,
+        suggestedActions: [
+          'Show vehicle location',
+          'Create geofence',
+          'Show offline vehicles',
+        ],
+      },
+    };
+  }
+  
+  // Subscriptions and pricing
+  if (lowerMessage.includes('subscription') || lowerMessage.includes('pricing') || lowerMessage.includes('cost') || lowerMessage.includes('plan')) {
+    return {
+      response: `**Subscription Plans**\n\nFleetNimble offers flexible plans to fit your fleet size:\n\n**Starter Plan:**\n- Up to 5 vehicles\n- Basic tracking\n- Email alerts\n- $29/month\n\n**Professional Plan:**\n- Up to 20 vehicles\n- Advanced analytics\n- SMS alerts\n- Priority support\n- $79/month\n\n**Enterprise Plan:**\n- Unlimited vehicles\n- Custom integrations\n- Dedicated support\n- White-label options\n- Contact for pricing\n\n**Recommended Action:** Contact sales for enterprise pricing`,
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'STATIC',
+        simulatedNote: null,
+        suggestedActions: [
+          'Summarize my fleet health',
+          'Show vehicle details',
+        ],
+      },
+    };
+  }
+  
+  // Login and authentication
+  if (lowerMessage.includes('login') || lowerMessage.includes('password') || lowerMessage.includes('auth')) {
+    return {
+      response: `**Login and Authentication**\n\n**How to Login:**\n1. Visit fleetnimble.com\n2. Click "Login" in the top right\n3. Enter your email and password\n4. Click "Sign In"\n\n**Troubleshooting:**\n- Forgot password? Click "Forgot Password" on login page\n- Account locked? Contact support\n- 2FA issues? Check your authenticator app\n\n**Security:**\n- Two-factor authentication available\n- Session timeout: 30 minutes\n- Password requirements: 8+ characters, mixed case, numbers\n\n**Recommended Action:** Reset your password if needed`,
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'STATIC',
+        simulatedNote: null,
+        suggestedActions: [
+          'Contact support',
+          'Reset password',
+        ],
+      },
+    };
+  }
+  
+  // Mobile app
+  if (lowerMessage.includes('mobile') || lowerMessage.includes('app') || lowerMessage.includes('android') || lowerMessage.includes('ios')) {
+    return {
+      response: `**Mobile App Information**\n\nFleetNimble offers mobile apps for iOS and Android.\n\n**Features:**\n- Real-time tracking\n- Push notifications\n- Vehicle management\n- Alert management\n- Offline mode\n\n**Download:**\n- iOS: App Store\n- Android: Google Play Store\n\n**Requirements:**\n- iOS 12+\n- Android 8+\n- Internet connection\n\n**Recommended Action:** Download the app for on-the-go access`,
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'STATIC',
+        simulatedNote: null,
+        suggestedActions: [
+          'Show vehicle details',
+          'Show alerts',
+        ],
+      },
+    };
+  }
+  
+  // Digital twin
+  if (lowerMessage.includes('digital twin') || lowerMessage.includes('twin')) {
+    return {
+      response: `**Digital Twin Technology**\n\nFleetNimble's Digital Twin creates a virtual replica of each vehicle in your fleet.\n\n**Capabilities:**\n- Real-time vehicle state simulation\n- Predictive maintenance modeling\n- What-if scenario analysis\n- Performance optimization\n- Fault prediction\n\n**Benefits:**\n- Reduce downtime\n- Optimize maintenance schedules\n- Improve safety\n- Lower operational costs\n\n**Recommended Action:** View your vehicle digital twins in the dashboard`,
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'STATIC',
+        simulatedNote: null,
+        suggestedActions: [
+          'Show vehicle details',
+          'Show maintenance',
+        ],
+      },
+    };
+  }
+  
+  // Geofence
+  if (lowerMessage.includes('geofence') || lowerMessage.includes('geo fence')) {
+    return {
+      response: `**Geofencing Information**\n\nGeofencing allows you to create virtual boundaries for your vehicles.\n\n**Features:**\n- Entry/exit alerts\n- Speed limit enforcement\n- Route monitoring\n- Area restrictions\n- Time-based rules\n\n**Setup:**\n1. Go to Geofences in dashboard\n2. Click "Create Geofence"\n3. Draw boundary on map\n4. Set rules and alerts\n5. Assign vehicles\n\n**Use Cases:**\n- Monitor vehicle locations\n- Enforce route compliance\n- Prevent unauthorized areas\n- Track time on site\n\n**Recommended Action:** Create a geofence for your fleet`,
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'STATIC',
+        simulatedNote: null,
+        suggestedActions: [
+          'Show vehicle location',
+          'Create geofence',
+        ],
+      },
+    };
+  }
+  
+  // Battery protection
+  if (lowerMessage.includes('battery protection') || lowerMessage.includes('battery drain')) {
+    return {
+      response: `**Battery Protection**\n\nFleetNimble helps prevent battery drain through intelligent monitoring.\n\n**Features:**\n- Voltage monitoring\n- Low battery alerts\n- Automatic shutdown prevention\n- Charging recommendations\n- Battery health tracking\n\n**Best Practices:**\n- Keep voltage above 12V\n- Monitor during long idle periods\n- Disconnect accessories when parked\n- Regular battery maintenance\n\n**Recommended Action:** Check your vehicle battery status`,
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'STATIC',
+        simulatedNote: null,
+        suggestedActions: [
+          'Show battery status',
+          'Show vehicle details',
+        ],
+      },
+    };
+  }
+  
+  // Engine standby
+  if (lowerMessage.includes('engine standby') || lowerMessage.includes('ignition')) {
+    return {
+      response: `**Engine Standby Mode**\n\nFleetNimble's engine standby feature helps reduce fuel consumption and emissions.\n\n**How It Works:**\n- Monitors vehicle idle time\n- Automatically suggests engine shutdown\n- Tracks fuel savings\n- Reports environmental impact\n\n**Benefits:**\n- Reduced fuel costs\n- Lower emissions\n- Extended engine life\n- Compliance with regulations\n\n**Recommended Action:** Monitor your standby vehicles`,
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'STATIC',
+        simulatedNote: null,
+        suggestedActions: [
+          'Show standby vehicles',
+          'Show fuel status',
+        ],
+      },
+    };
+  }
+  
+  // VIN
+  if (lowerMessage.includes('vin') || lowerMessage.includes('vehicle identification')) {
+    return {
+      response: `**VIN (Vehicle Identification Number)**\n\nThe VIN is a unique 17-character code that identifies your vehicle.\n\n**Uses in FleetNimble:**\n- Vehicle identification\n- Maintenance records\n- Insurance verification\n- Recall notifications\n- Parts ordering\n\n**Where to Find VIN:**\n- Dashboard (driver's side)\n- Vehicle registration\n- Insurance documents\n- Engine bay\n- Door frame\n\n**Recommended Action:** Add VIN to your vehicle profile`,
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'STATIC',
+        simulatedNote: null,
+        suggestedActions: [
+          'Show vehicle details',
+          'Add VIN to profile',
+        ],
+      },
+    };
+  }
+  
+  // General support
+  return {
+    response: `**FleetNimble Support**\n\nI can help you with:\n\n**Fleet Management:**\n- Vehicle tracking and monitoring\n- Maintenance scheduling\n- Alert management\n- GPS and location services\n\n**Technical Support:**\n- OBD device setup\n- Mobile app usage\n- Login and authentication\n- Digital twin features\n\n**Account Management:**\n- Subscription plans\n- Pricing information\n- User management\n- Settings configuration\n\n**Features:**\n- Geofencing\n- Battery protection\n- Engine standby\n- VIN management\n\n**Recommended Action:** Ask a specific question about any feature`,
+    metadata: {
+      confidence: 'HIGH',
+      dataFreshness: 'STATIC',
+      simulatedNote: null,
+      suggestedActions: [
+        'Summarize my fleet health',
+        'Show vehicle details',
+        'Show critical alerts',
+      ],
+    },
+  };
+}
 function extractMultipleVehicleNames(message, userVehicles) {
   const words = message.split(' ');
   const vehicleNames = userVehicles.map(v => v.name.toLowerCase());

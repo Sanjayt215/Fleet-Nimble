@@ -49,6 +49,21 @@ export class AIContextBuilder {
       case INTENTS.ALERTS:
         context = await this.buildAlertsContext();
         break;
+      case INTENTS.OFFLINE_VEHICLES:
+        context = await this.buildOfflineVehiclesContext();
+        break;
+      case INTENTS.STANDBY_VEHICLES:
+        context = await this.buildStandbyVehiclesContext();
+        break;
+      case INTENTS.BATTERY:
+        context = await this.buildBatteryContext();
+        break;
+      case INTENTS.FUEL:
+        context = await this.buildFuelContext();
+        break;
+      case INTENTS.PREDICTIVE_MAINTENANCE:
+        context = await this.buildPredictiveMaintenanceContext();
+        break;
       default:
         context = await this.buildMinimalContext();
     }
@@ -500,6 +515,282 @@ export class AIContextBuilder {
         message: a.message,
         createdAt: a.createdAt,
       })),
+    };
+  }
+  
+  /**
+   * Offline vehicles context
+   */
+  async buildOfflineVehiclesContext() {
+    const offlineVehicles = await prisma.vehicle.findMany({
+      where: {
+        userId: this.userId,
+        deletedAt: null,
+        liveState: { status: 'offline' },
+      },
+      select: {
+        name: true,
+        plateNumber: true,
+        make: true,
+        model: true,
+        lastObdAt: true,
+      },
+      take: 10,
+    });
+    
+    return {
+      intent: this.intent,
+      dataSource: 'database',
+      vehicles: offlineVehicles.map(v => ({
+        name: v.name,
+        plate: v.plateNumber,
+        make: v.make,
+        model: v.model,
+        lastSeen: v.lastObdAt,
+      })),
+    };
+  }
+  
+  /**
+   * Standby vehicles context
+   */
+  async buildStandbyVehiclesContext() {
+    const standbyVehicles = await prisma.vehicle.findMany({
+      where: {
+        userId: this.userId,
+        deletedAt: null,
+        liveState: { status: 'standby' },
+      },
+      select: {
+        name: true,
+        plateNumber: true,
+        make: true,
+        model: true,
+        liveState: { select: { ignitionStatus: true } },
+      },
+      take: 10,
+    });
+    
+    return {
+      intent: this.intent,
+      dataSource: 'database',
+      vehicles: standbyVehicles.map(v => ({
+        name: v.name,
+        plate: v.plateNumber,
+        make: v.make,
+        model: v.model,
+        ignition: v.liveState?.ignitionStatus || 'off',
+      })),
+    };
+  }
+  
+  /**
+   * Battery context
+   */
+  async buildBatteryContext() {
+    let vehicle = this.entities.vehicles[0];
+    
+    if (!vehicle) {
+      const vehicleName = this.extractVehicleName();
+      if (vehicleName) {
+        vehicle = await prisma.vehicle.findFirst({
+          where: { 
+            userId: this.userId, 
+            deletedAt: null,
+            name: { contains: vehicleName, mode: 'insensitive' }
+          },
+          select: { id: true, name: true, plateNumber: true },
+        });
+      }
+    }
+    
+    if (!vehicle) {
+      // Get all vehicles with battery data
+      const vehicles = await prisma.vehicle.findMany({
+        where: { userId: this.userId, deletedAt: null },
+        select: { id: true, name: true, plateNumber: true },
+        take: 10,
+      });
+      
+      const batteryData = await Promise.all(
+        vehicles.map(async (v) => {
+          const telemetry = await prisma.telemetry.findFirst({
+            where: { vehicleId: v.id },
+            orderBy: { timestamp: 'desc' },
+            select: { batteryVoltage: true, timestamp: true },
+          });
+          
+          return {
+            name: v.name,
+            plate: v.plateNumber,
+            voltage: telemetry?.batteryVoltage,
+            timestamp: telemetry?.timestamp,
+          };
+        })
+      );
+      
+      return {
+        intent: this.intent,
+        dataSource: 'database',
+        vehicles: batteryData,
+      };
+    }
+    
+    const telemetry = await prisma.telemetry.findFirst({
+      where: { vehicleId: vehicle.id },
+      orderBy: { timestamp: 'desc' },
+      select: { batteryVoltage: true, timestamp: true },
+    });
+    
+    return {
+      intent: this.intent,
+      dataSource: 'database',
+      vehicle: {
+        name: vehicle.name,
+        plate: vehicle.plateNumber,
+      },
+      battery: {
+        voltage: telemetry?.batteryVoltage,
+        timestamp: telemetry?.timestamp,
+      },
+    };
+  }
+  
+  /**
+   * Fuel context
+   */
+  async buildFuelContext() {
+    let vehicle = this.entities.vehicles[0];
+    
+    if (!vehicle) {
+      const vehicleName = this.extractVehicleName();
+      if (vehicleName) {
+        vehicle = await prisma.vehicle.findFirst({
+          where: { 
+            userId: this.userId, 
+            deletedAt: null,
+            name: { contains: vehicleName, mode: 'insensitive' }
+          },
+          select: { id: true, name: true, plateNumber: true },
+        });
+      }
+    }
+    
+    if (!vehicle) {
+      // Get all vehicles with fuel data
+      const vehicles = await prisma.vehicle.findMany({
+        where: { userId: this.userId, deletedAt: null },
+        select: { id: true, name: true, plateNumber: true },
+        take: 10,
+      });
+      
+      const fuelData = await Promise.all(
+        vehicles.map(async (v) => {
+          const telemetry = await prisma.telemetry.findFirst({
+            where: { vehicleId: v.id },
+            orderBy: { timestamp: 'desc' },
+            select: { fuelLevel: true, timestamp: true },
+          });
+          
+          return {
+            name: v.name,
+            plate: v.plateNumber,
+            fuelLevel: telemetry?.fuelLevel,
+            timestamp: telemetry?.timestamp,
+          };
+        })
+      );
+      
+      return {
+        intent: this.intent,
+        dataSource: 'database',
+        vehicles: fuelData,
+      };
+    }
+    
+    const telemetry = await prisma.telemetry.findFirst({
+      where: { vehicleId: vehicle.id },
+      orderBy: { timestamp: 'desc' },
+      select: { fuelLevel: true, timestamp: true },
+    });
+    
+    return {
+      intent: this.intent,
+      dataSource: 'database',
+      vehicle: {
+        name: vehicle.name,
+        plate: vehicle.plateNumber,
+      },
+      fuel: {
+        level: telemetry?.fuelLevel,
+        timestamp: telemetry?.timestamp,
+      },
+    };
+  }
+  
+  /**
+   * Predictive maintenance context
+   */
+  async buildPredictiveMaintenanceContext() {
+    const vehicles = await prisma.vehicle.findMany({
+      where: { userId: this.userId, deletedAt: null },
+      select: {
+        id: true,
+        name: true,
+        plateNumber: true,
+        make: true,
+        model: true,
+        liveState: { select: { status: true } },
+        lastObdAt: true,
+      },
+    });
+    
+    const vehicleScores = await Promise.all(
+      vehicles.map(async (v) => {
+        const criticalAlerts = await prisma.alert.count({
+          where: { vehicleId: v.id, severity: 'CRITICAL', read: false },
+        });
+        
+        const criticalDTCs = await prisma.dTCCode.count({
+          where: { vehicleId: v.id, active: true, severity: 'CRITICAL' },
+        });
+        
+        const overdueMaintenance = await prisma.maintenanceLog.count({
+          where: {
+            vehicleId: v.id,
+            completed: false,
+            dueDate: { lt: new Date() },
+          },
+        });
+        
+        const isOffline = v.liveState?.status === 'offline';
+        const offlineDays = v.lastObdAt
+          ? Math.floor((new Date() - new Date(v.lastObdAt)) / (1000 * 60 * 60 * 24))
+          : 0;
+        
+        const score = criticalAlerts * 10 + criticalDTCs * 8 + overdueMaintenance * 5 + (isOffline ? offlineDays * 2 : 0);
+        
+        return {
+          name: v.name,
+          plate: v.plateNumber,
+          make: v.make,
+          model: v.model,
+          score,
+          criticalAlerts,
+          criticalDTCs,
+          overdueMaintenance,
+          isOffline,
+          offlineDays,
+        };
+      })
+    );
+    
+    const topRisky = vehicleScores.sort((a, b) => b.score - a.score).slice(0, 5);
+    
+    return {
+      intent: this.intent,
+      dataSource: 'database',
+      vehicles: topRisky,
     };
   }
   
