@@ -30,18 +30,28 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const { data } = await api.post('/auth/login', { email, password });
-    localStorage.setItem('accessToken', data.data.accessToken);
-    localStorage.setItem('refreshToken', data.data.refreshToken);
-    setUser(data.data.user);
-    return data.data;
+    // Support both response formats: data.accessToken OR data.data.accessToken
+    const accessToken = data.accessToken || data.data?.accessToken;
+    const refreshToken = data.refreshToken || data.data?.refreshToken;
+    const user = data.user || data.data?.user;
+    
+    localStorage.setItem('accessToken', accessToken);
+    localStorage.setItem('refreshToken', refreshToken);
+    setUser(user);
+    return data.data || data;
   };
 
   const register = async (name, email, password) => {
     const { data } = await api.post('/auth/register', { name, email, password });
-    localStorage.setItem('accessToken', data.data.accessToken);
-    localStorage.setItem('refreshToken', data.data.refreshToken);
-    setUser(data.data.user);
-    return data.data;
+    // Support both response formats: data.accessToken OR data.data.accessToken
+    const accessToken = data.accessToken || data.data?.accessToken;
+    const refreshToken = data.refreshToken || data.data?.refreshToken;
+    const user = data.user || data.data?.user;
+    
+    localStorage.setItem('accessToken', accessToken);
+    localStorage.setItem('refreshToken', refreshToken);
+    setUser(user);
+    return data.data || data;
   };
 
   const logout = async () => {

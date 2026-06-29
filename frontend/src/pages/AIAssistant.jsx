@@ -86,11 +86,19 @@ export default function AIAssistant() {
       if (useStream) {
         // Streaming response
         const apiUrl = `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/ai/chat`;
+        const token = localStorage.getItem('accessToken');
+        
+        if (!token) {
+          localStorage.clear();
+          window.location.href = '/login';
+          return;
+        }
+
         const response = await fetch(apiUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            'Authorization': `Bearer ${token}`,
           },
           body: JSON.stringify({
             message: userMessage,
@@ -99,6 +107,12 @@ export default function AIAssistant() {
             stream: true,
           }),
         });
+
+        if (response.status === 401) {
+          localStorage.clear();
+          window.location.href = '/login';
+          return;
+        }
 
         if (!response.ok) {
           throw new Error('Failed to send message');
@@ -162,6 +176,11 @@ export default function AIAssistant() {
         }
       }
     } catch (error) {
+      if (error.response?.status === 401) {
+        localStorage.clear();
+        window.location.href = '/login';
+        return;
+      }
       console.error('Error sending message:', error);
       setMessages((prev) => [
         ...prev,
