@@ -202,7 +202,7 @@ export default function AIAssistant() {
     e.stopPropagation();
 
     try {
-      await api.delete(`/ai/chats/${chatId}`);
+      const res = await api.delete(`/ai/chats/${chatId}`);
 
       if (currentChat?.id === chatId) {
         startNewChat();
@@ -211,6 +211,12 @@ export default function AIAssistant() {
       await fetchChats();
     } catch (error) {
       console.error('Error deleting chat:', error);
+      
+      // Show user-friendly error message
+      const errorMessage = error.response?.data?.error || 
+                          error.response?.data?.message || 
+                          'Failed to delete chat. Please try again.';
+      alert(errorMessage);
     }
   };
 

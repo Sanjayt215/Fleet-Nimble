@@ -23,17 +23,16 @@ import { generateSuggestedActions } from './aiResponseFormatter.js';
  * Main orchestrator function
  */
 export async function orchestrateAI(userId, message, vehicleContext = null) {
-  console.log('AI ORCHESTRATOR START', { userId, message });
+  logger.info('AI_ORCHESTRATOR_START', { userId, message });
   
   try {
     // Step 1: Resolve pronouns using conversation context
     let resolvedMessage;
     try {
       resolvedMessage = await resolvePronouns(userId, message, vehicleContext);
-      console.log('AI PRONOUN RESOLUTION COMPLETE');
+      logger.info('AI_PRONOUN_RESOLUTION_COMPLETE');
     } catch (error) {
-      console.error('AI FAILED AT PRONOUN RESOLUTION', error);
-      console.error(error.stack);
+      logger.error('AI_FAILED_AT_PRONOUN_RESOLUTION', { error: error.message, stack: error.stack });
       resolvedMessage = message;
     }
 
@@ -41,10 +40,9 @@ export async function orchestrateAI(userId, message, vehicleContext = null) {
     let intent;
     try {
       intent = await detectIntent(resolvedMessage);
-      console.log('AI INTENT DETECTED', { intent: intent?.type });
+      logger.info('AI_INTENT_DETECTED', { intent: intent?.type });
     } catch (error) {
-      console.error('AI FAILED AT INTENT DETECTION', error);
-      console.error(error.stack);
+      logger.error('AI_FAILED_AT_INTENT_DETECTION', { error: error.message, stack: error.stack });
       intent = { type: 'GENERAL', confidence: 0.5 };
     }
 
@@ -52,10 +50,9 @@ export async function orchestrateAI(userId, message, vehicleContext = null) {
     let entities;
     try {
       entities = await extractEntities(resolvedMessage, userId);
-      console.log('AI ENTITIES EXTRACTED');
+      logger.info('AI_ENTITIES_EXTRACTED');
     } catch (error) {
-      console.error('AI FAILED AT ENTITY EXTRACTION', error);
-      console.error(error.stack);
+      logger.error('AI_FAILED_AT_ENTITY_EXTRACTION', { error: error.message, stack: error.stack });
       entities = { vehicles: [], metrics: [], timeframes: [] };
     }
 
@@ -63,10 +60,9 @@ export async function orchestrateAI(userId, message, vehicleContext = null) {
     let plan;
     try {
       plan = await buildExecutionPlan(intent, entities, userId);
-      console.log('AI PLANNER COMPLETE');
+      logger.info('AI_PLANNER_COMPLETE');
     } catch (error) {
-      console.error('AI FAILED AT PLANNER', error);
-      console.error(error.stack);
+      logger.error('AI_FAILED_AT_PLANNER', { error: error.message, stack: error.stack });
       plan = { steps: [], estimatedDuration: 0 };
     }
 
@@ -74,10 +70,9 @@ export async function orchestrateAI(userId, message, vehicleContext = null) {
     let results;
     try {
       results = await executePlan(plan, userId, vehicleContext);
-      console.log('AI PLAN EXECUTION COMPLETE');
+      logger.info('AI_PLAN_EXECUTION_COMPLETE');
     } catch (error) {
-      console.error('AI FAILED AT PLAN EXECUTION', error);
-      console.error(error.stack);
+      logger.error('AI_FAILED_AT_PLAN_EXECUTION', { error: error.message, stack: error.stack });
       results = [];
     }
 
@@ -86,8 +81,7 @@ export async function orchestrateAI(userId, message, vehicleContext = null) {
     try {
       combinedResults = combineResults(results, intent);
     } catch (error) {
-      console.error('AI FAILED AT RESULTS COMBINATION', error);
-      console.error(error.stack);
+      logger.error('AI_FAILED_AT_RESULTS_COMBINATION', { error: error.message, stack: error.stack });
       combinedResults = { data: [], summary: {}, metadata: {} };
     }
 
@@ -95,10 +89,9 @@ export async function orchestrateAI(userId, message, vehicleContext = null) {
     let formattedResponse;
     try {
       formattedResponse = await formatResponse(combinedResults, intent, entities);
-      console.log('AI FORMATTER COMPLETE');
+      logger.info('AI_FORMATTER_COMPLETE');
     } catch (error) {
-      console.error('AI FAILED AT FORMATTER', error);
-      console.error(error.stack);
+      logger.error('AI_FAILED_AT_FORMATTER', { error: error.message, stack: error.stack });
       formattedResponse = {
         message: 'I processed your request but encountered an issue formatting the detailed response. Please try again.',
         title: 'AI Assistant',

@@ -3,6 +3,8 @@
  * Detects user intent from natural language queries with confidence scoring
  */
 
+import prisma from '../utils/prisma.js';
+
 export const INTENTS = {
   FLEET_SUMMARY: 'fleet_summary',
   VEHICLE_DETAILS: 'vehicle_details',
@@ -230,6 +232,73 @@ export function detectIntent(message) {
 }
 
 /**
+ * Find vehicle by text with fuzzy search
+ * Searches vehicleName, registrationNumber, vin, make, model
+ */
+export async function findVehicleByText(userId, text) {
+  const lowerText = text.toLowerCase();
+  const words = lowerText.split(/\s+/).filter(w => w.length > 2);
+  
+  if (words.length === 0) return null;
+  
+  // Try exact phrase match first
+  let vehicle = await prisma.vehicle.findFirst({
+    where: {
+      userId,
+      deletedAt: null,
+      OR: [
+        { vehicleName: { contains: text, mode: 'insensitive' } },
+        { registrationNumber: { contains: text, mode: 'insensitive' } },
+        { vin: { contains: text, mode: 'insensitive' } },
+      ]
+    },
+  });
+  
+  if (vehicle) return vehicle;
+  
+  // Try make/model combination
+  if (words.length >= 2) {
+    const makeWord = words[0];
+    const modelWord = words.slice(1).join(' ');
+    
+    vehicle = await prisma.vehicle.findFirst({
+      where: {
+        userId,
+        deletedAt: null,
+        OR: [
+          { make: { contains: makeWord, mode: 'insensitive' }, model: { contains: modelWord, mode: 'insensitive' } },
+          { vehicleName: { contains: makeWord, mode: 'insensitive' } },
+          { vehicleName: { contains: modelWord, mode: 'insensitive' } },
+        ]
+      },
+    });
+    
+    if (vehicle) return vehicle;
+  }
+  
+  // Try each word individually
+  for (const word of words) {
+    vehicle = await prisma.vehicle.findFirst({
+      where: {
+        userId,
+        deletedAt: null,
+        OR: [
+          { vehicleName: { contains: word, mode: 'insensitive' } },
+          { registrationNumber: { contains: word, mode: 'insensitive' } },
+          { vin: { contains: word, mode: 'insensitive' } },
+          { make: { contains: word, mode: 'insensitive' } },
+          { model: { contains: word, mode: 'insensitive' } },
+        ]
+      },
+    });
+    
+    if (vehicle) return vehicle;
+  }
+  
+  return null;
+}
+
+/**
  * Extract entities from user message
  */
 export function extractEntities(message, userId, userVehicles = []) {
@@ -245,10 +314,10 @@ export function extractEntities(message, userId, userVehicles = []) {
   };
   
   // Extract vehicle names from message
-  const vehicleNames = userVehicles.map(v => v.name.toLowerCase());
+  const vehicleNames = userVehicles.map(v => v.vehicleName?.toLowerCase() || '');
   vehicleNames.forEach(name => {
-    if (lowerMessage.includes(name)) {
-      const vehicle = userVehicles.find(v => v.name.toLowerCase() === name);
+    if (name && lowerMessage.includes(name)) {
+      const vehicle = userVehicles.find(v => v.vehicleName?.toLowerCase() === name);
       if (vehicle) {
         entities.vehicles.push(vehicle);
       }

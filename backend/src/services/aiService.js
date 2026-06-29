@@ -191,7 +191,7 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
  * Process user message with streaming response
  */
 export async function processChatMessageStream(userId, message, vehicleId = null, chatHistory = [], onChunk) {
-  console.log('AI_SERVICE_STREAM_START', { userId, message: message?.substring(0, 50) });
+  logger.info('AI_SERVICE_STREAM_START', { userId, message: message?.substring(0, 50) });
   
   try {
     // For streaming, use the same logic but stream the response
@@ -273,7 +273,7 @@ export async function saveMessage(chatId, role, content, metadata = {}) {
   try {
     const message = await prisma.aiMessage.create({
       data: {
-        conversationId: chatId,
+        chatId,
         role,
         content,
         metadata,
@@ -319,7 +319,7 @@ export async function deleteChat(chatId, userId) {
   try {
     // Delete messages first
     await prisma.aiMessage.deleteMany({
-      where: { conversationId: chatId },
+      where: { chatId },
     });
     
     // Delete chat
@@ -397,7 +397,7 @@ export async function summarizeConversation(chatId) {
 async function getUserVehicles(userId) {
   return prisma.vehicle.findMany({
     where: { userId, deletedAt: null },
-    select: { id: true, name: true, plateNumber: true, vin: true },
+    select: { id: true, vehicleName: true, registrationNumber: true, vin: true },
   });
 }
 
@@ -405,15 +405,16 @@ async function getUserVehicles(userId) {
  * Verify AI service startup
  */
 export function verifyAIServiceStartup() {
-  console.log('✓ Intent Detector Loaded');
-  console.log('✓ Context Builder Loaded');
-  console.log('✓ AI Provider Loaded');
-  console.log('✓ Deterministic Fallback Loaded');
-  console.log('✓ AI Response Formatter Loaded');
-  console.log('✓ FleetNimble AI Ready');
+  logger.info('AI_SERVICE_STARTUP_VERIFICATION');
+  logger.info('✓ Intent Detector Loaded');
+  logger.info('✓ Context Builder Loaded');
+  logger.info('✓ AI Provider Loaded');
+  logger.info('✓ Deterministic Fallback Loaded');
+  logger.info('✓ AI Response Formatter Loaded');
+  logger.info('✓ FleetNimble AI Ready');
   
   const providerInfo = getProviderInfo();
-  console.log('AI Provider Info:', providerInfo);
+  logger.info('AI_PROVIDER_INFO', providerInfo);
   
   return true;
 }

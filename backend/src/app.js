@@ -58,6 +58,25 @@ app.use('/api', apiLimiter);
 app.use('/api/v1', v1Routes);
 app.use('/api', apiRoutes);
 
+// Root health check route
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'FleetNimble API',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+  });
+});
+
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'FleetNimble API',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+  });
+});
+
 // Temporary request-logging middleware to aid routing/debugging.
 // Logs request details and a short list of router layers that regex-match the incoming URL.
 app.use((req, _res, next) => {

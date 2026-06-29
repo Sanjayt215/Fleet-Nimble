@@ -31,7 +31,7 @@ export async function callOpenAI(messages) {
       model: AI_MODEL,
       messages,
       temperature: 0.7,
-      max_tokens: 700,
+      max_tokens: Number(process.env.AI_MAX_TOKENS || 700),
     }),
   });
 
@@ -47,10 +47,12 @@ export async function callOpenAI(messages) {
 /**
  * Call OpenRouter API
  */
-export async function callOpenRouter(messages) {
+export async function callOpenRouter(messages, maxTokensOverride = null) {
   if (!OPENROUTER_API_KEY) {
     throw new Error('OpenRouter API key not configured');
   }
+
+  const maxTokens = maxTokensOverride || Number(process.env.AI_MAX_TOKENS || 700);
 
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -62,7 +64,7 @@ export async function callOpenRouter(messages) {
       model: AI_MODEL,
       messages,
       temperature: 0.7,
-      max_tokens: 700,
+      max_tokens: maxTokens,
     }),
   });
 
@@ -136,8 +138,10 @@ export async function callAIWithRetry(messages, context, maxRetries = 1) {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         let response;
+        const maxTokensOverride = attempt > 0 ? 400 : null; // Reduce tokens on retry
+        
         if (provider === 'openrouter') {
-          response = await callOpenRouter(messages);
+          response = await callOpenRouter(messages, maxTokensOverride);
         } else if (provider === 'gemini') {
           response = await callGemini(messages);
         } else {
@@ -161,10 +165,11 @@ export async function callAIWithRetry(messages, context, maxRetries = 1) {
       } catch (aiError) {
         logger.error('AI_PROVIDER_ERROR', { provider, attempt, error: aiError.message });
         
-        // Check if error is retryable
+        // Check if error is retryable (402, 429, timeout, 5xx)
         const errorMessage = aiError.message?.toLowerCase() || '';
         const isRetryable = errorMessage.includes('timeout') || 
                            errorMessage.includes('429') || 
+                           errorMessage.includes('402') ||
                            errorMessage.includes('rate limit') ||
                            errorMessage.includes('5xx') ||
                            errorMessage.includes('502') ||
@@ -183,7 +188,7 @@ export async function callAIWithRetry(messages, context, maxRetries = 1) {
         
         // Wait before retry (exponential backoff)
         const delay = Math.pow(2, attempt) * 1000;
-        logger.info('AI_PROVIDER_RETRY', { provider, attempt, delay });
+        logger.info('AI_PROVIDER_RETRY', { provider, attempt, delay, maxTokensOverride: 400 });
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }

@@ -17,11 +17,11 @@ export function getTools() {
  */
 export async function executeAITool(toolName, parameters) {
   try {
-    console.log('AI_TOOL_EXECUTION_START', { toolName, parameters });
+    logger.info('AI_TOOL_EXECUTION_START', { toolName, parameters });
     
     const result = await executeTool(toolName, parameters);
     
-    console.log('AI_TOOL_EXECUTION_SUCCESS', { toolName });
+    logger.info('AI_TOOL_EXECUTION_SUCCESS', { toolName });
     
     return {
       success: true,

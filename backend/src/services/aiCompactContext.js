@@ -5,7 +5,7 @@ import prisma from '../utils/prisma.js';
  * Only sends essential summaries, never full database objects
  */
 export async function buildCompactContext(userId, message, vehicleId = null) {
-  console.log('AI_COMPACT_CONTEXT_START', { userId, message: message?.substring(0, 50) });
+  logger.info('AI_COMPACT_CONTEXT_START', { userId, message: message?.substring(0, 50) });
   
   try {
     const lowerMessage = message.toLowerCase();
@@ -41,15 +41,14 @@ export async function buildCompactContext(userId, message, vehicleId = null) {
       context = await buildMinimalContext(userId);
     }
     
-    console.log('AI_COMPACT_CONTEXT_COMPLETE', { 
+    logger.info('AI_COMPACT_CONTEXT_COMPLETE', { 
       intent: context.intent, 
       recordCounts: context.recordCounts 
     });
     
     return context;
   } catch (error) {
-    console.error('AI_COMPACT_CONTEXT_ERROR', error);
-    console.error(error.stack);
+    logger.error('AI_COMPACT_CONTEXT_ERROR', { error: error.message, stack: error.stack });
     return {
       intent: 'error',
       dataSource: 'none',

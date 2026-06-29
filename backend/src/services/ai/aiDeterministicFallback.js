@@ -20,7 +20,7 @@ export async function getDeterministicFallback(userId, message, vehicleId = null
     try {
       const userVehicles = await prisma.vehicle.findMany({
         where: { userId, deletedAt: null },
-        select: { id: true, name: true, plateNumber: true, vin: true },
+        select: { id: true, vehicleName: true, registrationNumber: true, vin: true },
       });
       
       intentResult = {
@@ -140,16 +140,18 @@ async function getFleetSummaryFallback(userId) {
   const vehicles = await prisma.vehicle.findMany({
     where: { userId, deletedAt: null },
     select: {
-      name: true,
-      plateNumber: true,
-      liveState: { select: { status: true } },
+      vehicleName: true,
+      registrationNumber: true,
+      status: true,
+      telemetryOnline: true,
+      lastTelemetryAt: true,
       _count: { select: { alerts: true, dtcCodes: true, maintenanceLogs: true } },
     },
   });
   
-  const online = vehicles.filter(v => v.liveState?.status === 'online').length;
-  const offline = vehicles.filter(v => v.liveState?.status === 'offline').length;
-  const standby = vehicles.filter(v => v.liveState?.status === 'standby').length;
+  const online = vehicles.filter(v => v.telemetryOnline === true).length;
+  const offline = vehicles.filter(v => v.telemetryOnline === false || v.status === 'OFFLINE').length;
+  const standby = vehicles.filter(v => v.status === 'STANDBY').length;
   const totalAlerts = vehicles.reduce((sum, v) => sum + v._count.alerts, 0);
   const totalDTCs = vehicles.reduce((sum, v) => sum + v._count.dtcCodes, 0);
   const maintenanceDue = await prisma.maintenanceLog.count({
@@ -162,7 +164,7 @@ async function getFleetSummaryFallback(userId) {
   const topRiskyVehicles = vehicles
     .sort((a, b) => b._count.alerts - a._count.alerts)
     .slice(0, 3)
-    .map(v => ({ name: v.name, plate: v.plateNumber, alertCount: v._count.alerts }));
+    .map(v => ({ name: v.vehicleName, plate: v.registrationNumber, alertCount: v._count.alerts }));
   
   const response = `**Fleet Health Summary**\n\n**Total Vehicles:** ${vehicles.length}\n**Online:** ${online}\n**Offline:** ${offline}\n**Standby:** ${standby}\n**Critical Alerts:** ${totalAlerts}\n**Maintenance Due:** ${maintenanceDue}\n**Active DTCs:** ${totalDTCs}\n\n**Top Risky Vehicles:**\n${topRiskyVehicles.map(v => `- ${v.name} (${v.plate}): ${v.alertCount} alerts`).join('\n')}\n\n**Recommended Action:** ${totalAlerts > 5 ? 'Address critical alerts immediately' : 'Monitor fleet status regularly'}`;
   
@@ -196,18 +198,21 @@ async function getVehicleDetailsFallback(userId, message, entities, userVehicles
         where: {
           userId,
           deletedAt: null,
-          name: { contains: vehicleName, mode: 'insensitive' },
+          vehicleName: { contains: vehicleName, mode: 'insensitive' },
         },
         select: {
           id: true,
-          name: true,
-          plateNumber: true,
+          vehicleName: true,
+          registrationNumber: true,
           vin: true,
           make: true,
           model: true,
           year: true,
           odometer: true,
-          liveState: { select: { status: true, ignitionStatus: true } },
+          status: true,
+          telemetryOnline: true,
+          engineState: true,
+          ignitionStatus: true,
         },
       });
     }
@@ -216,21 +221,24 @@ async function getVehicleDetailsFallback(userId, message, entities, userVehicles
       where: { id: vehicle.id },
       select: {
         id: true,
-        name: true,
-        plateNumber: true,
+        vehicleName: true,
+        registrationNumber: true,
         vin: true,
         make: true,
         model: true,
         year: true,
         odometer: true,
-        liveState: { select: { status: true, ignitionStatus: true } },
+        status: true,
+        telemetryOnline: true,
+        engineState: true,
+        ignitionStatus: true,
       },
     });
   }
   
   if (!vehicle) {
     return {
-      response: 'Vehicle not found. Please specify the vehicle name.',
+      response: 'I could not find matching vehicle data for this request.',
       metadata: {
         confidence: 'LOW',
         dataFreshness: 'UNKNOWN',
@@ -339,16 +347,17 @@ async function getVehicleComparisonFallback(userId, entities, userVehicles) {
             where: {
               userId,
               deletedAt: null,
-              name: { contains: name, mode: 'insensitive' },
+              vehicleName: { contains: name, mode: 'insensitive' },
             },
             select: {
               id: true,
-              name: true,
-              plateNumber: true,
+              vehicleName: true,
+              registrationNumber: true,
               make: true,
               model: true,
               year: true,
-              liveState: { select: { status: true } },
+              status: true,
+              telemetryOnline: true,
             },
           })
         )
@@ -393,12 +402,12 @@ async function getVehicleComparisonFallback(userId, entities, userVehicles) {
       });
       
       return {
-        name: v.name,
-        plate: v.plateNumber,
+        name: v.vehicleName,
+        plate: v.registrationNumber,
         make: v.make,
         model: v.model,
         year: v.year,
-        status: v.liveState?.status || 'unknown',
+        status: v.status || 'unknown',
         batteryVoltage: telemetry?.batteryVoltage,
         coolantTemp: telemetry?.coolantTemp,
         fuelLevel: telemetry?.fuelLevel,
@@ -442,8 +451,8 @@ async function getDTCFallback(userId, entities) {
       include: {
         vehicle: {
           select: {
-            name: true,
-            plateNumber: true,
+            vehicleName: true,
+            registrationNumber: true,
           },
         },
       },
@@ -660,16 +669,16 @@ async function getGPSFallback(userId, entities, userVehicles) {
         where: {
           userId,
           deletedAt: null,
-          name: { contains: vehicleName, mode: 'insensitive' },
+          vehicleName: { contains: vehicleName, mode: 'insensitive' },
         },
-        select: { id: true, name: true, plateNumber: true },
+        select: { id: true, vehicleName: true, registrationNumber: true },
       });
     }
   }
   
   if (!vehicle) {
     return {
-      response: 'Vehicle not found. Please specify the vehicle name.',
+      response: 'I could not find matching vehicle data for this request.',
       metadata: {
         confidence: 'LOW',
         dataFreshness: 'UNKNOWN',
@@ -729,18 +738,25 @@ async function getGPSFallback(userId, entities, userVehicles) {
  * Offline vehicles fallback
  */
 async function getOfflineVehiclesFallback(userId) {
+  const staleCutoff = new Date(Date.now() - 30 * 60 * 1000);
+  
   const offlineVehicles = await prisma.vehicle.findMany({
     where: {
       userId,
       deletedAt: null,
-      liveState: { status: 'offline' },
+      OR: [
+        { telemetryOnline: false },
+        { lastTelemetryAt: null },
+        { lastTelemetryAt: { lt: staleCutoff } },
+        { status: 'OFFLINE' }
+      ]
     },
     select: {
-      name: true,
-      plateNumber: true,
+      vehicleName: true,
+      registrationNumber: true,
       make: true,
       model: true,
-      lastObdAt: true,
+      lastTelemetryAt: true,
     },
     take: 10,
   });
@@ -761,7 +777,7 @@ async function getOfflineVehiclesFallback(userId) {
   }
   
   const vehicleList = offlineVehicles.map(v => 
-    `- ${v.name} (${v.plateNumber}): Last seen ${v.lastObdAt || 'unknown'}`
+    `- ${v.vehicleName} (${v.registrationNumber}): Last seen ${v.lastTelemetryAt || 'unknown'}`
   ).join('\n');
   
   const response = `**Offline Vehicles**\n\n${vehicleList}\n\n**Total Offline:** ${offlineVehicles.length}\n\n**Recommended Action:** Investigate connectivity for offline vehicles`;
@@ -788,14 +804,14 @@ async function getStandbyVehiclesFallback(userId) {
     where: {
       userId,
       deletedAt: null,
-      liveState: { status: 'standby' },
+      status: 'STANDBY',
     },
     select: {
-      name: true,
-      plateNumber: true,
+      vehicleName: true,
+      registrationNumber: true,
       make: true,
       model: true,
-      liveState: { select: { ignitionStatus: true } },
+      ignitionStatus: true,
     },
     take: 10,
   });
@@ -816,7 +832,7 @@ async function getStandbyVehiclesFallback(userId) {
   }
   
   const vehicleList = standbyVehicles.map(v => 
-    `- ${v.name} (${v.plateNumber}): Ignition ${v.liveState?.ignitionStatus ? 'ON' : 'OFF'}`
+    `- ${v.vehicleName} (${v.registrationNumber}): Ignition ${v.ignitionStatus ? 'ON' : 'OFF'}`
   ).join('\n');
   
   const response = `**Standby Vehicles**\n\n${vehicleList}\n\n**Total Standby:** ${standbyVehicles.length}\n\n**Recommended Action:** Monitor standby vehicles for deployment`;
@@ -848,9 +864,9 @@ async function getBatteryFallback(userId, entities, userVehicles) {
         where: {
           userId,
           deletedAt: null,
-          name: { contains: vehicleName, mode: 'insensitive' },
+          vehicleName: { contains: vehicleName, mode: 'insensitive' },
         },
-        select: { id: true, name: true, plateNumber: true },
+        select: { id: true, vehicleName: true, registrationNumber: true },
       });
     }
   }
@@ -859,7 +875,7 @@ async function getBatteryFallback(userId, entities, userVehicles) {
     // Get all vehicles with battery data
     const vehicles = await prisma.vehicle.findMany({
       where: { userId, deletedAt: null },
-      select: { id: true, name: true, plateNumber: true },
+      select: { id: true, vehicleName: true, registrationNumber: true },
       take: 10,
     });
     
@@ -938,9 +954,9 @@ async function getFuelFallback(userId, entities, userVehicles) {
         where: {
           userId,
           deletedAt: null,
-          name: { contains: vehicleName, mode: 'insensitive' },
+          vehicleName: { contains: vehicleName, mode: 'insensitive' },
         },
-        select: { id: true, name: true, plateNumber: true },
+        select: { id: true, vehicleName: true, registrationNumber: true },
       });
     }
   }
@@ -949,7 +965,7 @@ async function getFuelFallback(userId, entities, userVehicles) {
     // Get all vehicles with fuel data
     const vehicles = await prisma.vehicle.findMany({
       where: { userId, deletedAt: null },
-      select: { id: true, name: true, plateNumber: true },
+      select: { id: true, vehicleName: true, registrationNumber: true },
       take: 10,
     });
     
@@ -1023,12 +1039,13 @@ async function getRepairPriorityFallback(userId) {
     where: { userId, deletedAt: null },
     select: {
       id: true,
-      name: true,
-      plateNumber: true,
+      vehicleName: true,
+      registrationNumber: true,
       make: true,
       model: true,
-      liveState: { select: { status: true } },
-      lastObdAt: true,
+      status: true,
+      telemetryOnline: true,
+      lastTelemetryAt: true,
     },
   });
   
@@ -1050,16 +1067,16 @@ async function getRepairPriorityFallback(userId) {
         },
       });
       
-      const isOffline = v.liveState?.status === 'offline';
-      const offlineDays = v.lastObdAt
-        ? Math.floor((new Date() - new Date(v.lastObdAt)) / (1000 * 60 * 60 * 24))
+      const isOffline = v.status === 'OFFLINE' || v.telemetryOnline === false;
+      const offlineDays = v.lastTelemetryAt
+        ? Math.floor((new Date() - new Date(v.lastTelemetryAt)) / (1000 * 60 * 60 * 24))
         : 0;
       
       const score = criticalAlerts * 10 + criticalDTCs * 8 + overdueMaintenance * 5 + (isOffline ? offlineDays * 2 : 0);
       
       return {
-        name: v.name,
-        plate: v.plateNumber,
+        name: v.vehicleName,
+        plate: v.registrationNumber,
         make: v.make,
         model: v.model,
         score,

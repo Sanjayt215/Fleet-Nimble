@@ -57,7 +57,7 @@ export async function generateProactiveInsights(userId) {
     const severityOrder = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
     insights.sort((a, b) => (severityOrder[a.severity] || 3) - (severityOrder[b.severity] || 3));
 
-    console.log('AI PROACTIVE INSIGHTS GENERATED', { userId, insightCount: insights.length });
+    logger.info('AI_PROACTIVE_INSIGHTS_GENERATED', { userId, insightCount: insights.length });
 
     return {
       userId,

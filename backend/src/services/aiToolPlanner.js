@@ -113,18 +113,17 @@ export async function detectIntent(message) {
     for (const [intent, patterns] of Object.entries(INTENT_PATTERNS)) {
       for (const pattern of patterns) {
         if (pattern.test(lowerMessage)) {
-          console.log('AI INTENT MATCHED', { intent, pattern });
+          logger.info('AI_INTENT_MATCHED', { intent, pattern });
           return { type: intent, confidence: 0.9 };
         }
       }
     }
 
     // Default to natural query if no pattern matches
-    console.log('AI NO INTENT MATCHED, DEFAULTING TO NATURAL_QUERY');
+    logger.info('AI_NO_INTENT_MATCHED_DEFAULTING_TO_NATURAL_QUERY');
     return { type: INTENT_TYPES.NATURAL_QUERY, confidence: 0.5 };
   } catch (error) {
-    console.error('AI FAILED AT INTENT DETECTION', error);
-    console.error(error.stack);
+    logger.error('AI_FAILED_AT_INTENT_DETECTION', { error: error.message, stack: error.stack });
     return { type: INTENT_TYPES.NATURAL_QUERY, confidence: 0.3 };
   }
 }
@@ -180,12 +179,11 @@ export async function buildExecutionPlan(intent, entities, userId) {
 
     plan.estimatedDuration = (plan.steps?.length || 0) * 500; // 500ms per step
 
-    console.log('AI EXECUTION PLAN BUILT', { intent: plan.intent, stepCount: plan.steps.length });
+    logger.info('AI_EXECUTION_PLAN_BUILT', { intent: plan.intent, stepCount: plan.steps.length });
 
     return plan;
   } catch (error) {
-    console.error('AI FAILED AT BUILD EXECUTION PLAN', error);
-    console.error(error.stack);
+    logger.error('AI_FAILED_AT_BUILD_EXECUTION_PLAN', { error: error.message, stack: error.stack });
     // Return minimal plan instead of throwing
     return {
       intent: intent?.type || INTENT_TYPES.NATURAL_QUERY,
@@ -483,10 +481,9 @@ export async function executePlan(plan, userId, vehicleContext = null) {
           description: step.description,
         });
 
-        console.log('AI TOOL EXECUTED SUCCESSFULLY', { tool: step.tool });
+        logger.info('AI_TOOL_EXECUTED_SUCCESSFULLY', { tool: step.tool });
       } catch (error) {
-        console.error('AI TOOL EXECUTION FAILED', { tool: step.tool, error: error.message });
-        console.error(error.stack);
+        logger.error('AI_TOOL_EXECUTION_FAILED', { tool: step.tool, error: error.message, stack: error.stack });
         results.push({
           success: false,
           tool: step.tool,

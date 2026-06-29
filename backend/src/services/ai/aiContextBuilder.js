@@ -18,7 +18,7 @@ export class AIContextBuilder {
     this.intent = detectIntent(message);
     this.entities = extractEntities(message, userId, userVehicles);
     
-    console.log('AI_INTENT_DETECTED', { intent: this.intent, entities: this.entities });
+    logger.info('AI_INTENT_DETECTED', { intent: this.intent, entities: this.entities });
   }
   
   /**
@@ -72,14 +72,14 @@ export class AIContextBuilder {
     const contextString = JSON.stringify(context, null, 2);
     const contextSize = contextString.length;
     
-    console.log('AI_CONTEXT_SIZE', { 
+    logger.info('AI_CONTEXT_SIZE', { 
       chars: contextSize, 
       estimatedTokens: Math.ceil(contextSize / APPROX_CHARS_PER_TOKEN),
       maxTokens: MAX_CONTEXT_TOKENS 
     });
     
     if (contextSize > MAX_CONTEXT_CHARS) {
-      console.log('AI_CONTEXT_TRUNCATED', { original: contextSize, max: MAX_CONTEXT_CHARS });
+      logger.info('AI_CONTEXT_TRUNCATED', { original: contextSize, max: MAX_CONTEXT_CHARS });
       context = this.truncateContext(context);
     }
     
@@ -94,20 +94,22 @@ export class AIContextBuilder {
       where: { userId: this.userId, deletedAt: null },
       select: {
         id: true,
-        name: true,
-        plateNumber: true,
+        vehicleName: true,
+        registrationNumber: true,
         make: true,
         model: true,
         year: true,
-        liveState: { select: { status: true } },
+        status: true,
+        telemetryOnline: true,
+        lastTelemetryAt: true,
         _count: { select: { alerts: true, dtcCodes: true, maintenanceLogs: true } },
       },
       take: 50,
     });
     
-    const onlineCount = vehicles.filter(v => v.liveState?.status === 'online').length;
-    const offlineCount = vehicles.filter(v => v.liveState?.status === 'offline').length;
-    const standbyCount = vehicles.filter(v => v.liveState?.status === 'standby').length;
+    const onlineCount = vehicles.filter(v => v.telemetryOnline === true).length;
+    const offlineCount = vehicles.filter(v => v.telemetryOnline === false || v.status === 'OFFLINE').length;
+    const standbyCount = vehicles.filter(v => v.status === 'STANDBY').length;
     
     const totalAlerts = vehicles.reduce((sum, v) => sum + v._count.alerts, 0);
     const totalDTCs = vehicles.reduce((sum, v) => sum + v._count.dtcCodes, 0);
@@ -118,8 +120,8 @@ export class AIContextBuilder {
       .sort((a, b) => b._count.alerts - a._count.alerts)
       .slice(0, 3)
       .map(v => ({
-        name: v.name,
-        plate: v.plateNumber,
+        name: v.vehicleName,
+        plate: v.registrationNumber,
         alertCount: v._count.alerts,
       }));
     
@@ -130,7 +132,7 @@ export class AIContextBuilder {
         completed: false,
       },
       include: {
-        vehicle: { select: { name: true, plateNumber: true } },
+        vehicle: { select: { vehicleName: true, registrationNumber: true } },
       },
       orderBy: { dueDate: 'asc' },
       take: 3,
@@ -149,8 +151,8 @@ export class AIContextBuilder {
         activeDtcCount: totalDTCs,
         topRiskyVehicles,
         maintenanceDue: maintenanceDue.map(m => ({
-          vehicle: m.vehicle.name,
-          plate: m.vehicle.plateNumber,
+          vehicle: m.vehicle.vehicleName,
+          plate: m.vehicle.registrationNumber,
           dueDate: m.dueDate,
         })),
       },
@@ -172,18 +174,19 @@ export class AIContextBuilder {
           where: { 
             userId: this.userId, 
             deletedAt: null,
-            name: { contains: vehicleName, mode: 'insensitive' }
+            vehicleName: { contains: vehicleName, mode: 'insensitive' }
           },
           select: {
             id: true,
-            name: true,
-            plateNumber: true,
+            vehicleName: true,
+            registrationNumber: true,
             vin: true,
             make: true,
             model: true,
             year: true,
             odometer: true,
-            liveState: { select: { status: true } },
+            status: true,
+            telemetryOnline: true,
           },
         });
       }
@@ -294,16 +297,17 @@ export class AIContextBuilder {
               where: { 
                 userId: this.userId, 
                 deletedAt: null,
-                name: { contains: name, mode: 'insensitive' }
+                vehicleName: { contains: name, mode: 'insensitive' }
               },
               select: {
                 id: true,
-                name: true,
-                plateNumber: true,
+                vehicleName: true,
+                registrationNumber: true,
                 make: true,
                 model: true,
                 year: true,
-                liveState: { select: { status: true } },
+                status: true,
+                telemetryOnline: true,
               },
             })
           )
@@ -333,12 +337,12 @@ export class AIContextBuilder {
         });
         
         return {
-          name: v.name,
-          plate: v.plateNumber,
+          name: v.vehicleName,
+          plate: v.registrationNumber,
           make: v.make,
           model: v.model,
           year: v.year,
-          status: v.liveState?.status || 'unknown',
+          status: v.status || 'unknown',
           batteryVoltage: telemetry?.batteryVoltage,
           coolantTemp: telemetry?.coolantTemp,
           fuelLevel: telemetry?.fuelLevel,
@@ -368,7 +372,7 @@ export class AIContextBuilder {
           deletedAt: null,
           vin: this.entities.vin 
         },
-        select: { name: true, plateNumber: true, make: true, model: true },
+        select: { vehicleName: true, registrationNumber: true, make: true, model: true },
       });
     }
     
@@ -388,8 +392,8 @@ export class AIContextBuilder {
         description: dtcInfo?.description || 'Unknown code',
         severity: dtcInfo?.severity || 'unknown',
         vehicle: vehicle ? {
-          name: vehicle.name,
-          plate: vehicle.plateNumber,
+          name: vehicle.vehicleName,
+          plate: vehicle.registrationNumber,
           make: vehicle.make,
           model: vehicle.model,
         } : null,
@@ -409,8 +413,8 @@ export class AIContextBuilder {
       include: {
         vehicle: {
           select: {
-            name: true,
-            plateNumber: true,
+            vehicleName: true,
+            registrationNumber: true,
             make: true,
             model: true,
           },
@@ -424,8 +428,8 @@ export class AIContextBuilder {
       intent: this.intent,
       dataSource: 'database',
       maintenance: maintenanceDue.map(m => ({
-        vehicle: m.vehicle.name,
-        plate: m.vehicle.plateNumber,
+        vehicle: m.vehicle.vehicleName,
+        plate: m.vehicle.registrationNumber,
         type: m.type,
         description: m.description,
         dueDate: m.dueDate,
@@ -447,9 +451,9 @@ export class AIContextBuilder {
           where: { 
             userId: this.userId, 
             deletedAt: null,
-            name: { contains: vehicleName, mode: 'insensitive' }
+            vehicleName: { contains: vehicleName, mode: 'insensitive' }
           },
-          select: { id: true, name: true, plateNumber: true },
+          select: { id: true, vehicleName: true, registrationNumber: true },
         });
       }
     }
@@ -526,14 +530,19 @@ export class AIContextBuilder {
       where: {
         userId: this.userId,
         deletedAt: null,
-        liveState: { status: 'offline' },
+        OR: [
+          { telemetryOnline: false },
+          { lastTelemetryAt: null },
+          { lastTelemetryAt: { lt: new Date(Date.now() - 30 * 60 * 1000) } },
+          { status: 'OFFLINE' }
+        ]
       },
       select: {
-        name: true,
-        plateNumber: true,
+        vehicleName: true,
+        registrationNumber: true,
         make: true,
         model: true,
-        lastObdAt: true,
+        lastTelemetryAt: true,
       },
       take: 10,
     });
@@ -542,11 +551,11 @@ export class AIContextBuilder {
       intent: this.intent,
       dataSource: 'database',
       vehicles: offlineVehicles.map(v => ({
-        name: v.name,
-        plate: v.plateNumber,
+        name: v.vehicleName,
+        plate: v.registrationNumber,
         make: v.make,
         model: v.model,
-        lastSeen: v.lastObdAt,
+        lastSeen: v.lastTelemetryAt,
       })),
     };
   }
@@ -559,14 +568,14 @@ export class AIContextBuilder {
       where: {
         userId: this.userId,
         deletedAt: null,
-        liveState: { status: 'standby' },
+        status: 'STANDBY'
       },
       select: {
-        name: true,
-        plateNumber: true,
+        vehicleName: true,
+        registrationNumber: true,
         make: true,
         model: true,
-        liveState: { select: { ignitionStatus: true } },
+        ignitionStatus: true,
       },
       take: 10,
     });
@@ -575,11 +584,11 @@ export class AIContextBuilder {
       intent: this.intent,
       dataSource: 'database',
       vehicles: standbyVehicles.map(v => ({
-        name: v.name,
-        plate: v.plateNumber,
+        name: v.vehicleName,
+        plate: v.registrationNumber,
         make: v.make,
         model: v.model,
-        ignition: v.liveState?.ignitionStatus || 'off',
+        ignition: v.ignitionStatus || 'off',
       })),
     };
   }
@@ -597,9 +606,9 @@ export class AIContextBuilder {
           where: { 
             userId: this.userId, 
             deletedAt: null,
-            name: { contains: vehicleName, mode: 'insensitive' }
+            vehicleName: { contains: vehicleName, mode: 'insensitive' }
           },
-          select: { id: true, name: true, plateNumber: true },
+          select: { id: true, vehicleName: true, registrationNumber: true },
         });
       }
     }
@@ -608,7 +617,7 @@ export class AIContextBuilder {
       // Get all vehicles with battery data
       const vehicles = await prisma.vehicle.findMany({
         where: { userId: this.userId, deletedAt: null },
-        select: { id: true, name: true, plateNumber: true },
+        select: { id: true, vehicleName: true, registrationNumber: true },
         take: 10,
       });
       
@@ -669,9 +678,9 @@ export class AIContextBuilder {
           where: { 
             userId: this.userId, 
             deletedAt: null,
-            name: { contains: vehicleName, mode: 'insensitive' }
+            vehicleName: { contains: vehicleName, mode: 'insensitive' }
           },
-          select: { id: true, name: true, plateNumber: true },
+          select: { id: true, vehicleName: true, registrationNumber: true },
         });
       }
     }
@@ -680,7 +689,7 @@ export class AIContextBuilder {
       // Get all vehicles with fuel data
       const vehicles = await prisma.vehicle.findMany({
         where: { userId: this.userId, deletedAt: null },
-        select: { id: true, name: true, plateNumber: true },
+        select: { id: true, vehicleName: true, registrationNumber: true },
         take: 10,
       });
       

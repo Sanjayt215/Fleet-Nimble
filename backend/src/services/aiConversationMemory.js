@@ -18,20 +18,19 @@ export function limitChatHistory(chatHistory, maxMessages = 8) {
  */
 export async function saveConversationMessage(userId, chatId, role, content, metadata = {}) {
   try {
-    // Find or create conversation
-    let conversation;
+    // Find or create chat
+    let chat;
     if (chatId) {
-      conversation = await prisma.aiConversation.findUnique({
+      chat = await prisma.aiChat.findUnique({
         where: { id: chatId },
       });
     }
 
-    if (!conversation) {
-      conversation = await prisma.aiConversation.create({
+    if (!chat) {
+      chat = await prisma.aiChat.create({
         data: {
           userId,
           title: content.substring(0, 50),
-          metadata,
         },
       });
     }
@@ -39,7 +38,7 @@ export async function saveConversationMessage(userId, chatId, role, content, met
     // Save message
     const message = await prisma.aiMessage.create({
       data: {
-        conversationId: conversation.id,
+        chatId: chat.id,
         role,
         content,
         metadata,
@@ -47,7 +46,7 @@ export async function saveConversationMessage(userId, chatId, role, content, met
     });
 
     return {
-      chatId: conversation.id,
+      chatId: chat.id,
       messageId: message.id,
     };
   } catch (error) {
@@ -63,11 +62,11 @@ export async function clearConversationHistory(userId, chatId) {
   try {
     await prisma.aiMessage.deleteMany({
       where: {
-        conversation: { id: chatId, userId },
+        chat: { id: chatId, userId },
       },
     });
 
-    await prisma.aiConversation.delete({
+    await prisma.aiChat.delete({
       where: { id: chatId },
     });
 
@@ -425,7 +424,7 @@ export async function saveConversationContext(userId, message, response, entitie
       },
     });
 
-    console.log('AI CONVERSATION CONTEXT SAVED', { userId, contextId: context.id });
+    logger.info('AI_CONVERSATION_CONTEXT_SAVED', { userId, contextId: context.id });
 
     return context;
   } catch (error) {
@@ -509,7 +508,7 @@ export async function resolvePronouns(userId, message, vehicleContext = null) {
     }
 
     if (resolvedMessage !== message) {
-      console.log('AI PRONOUNS RESOLVED', { userId, original: message, resolved: resolvedMessage });
+      logger.info('AI_PRONOUNS_RESOLVED', { userId, original: message, resolved: resolvedMessage });
     }
 
     return resolvedMessage;
