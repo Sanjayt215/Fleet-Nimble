@@ -85,7 +85,8 @@ export default function AIAssistant() {
     try {
       if (useStream) {
         // Streaming response
-        const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/ai/chat`, {
+        const apiUrl = `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/ai/chat`;
+        const response = await fetch(apiUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
