@@ -1,4 +1,4 @@
-import prisma from '../utils/prisma.js';
+import prisma from '../../utils/prisma.js';
 import { detectIntent, extractEntities } from './aiIntentDetector.js';
 import { AIContextBuilder } from './aiContextBuilder.js';
 

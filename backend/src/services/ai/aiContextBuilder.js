@@ -1,4 +1,4 @@
-import prisma from '../utils/prisma.js';
+import prisma from '../../utils/prisma.js';
 import { detectIntent, extractEntities, INTENTS } from './aiIntentDetector.js';
 
 const MAX_CONTEXT_TOKENS = 1500;

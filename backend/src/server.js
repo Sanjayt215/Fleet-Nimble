@@ -7,6 +7,7 @@ import { initSockets } from './sockets/index.js';
 import { startCronJobs } from './cron/index.js';
 import { socketCorsOrigin } from './utils/corsOrigins.js';
 import { startMqttConsumer, stopMqttConsumer } from './mqtt/consumer.js';
+import { verifyAIServiceStartup } from './services/aiService.js';
 
 const server = http.createServer(app);
 
@@ -46,6 +47,9 @@ server.on('error', (err) => {
 server.listen(config.port, host, async () => {
   logger.info(`FleetNimble API running on http://${host}:${config.port}`);
   logger.info(`Environment: ${config.env}`);
+
+  // Verify AI service startup
+  verifyAIServiceStartup();
 
   if (config.mqtt.enabled) {
     logger.info('MQTT telematics ingest enabled');

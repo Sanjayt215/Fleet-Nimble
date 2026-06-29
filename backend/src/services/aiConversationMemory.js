@@ -7,6 +7,78 @@ import prisma from '../utils/prisma.js';
 import logger from '../utils/logger.js';
 
 /**
+ * Limit conversation history to prevent token overflow
+ */
+export function limitChatHistory(chatHistory, maxMessages = 8) {
+  return chatHistory.slice(-maxMessages);
+}
+
+/**
+ * Save conversation message
+ */
+export async function saveConversationMessage(userId, chatId, role, content, metadata = {}) {
+  try {
+    // Find or create conversation
+    let conversation;
+    if (chatId) {
+      conversation = await prisma.aiConversation.findUnique({
+        where: { id: chatId },
+      });
+    }
+
+    if (!conversation) {
+      conversation = await prisma.aiConversation.create({
+        data: {
+          userId,
+          title: content.substring(0, 50),
+          metadata,
+        },
+      });
+    }
+
+    // Save message
+    const message = await prisma.aiMessage.create({
+      data: {
+        conversationId: conversation.id,
+        role,
+        content,
+        metadata,
+      },
+    });
+
+    return {
+      chatId: conversation.id,
+      messageId: message.id,
+    };
+  } catch (error) {
+    console.error('Error saving conversation message', error);
+    return null;
+  }
+}
+
+/**
+ * Clear conversation history
+ */
+export async function clearConversationHistory(userId, chatId) {
+  try {
+    await prisma.aiMessage.deleteMany({
+      where: {
+        conversation: { id: chatId, userId },
+      },
+    });
+
+    await prisma.aiConversation.delete({
+      where: { id: chatId },
+    });
+
+    return true;
+  } catch (error) {
+    console.error('Error clearing conversation history', error);
+    return false;
+  }
+}
+
+/**
  * Store conversation context for historical comparison
  */
 export async function storeConversationContext(userId, vehicleId, contextData) {
