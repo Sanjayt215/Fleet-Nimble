@@ -74,7 +74,7 @@ export default function AIAssistant() {
     setSidebarOpen(false);
   };
 
-  const sendMessage = async (messageText = input) => {
+  const sendMessage = async (messageText = input, useStream = true) => {
     if (!messageText.trim()) return;
 
     const userMessage = messageText;
@@ -83,18 +83,82 @@ export default function AIAssistant() {
     setLoading(true);
 
     try {
-      const res = await api.post('/ai/chat', {
-        message: userMessage,
-        vehicleId: selectedVehicle || null,
-        chatId: currentChat?.id || null,
-      });
+      if (useStream) {
+        // Streaming response
+        const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/ai/chat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          },
+          body: JSON.stringify({
+            message: userMessage,
+            vehicleId: selectedVehicle || null,
+            chatId: currentChat?.id || null,
+            stream: true,
+          }),
+        });
 
-      const aiResponse = res.data.data.response;
-      setMessages((prev) => [...prev, { role: 'assistant', content: aiResponse }]);
+        if (!response.ok) {
+          throw new Error('Failed to send message');
+        }
 
-      if (!currentChat) {
-        setCurrentChat({ id: res.data.data.chatId });
-        await fetchChats();
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let aiResponse = '';
+        
+        // Add empty assistant message that will be updated with chunks
+        setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
+        
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value);
+          const lines = chunk.split('\n').filter(line => line.trim() !== '');
+
+          for (const line of lines) {
+            if (line === 'data: [DONE]') continue;
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.chunk) {
+                  aiResponse += data.chunk;
+                  setMessages((prev) => {
+                    const newMessages = [...prev];
+                    newMessages[newMessages.length - 1] = { role: 'assistant', content: aiResponse };
+                    return newMessages;
+                  });
+                }
+                if (data.error) {
+                  throw new Error(data.error);
+                }
+              } catch (e) {
+                // Skip invalid JSON
+              }
+            }
+          }
+        }
+
+        if (!currentChat) {
+          setCurrentChat({ id: await getChatIdFromResponse() });
+          await fetchChats();
+        }
+      } else {
+        // Non-streaming response
+        const res = await api.post('/ai/chat', {
+          message: userMessage,
+          vehicleId: selectedVehicle || null,
+          chatId: currentChat?.id || null,
+        });
+
+        const aiResponse = res.data.data.response;
+        setMessages((prev) => [...prev, { role: 'assistant', content: aiResponse }]);
+
+        if (!currentChat) {
+          setCurrentChat({ id: res.data.data.chatId });
+          await fetchChats();
+        }
       }
     } catch (error) {
       console.error('Error sending message:', error);
@@ -105,6 +169,12 @@ export default function AIAssistant() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const getChatIdFromResponse = async () => {
+    // Fetch the latest chat to get the ID
+    const res = await api.get('/ai/chats');
+    return res.data.data[0]?.id;
   };
 
   const deleteChat = async (chatId, e) => {

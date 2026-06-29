@@ -45,6 +45,7 @@ model User {
   updatedAt     DateTime       @updatedAt @map("updated_at")
   companyId     String?        @map("company_id")
   aiChats       AiChat[]
+  aiAuditLogs   AiAuditLog[]
   auditLogs     AuditLog[]
   deviceTokens  DeviceToken[]
   notifications Notification[]
@@ -645,10 +646,32 @@ model AiMessage {
   content   String
   metadata  Json?    @default("{}")
   createdAt DateTime @default(now()) @map("created_at")
+  vehicleId String?  @map("vehicle_id")
   chat      AiChat   @relation(fields: [chatId], references: [id], onDelete: Cascade)
 
   @@index([chatId, createdAt])
+  @@index([vehicleId])
   @@map("ai_messages")
+}
+
+// AI Interaction Audit Log for security and compliance
+model AiAuditLog {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  chatId      String?  @map("chat_id")
+  messageType String   @map("message_type") // "user" or "assistant"
+  content     String   @db.Text
+  vehicleId   String?  @map("vehicle_id")
+  metadata    Json?    @default("{}")
+  ipAddress   String?  @map("ip_address")
+  userAgent   String?  @map("user_agent")
+  timestamp   DateTime @default(now()) @map("timestamp")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, timestamp(sort: Desc)])
+  @@index([chatId])
+  @@index([timestamp])
+  @@map("ai_audit_logs")
 }
 
 enum RoleName {

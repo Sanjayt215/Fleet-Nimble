@@ -1,34 +1,65 @@
 import prisma from '../utils/prisma.js';
 import logger from '../utils/logger.js';
+import { executeTool, getAvailableTools } from './aiTools.js';
+import { searchKnowledgeBase, getKnowledgeBaseContext } from './aiKnowledgeBase.js';
 
 const AI_PROVIDER = process.env.AI_PROVIDER || 'openai';
 const AI_MODEL = process.env.AI_MODEL || 'gpt-4o-mini';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
-// System prompt for FleetNimble AI Assistant
-const SYSTEM_PROMPT = `You are FleetNimble AI Assistant, a professional fleet management expert. Your role is to help users understand their fleet health, vehicle diagnostics, GPS status, alerts, DTC codes, and maintenance needs.
+// Enterprise-grade system prompt for FleetNimble AI Assistant
+const SYSTEM_PROMPT = `You are FleetNimble AI Assistant, an enterprise-grade fleet management expert. You help users understand fleet health, vehicle diagnostics, GPS tracking, fuel consumption, driver behavior, maintenance, and platform features.
 
-Guidelines:
-- Be clear, professional, concise, and practical
+CAPABILITIES:
+You have access to tools that can retrieve real-time fleet data. Use these tools automatically when needed to answer questions accurately.
+
+AVAILABLE TOOLS:
+${getAvailableTools().map(t => `- ${t.name}: ${t.description}`).join('\n')}
+
+GUIDELINES:
+- Be clear, professional, technical yet accessible, and practical
 - Explain WHAT is happening, WHY it may be happening, and WHAT action the user should take
-- Use simple language - avoid overly technical jargon
+- Use appropriate technical depth - explain beginner concepts simply, advanced concepts with detail
 - Mention vehicle name/plate number when available
-- Mention actual values like RPM, voltage, coolant temperature
+- Mention actual values like RPM, voltage, coolant temperature, fuel level
 - Give priority/severity: LOW / MEDIUM / HIGH / CRITICAL
 - NEVER invent data - if data is missing, say "Data not available"
 - For safety/maintenance issues, always suggest inspection by a qualified mechanic
-- Only answer FleetNimble/fleet/vehicle questions
+- Answer fleet-related questions and platform questions (features, pricing, support, documentation)
 - If asked unrelated questions, politely redirect to fleet support
 - Do not expose raw JWT, passwords, database IDs, or secrets
 - Do not provide unsafe mechanical repair steps beyond general guidance
+- Use tables, lists, and markdown formatting for clarity
+- Provide actionable insights and recommendations
 
-Response format:
-[Vehicle Name/Plate if applicable]
-[Status/Issue Description]
-[Current Values: RPM, voltage, coolant temp, etc.]
-[Priority: LOW/MEDIUM/HIGH/CRITICAL]
-[Next Action]`;
+RESPONSE FORMAT:
+- Use markdown for formatting (headers, lists, tables, code blocks)
+- Structure responses clearly with sections when appropriate
+- Include vehicle identifiers (name/plate) in responses
+- Show current values when discussing metrics
+- Provide priority/severity assessments
+- Give clear next actions or recommendations
+
+CUSTOMER SERVICE:
+When asked about:
+- OBD connection: Explain pairing process, Bluetooth troubleshooting
+- VIN issues: Explain VIN format, where to find it
+- GPS issues: Explain GPS requirements, troubleshooting
+- Account: Explain user management, roles, permissions
+- Subscription/Pricing: Explain plans, billing, features
+- Platform features: Explain how to use specific features
+- Support: Provide contact information and escalation paths
+
+ANALYTICS & INSIGHTS:
+When analyzing fleet data:
+- Compare against benchmarks when possible
+- Identify trends and patterns
+- Highlight anomalies or risks
+- Provide actionable recommendations
+- Use data-driven insights
+
+Remember: You are a trusted fleet management advisor. Be helpful, accurate, and professional.`;
 
 /**
  * Build context from user's fleet data
@@ -150,7 +181,7 @@ async function buildContext(userId, vehicleId = null) {
 }
 
 /**
- * Call AI provider (OpenAI or OpenRouter)
+ * Call AI provider (OpenAI or OpenRouter) - non-streaming
  */
 async function callAI(messages) {
   try {
@@ -208,6 +239,91 @@ async function callAI(messages) {
 }
 
 /**
+ * Call AI provider with streaming response
+ */
+async function callAIStream(messages, onChunk) {
+  try {
+    let apiUrl, headers, body;
+
+    if (AI_PROVIDER === 'openai') {
+      if (!OPENAI_API_KEY) {
+        onChunk('AI provider is not configured. Please add OPENAI_API_KEY in environment variables to enable the FleetNimble AI Assistant.');
+        return;
+      }
+      apiUrl = 'https://api.openai.com/v1/chat/completions';
+      headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      };
+    } else if (AI_PROVIDER === 'openrouter') {
+      if (!OPENROUTER_API_KEY) {
+        onChunk('AI provider is not configured. Please add OPENROUTER_API_KEY in environment variables to enable the FleetNimble AI Assistant.');
+        return;
+      }
+      apiUrl = 'https://openrouter.ai/api/v1/chat/completions';
+      headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+      };
+    } else {
+      onChunk(`Unsupported AI provider: ${AI_PROVIDER}. Please set AI_PROVIDER to 'openai' or 'openrouter' in environment variables.`);
+      return;
+    }
+
+    body = {
+      model: AI_MODEL,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        ...messages,
+      ],
+      temperature: 0.7,
+      max_tokens: 1000,
+      stream: true,
+    };
+
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`AI API error: ${response.status} - ${errorText}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value);
+      const lines = chunk.split('\n').filter(line => line.trim() !== '');
+
+      for (const line of lines) {
+        if (line === 'data: [DONE]') continue;
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            const content = data.choices?.[0]?.delta?.content;
+            if (content) {
+              onChunk(content);
+            }
+          } catch (e) {
+            // Skip invalid JSON
+          }
+        }
+      }
+    }
+  } catch (error) {
+    logger.error('Error calling AI provider stream', { error: error.message, provider: AI_PROVIDER });
+    throw error;
+  }
+}
+
+/**
  * Process user message and get AI response
  */
 export async function processChatMessage(userId, message, vehicleId = null, chatHistory = []) {
@@ -215,11 +331,17 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
     // Build context from user's fleet data
     const context = await buildContext(userId, vehicleId);
 
+    // Search knowledge base for relevant information
+    const knowledgeResults = searchKnowledgeBase(message);
+    const knowledgeContext = knowledgeResults.length > 0
+      ? `\n\nKnowledge Base Results:\n${knowledgeResults.map(r => `${r.type}: ${r.question || r.section || r.issue}\n${r.answer || r.content || r.solution}`).join('\n\n')}`
+      : '';
+
     // Prepare messages for AI
     const messages = [
       {
         role: 'user',
-        content: `User Question: ${message}\n\nFleet Context: ${JSON.stringify(context, null, 2)}`,
+        content: `User Question: ${message}\n\nFleet Context: ${JSON.stringify(context, null, 2)}${knowledgeContext}`,
       },
     ];
 
@@ -234,9 +356,45 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
     return {
       response: aiResponse,
       context,
+      knowledgeResults,
     };
   } catch (error) {
     logger.error('Error processing chat message', { error: error.message, userId });
+    throw error;
+  }
+}
+
+/**
+ * Process user message with streaming AI response
+ */
+export async function processChatMessageStream(userId, message, vehicleId = null, chatHistory = [], onChunk) {
+  try {
+    // Build context from user's fleet data
+    const context = await buildContext(userId, vehicleId);
+
+    // Search knowledge base for relevant information
+    const knowledgeResults = searchKnowledgeBase(message);
+    const knowledgeContext = knowledgeResults.length > 0
+      ? `\n\nKnowledge Base Results:\n${knowledgeResults.map(r => `${r.type}: ${r.question || r.section || r.issue}\n${r.answer || r.content || r.solution}`).join('\n\n')}`
+      : '';
+
+    // Prepare messages for AI
+    const messages = [
+      {
+        role: 'user',
+        content: `User Question: ${message}\n\nFleet Context: ${JSON.stringify(context, null, 2)}${knowledgeContext}`,
+      },
+    ];
+
+    // Add chat history if available
+    if (chatHistory && chatHistory.length > 0) {
+      messages.unshift(...chatHistory.slice(-10)); // Keep last 10 messages for context
+    }
+
+    // Call AI with streaming
+    await callAIStream(messages, onChunk);
+  } catch (error) {
+    logger.error('Error processing chat message stream', { error: error.message, userId });
     throw error;
   }
 }
