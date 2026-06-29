@@ -414,6 +414,409 @@ export const AI_TOOLS = {
       };
     },
   },
+
+  predict_battery_failure: {
+    name: 'predict_battery_failure',
+    description: 'Predict battery failure risk based on voltage trends and age',
+    parameters: {
+      type: 'object',
+      properties: {
+        vehicleId: { type: 'string', description: 'Vehicle ID' },
+      },
+    },
+    handler: async (userId, params) => {
+      const vehicle = await prisma.vehicle.findFirst({
+        where: { id: params.vehicleId, userId, deletedAt: null },
+      });
+
+      if (!vehicle) return { error: 'Vehicle not found' };
+
+      const telemetry = await prisma.obdLiveData.findMany({
+        where: { vehicleId: params.vehicleId },
+        orderBy: { recordedAt: 'desc' },
+        take: 10,
+      });
+
+      if (telemetry.length === 0) {
+        return { prediction: 'No telemetry data available', confidence: 'Low' };
+      }
+
+      const avgVoltage = telemetry.reduce((sum, t) => sum + (t.batteryVoltage || 0), 0) / telemetry.length;
+      const minVoltage = Math.min(...telemetry.map(t => t.batteryVoltage || 0));
+
+      let risk = 'Low';
+      let daysToFailure = 30;
+      let confidence = 85;
+
+      if (avgVoltage < 11.5 || minVoltage < 11.0) {
+        risk = 'Critical';
+        daysToFailure = 1;
+        confidence = 95;
+      } else if (avgVoltage < 12.0 || minVoltage < 11.5) {
+        risk = 'High';
+        daysToFailure = 5;
+        confidence = 90;
+      } else if (avgVoltage < 12.4) {
+        risk = 'Medium';
+        daysToFailure = 14;
+        confidence = 80;
+      }
+
+      return {
+        vehicle: `${vehicle.make} ${vehicle.model}`,
+        plate: vehicle.plateNumber || vehicle.vin,
+        currentVoltage: avgVoltage.toFixed(2),
+        minVoltage: minVoltage.toFixed(2),
+        risk,
+        daysToFailure,
+        confidence,
+        recommendation: risk === 'Critical' ? 'Replace battery immediately' : risk === 'High' ? 'Schedule battery replacement within 5 days' : 'Monitor battery voltage',
+      };
+    },
+  },
+
+  predict_coolant_overheating: {
+    name: 'predict_coolant_overheating',
+    description: 'Predict coolant overheating risk based on temperature trends',
+    parameters: {
+      type: 'object',
+      properties: {
+        vehicleId: { type: 'string', description: 'Vehicle ID' },
+      },
+    },
+    handler: async (userId, params) => {
+      const vehicle = await prisma.vehicle.findFirst({
+        where: { id: params.vehicleId, userId, deletedAt: null },
+      });
+
+      if (!vehicle) return { error: 'Vehicle not found' };
+
+      const telemetry = await prisma.obdLiveData.findMany({
+        where: { vehicleId: params.vehicleId },
+        orderBy: { recordedAt: 'desc' },
+        take: 10,
+      });
+
+      if (telemetry.length === 0) {
+        return { prediction: 'No telemetry data available', confidence: 'Low' };
+      }
+
+      const avgTemp = telemetry.reduce((sum, t) => sum + (t.coolantTemp || 0), 0) / telemetry.length;
+      const maxTemp = Math.max(...telemetry.map(t => t.coolantTemp || 0));
+
+      let risk = 'Low';
+      let confidence = 85;
+
+      if (maxTemp > 105 || avgTemp > 100) {
+        risk = 'Critical';
+        confidence = 95;
+      } else if (maxTemp > 100 || avgTemp > 95) {
+        risk = 'High';
+        confidence = 90;
+      } else if (maxTemp > 95 || avgTemp > 90) {
+        risk = 'Medium';
+        confidence = 80;
+      }
+
+      return {
+        vehicle: `${vehicle.make} ${vehicle.model}`,
+        plate: vehicle.plateNumber || vehicle.vin,
+        currentTemp: avgTemp.toFixed(1),
+        maxTemp: maxTemp.toFixed(1),
+        risk,
+        confidence,
+        recommendation: risk === 'Critical' ? 'Stop vehicle immediately, check cooling system' : risk === 'High' ? 'Check coolant level and radiator' : 'Monitor coolant temperature',
+      };
+    },
+  },
+
+  compare_vehicles: {
+    name: 'compare_vehicles',
+    description: 'Compare two vehicles side-by-side on health, fuel, battery, and other metrics',
+    parameters: {
+      type: 'object',
+      properties: {
+        vehicleId1: { type: 'string', description: 'First Vehicle ID' },
+        vehicleId2: { type: 'string', description: 'Second Vehicle ID' },
+      },
+    },
+    handler: async (userId, params) => {
+      const vehicles = await prisma.vehicle.findMany({
+        where: {
+          userId,
+          deletedAt: null,
+          id: { in: [params.vehicleId1, params.vehicleId2] },
+        },
+        include: {
+          liveState: true,
+          alerts: { where: { read: false } },
+          dtcCodes: { where: { active: true } },
+          gpsLocation: true,
+        },
+      });
+
+      if (vehicles.length < 2) return { error: 'One or both vehicles not found' };
+
+      const getTelemetry = async (vehicleId) => {
+        const telemetry = await prisma.obdLiveData.findFirst({
+          where: { vehicleId },
+          orderBy: { recordedAt: 'desc' },
+        });
+        return telemetry;
+      };
+
+      const [v1, v2] = vehicles;
+      const [t1, t2] = await Promise.all([
+        getTelemetry(v1.id),
+        getTelemetry(v2.id),
+      ]);
+
+      const calculateHealthScore = (vehicle, telemetry, alerts, dtcCodes) => {
+        let score = 100;
+        if (!vehicle.telemetryOnline) score -= 30;
+        if (alerts.length > 0) score -= alerts.length * 10;
+        if (dtcCodes.length > 0) score -= dtcCodes.length * 5;
+        if (telemetry?.batteryVoltage < 12) score -= 15;
+        if (telemetry?.coolantTemp > 100) score -= 20;
+        return Math.max(0, score);
+      };
+
+      const comparison = vehicles.map((v) => {
+        const telemetry = v.id === v1.id ? t1 : t2;
+        const healthScore = calculateHealthScore(v, telemetry, v.alerts, v.dtcCodes);
+        return {
+          id: v.id,
+          name: `${v.make} ${v.model}`,
+          plate: v.plateNumber || v.vin,
+          healthScore,
+          online: v.telemetryOnline,
+          ignition: v.liveState?.ignitionStatus ? 'ON' : 'OFF',
+          status: v.liveState?.vehicleStatus,
+          batteryVoltage: telemetry?.batteryVoltage || null,
+          coolantTemp: telemetry?.coolantTemp || null,
+          fuelLevel: telemetry?.fuelLevel || null,
+          rpm: telemetry?.rpm || null,
+          speed: telemetry?.speed || null,
+          alerts: v.alerts.length,
+          dtcCodes: v.dtcCodes.length,
+          location: v.gpsLocation ? `${v.gpsLocation.latitude.toFixed(4)}, ${v.gpsLocation.longitude.toFixed(4)}` : 'No GPS',
+        };
+      });
+
+      const winner = comparison[0].healthScore > comparison[1].healthScore ? comparison[0] : comparison[1];
+
+      return {
+        vehicles: comparison,
+        winner: winner.name,
+        recommendation: `${winner.name} has better overall health. Prioritize maintenance for the other vehicle.`,
+      };
+    },
+  },
+
+  analyze_root_cause: {
+    name: 'analyze_root_cause',
+    description: 'Analyze possible root causes for vehicle issues based on symptoms',
+    parameters: {
+      type: 'object',
+      properties: {
+        vehicleId: { type: 'string', description: 'Vehicle ID' },
+        symptom: { type: 'string', description: 'Symptom description (e.g., high coolant, low battery, engine misfire)' },
+      },
+    },
+    handler: async (userId, params) => {
+      const vehicle = await prisma.vehicle.findFirst({
+        where: { id: params.vehicleId, userId, deletedAt: null },
+        include: { dtcCodes: { where: { active: true } } },
+      });
+
+      if (!vehicle) return { error: 'Vehicle not found' };
+
+      const symptom = params.symptom.toLowerCase();
+      let possibleCauses = [];
+
+      if (symptom.includes('coolant') || symptom.includes('overheat') || symptom.includes('temperature')) {
+        possibleCauses = [
+          { cause: 'Radiator leak', confidence: 85 },
+          { cause: 'Water pump failure', confidence: 75 },
+          { cause: 'Low coolant level', confidence: 90 },
+          { cause: 'Thermostat malfunction', confidence: 70 },
+          { cause: 'Cooling fan failure', confidence: 65 },
+          { cause: 'Head gasket leak', confidence: 40 },
+        ];
+      } else if (symptom.includes('battery') || symptom.includes('voltage')) {
+        possibleCauses = [
+          { cause: 'Battery age/degradation', confidence: 85 },
+          { cause: 'Alternator failure', confidence: 75 },
+          { cause: 'Parasitic drain', confidence: 60 },
+          { cause: 'Corroded terminals', confidence: 70 },
+          { cause: 'Loose belt', confidence: 50 },
+        ];
+      } else if (symptom.includes('engine') || symptom.includes('misfire') || symptom.includes('power')) {
+        possibleCauses = [
+          { cause: 'Fuel injector issue', confidence: 75 },
+          { cause: 'Spark plug failure', confidence: 80 },
+          { cause: 'Ignition coil failure', confidence: 70 },
+          { cause: 'Air filter clogged', confidence: 60 },
+          { cause: 'Fuel pump issue', confidence: 55 },
+          { cause: 'Sensor malfunction', confidence: 65 },
+        ];
+      } else if (symptom.includes('brake')) {
+        possibleCauses = [
+          { cause: 'Worn brake pads', confidence: 90 },
+          { cause: 'Low brake fluid', confidence: 85 },
+          { cause: 'Brake line leak', confidence: 60 },
+          { cause: 'Caliper stuck', confidence: 55 },
+          { cause: 'ABS sensor fault', confidence: 50 },
+        ];
+      } else {
+        possibleCauses = [
+          { cause: 'General wear', confidence: 50 },
+          { cause: 'Sensor malfunction', confidence: 45 },
+          { cause: 'Maintenance overdue', confidence: 60 },
+        ];
+      }
+
+      // Adjust confidence based on DTC codes
+      vehicle.dtcCodes.forEach((dtc) => {
+        if (dtc.code.startsWith('P0')) {
+          possibleCauses.forEach((c) => c.confidence = Math.min(100, c.confidence + 10));
+        }
+      });
+
+      possibleCauses.sort((a, b) => b.confidence - a.confidence);
+
+      return {
+        vehicle: `${vehicle.make} ${vehicle.model}`,
+        plate: vehicle.plateNumber || vehicle.vin,
+        symptom: params.symptom,
+        possibleCauses: possibleCauses.slice(0, 5),
+        activeDtcCodes: vehicle.dtcCodes.map((d) => d.code),
+        recommendation: `Inspect ${possibleCauses[0].cause.toLowerCase()} first (confidence: ${possibleCauses[0].confidence}%)`,
+      };
+    },
+  },
+
+  get_driver_insights: {
+    name: 'get_driver_insights',
+    description: 'Get driver performance insights including score, fuel efficiency, harsh braking, acceleration',
+    parameters: {
+      type: 'object',
+      properties: {
+        vehicleId: { type: 'string', description: 'Vehicle ID' },
+      },
+    },
+    handler: async (userId, params) => {
+      const vehicle = await prisma.vehicle.findFirst({
+        where: { id: params.vehicleId, userId, deletedAt: null },
+      });
+
+      if (!vehicle) return { error: 'Vehicle not found' };
+
+      const behaviorEvents = await prisma.behaviorEvent.findMany({
+        where: { vehicleId: params.vehicleId },
+        orderBy: { timestamp: 'desc' },
+        take: 100,
+      });
+
+      const harshBraking = behaviorEvents.filter((e) => e.eventType === 'HARSH_BRAKE').length;
+      const harshAccel = behaviorEvents.filter((e) => e.eventType === 'HARSH_ACCEL').length;
+      const speeding = behaviorEvents.filter((e) => e.eventType === 'SPEEDING').length;
+      const idleEvents = behaviorEvents.filter((e) => e.eventType === 'IDLE').length;
+
+      const trips = await prisma.trip.findMany({
+        where: { vehicleId: params.vehicleId },
+        orderBy: { startTime: 'desc' },
+        take: 20,
+      });
+
+      const avgFuelEfficiency = trips.length > 0
+        ? trips.reduce((sum, t) => sum + (t.fuelConsumption || 0), 0) / trips.length
+        : 0;
+
+      // Calculate driver score (0-100)
+      let score = 100;
+      score -= harshBraking * 5;
+      score -= harshAccel * 3;
+      score -= speeding * 2;
+      score -= idleEvents * 1;
+      score = Math.max(0, score);
+
+      return {
+        vehicle: `${vehicle.make} ${vehicle.model}`,
+        plate: vehicle.plateNumber || vehicle.vin,
+        driverScore: score,
+        fuelEfficiency: avgFuelEfficiency.toFixed(2),
+        harshBraking,
+        harshAcceleration: harshAccel,
+        speeding,
+        idleEvents,
+        totalEvents: behaviorEvents.length,
+        safetyScore: score > 80 ? 'Excellent' : score > 60 ? 'Good' : score > 40 ? 'Fair' : 'Poor',
+        recommendation: score < 60 ? 'Driver training recommended' : score < 80 ? 'Monitor driving behavior' : 'Good driving performance',
+      };
+    },
+  },
+
+  get_nearest_vehicle: {
+    name: 'get_nearest_vehicle',
+    description: 'Find the nearest vehicle to a given location',
+    parameters: {
+      type: 'object',
+      properties: {
+        latitude: { type: 'number', description: 'Target latitude' },
+        longitude: { type: 'number', description: 'Target longitude' },
+      },
+    },
+    handler: async (userId, params) => {
+      const vehicles = await prisma.vehicle.findMany({
+        where: { userId, deletedAt: null },
+        include: { gpsLocation: true },
+      });
+
+      const vehiclesWithLocation = vehicles.filter((v) => v.gpsLocation);
+
+      if (vehiclesWithLocation.length === 0) {
+        return { error: 'No vehicles with GPS location available' };
+      }
+
+      const calculateDistance = (lat1, lon1, lat2, lon2) => {
+        const R = 6371; // Earth's radius in km
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                  Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+      };
+
+      const distances = vehiclesWithLocation.map((v) => ({
+        vehicle: `${v.make} ${v.model}`,
+        plate: v.plateNumber || v.vin,
+        id: v.id,
+        distance: calculateDistance(
+          params.latitude,
+          params.longitude,
+          v.gpsLocation.latitude,
+          v.gpsLocation.longitude
+        ),
+        location: {
+          latitude: v.gpsLocation.latitude,
+          longitude: v.gpsLocation.longitude,
+        },
+        online: v.telemetryOnline,
+        ignition: v.liveState?.ignitionStatus ? 'ON' : 'OFF',
+      }));
+
+      distances.sort((a, b) => a.distance - b.distance);
+
+      return {
+        targetLocation: { latitude: params.latitude, longitude: params.longitude },
+        nearestVehicles: distances.slice(0, 5),
+        recommendation: `Nearest vehicle is ${distances[0].vehicle} (${distances[0].plate}) at ${distances[0].distance.toFixed(2)} km`,
+      };
+    },
+  },
 };
 
 /**

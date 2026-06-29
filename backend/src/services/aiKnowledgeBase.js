@@ -8,6 +8,143 @@ const searchCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 const KNOWLEDGE_BASE = {
+  technical_explanations: {
+    'What is Engine Load?': `
+Engine Load represents the percentage of engine capacity being used at any given moment.
+
+**How it works:**
+- Calculated by the ECU (Engine Control Unit) based on throttle position, RPM, and air intake
+- 0% means engine is idling
+- 100% means engine is at maximum capacity
+- Normal driving: 20-70%
+- Heavy acceleration: 80-100%
+
+**What it indicates:**
+- High load: Engine working hard (acceleration, climbing, towing)
+- Low load: Engine cruising or idling
+- Abnormal patterns may indicate issues with sensors, fuel system, or air intake
+
+**Normal range:** 10-90% during normal driving
+`,
+    'What is MAF (Mass Air Flow)?': `
+MAF (Mass Air Flow) measures the amount of air entering the engine.
+
+**How it works:**
+- Sensor located in the air intake tube
+- Measures air mass in grams per second (g/s)
+- ECU uses this data to calculate fuel injection
+
+**What it indicates:**
+- Higher MAF: More air entering (acceleration, high RPM)
+- Lower MAF: Less air entering (idling, cruising)
+- Abnormal readings: Dirty air filter, sensor failure, vacuum leak
+
+**Normal range:** 2-50 g/s depending on engine size
+`,
+    'What is Intake Temperature?': `
+Intake Temperature measures the temperature of air entering the engine.
+
+**How it works:**
+- Sensor located in the air intake manifold
+- Measures air temperature in Celsius or Fahrenheit
+- Affects air density and fuel mixture
+
+**What it indicates:**
+- Lower temp: Denser air, better performance
+- Higher temp: Less dense air, reduced performance
+- Abnormal readings: Sensor failure, heat soak, cooling issues
+
+**Normal range:** Ambient temperature to +20°C above ambient
+`,
+    'What is Battery Voltage?': `
+Battery Voltage indicates the electrical system's health.
+
+**How it works:**
+- Measured in volts (V)
+- 12V is standard for most vehicles
+- Charging system should maintain 13.8-14.4V when running
+
+**What it indicates:**
+- 12.6V+: Fully charged battery
+- 12.0-12.5V: Partially charged
+- Below 12.0V: Low charge, may need charging
+- Below 11.5V: Critical, battery may fail
+- Above 14.5V: Possible alternator overcharging
+
+**Normal range:** 12.4-14.4V
+`,
+    'What is Coolant Temperature?': `
+Coolant Temperature measures engine cooling system temperature.
+
+**How it works:**
+- Sensor in coolant flow
+- Measured in Celsius or Fahrenheit
+- Thermostat regulates temperature
+
+**What it indicates:**
+- 80-95°C (176-203°F): Normal operating temperature
+- Below 80°C: Engine not warmed up, thermostat stuck open
+- Above 105°C: Overheating, check cooling system
+- Rapid fluctuations: Possible sensor or thermostat issue
+
+**Normal range:** 80-95°C during normal operation
+`,
+    'What is Throttle Position?': `
+Throttle Position indicates how far the throttle valve is open.
+
+**How it works:**
+- Sensor on throttle body
+- Measured as percentage (0-100%)
+- 0% = closed (idle), 100% = fully open (wide open throttle)
+
+**What it indicates:**
+- 0-10%: Idling or cruising
+- 10-50%: Normal acceleration
+- 50-100%: Heavy acceleration or high load
+- Erratic readings: Sensor wear, dirty throttle body
+
+**Normal range:** 0-100% depending on driving conditions
+`,
+    'What are OBD-II codes?': `
+OBD-II (On-Board Diagnostics) codes are standardized error codes.
+
+**Code format:**
+- P0xxx: Powertrain (engine, transmission)
+- P1xxx: Manufacturer-specific powertrain
+- C0xxx: Chassis (brakes, suspension)
+- B0xxx: Body (airbags, climate)
+- U0xxx: Network/communication
+
+**Common codes:**
+- P0300: Random misfire
+- P0171: System too lean
+- P0420: Catalyst efficiency below threshold
+- P0700: Transmission control system malfunction
+
+**What to do:**
+- Record the code
+- Look up specific meaning
+- Address underlying issue
+- Clear code after repair
+`,
+    'What is RPM?': `
+RPM (Revolutions Per Minute) measures engine speed.
+
+**How it works:**
+- Measured by crankshaft position sensor
+- Indicates how fast engine is spinning
+- Affects power output and fuel consumption
+
+**What it indicates:**
+- 600-1000 RPM: Idling
+- 1000-3000 RPM: Normal cruising
+- 3000-6000 RPM: Acceleration or high load
+- Above 6000 RPM: Redline approaching
+- Erratic RPM: Possible sensor or fuel system issue
+
+**Normal range:** 600-6500 RPM (varies by vehicle)
+`,
+  },
   faqs: {
     'How do I connect an OBD device?': `
 To connect an OBD device to FleetNimble:
@@ -476,6 +613,17 @@ export function searchKnowledgeBase(query) {
   }
 
   const results = [];
+
+  // Search technical explanations
+  for (const [question, answer] of Object.entries(KNOWLEDGE_BASE.technical_explanations)) {
+    if (question.toLowerCase().includes(lowerQuery) || answer.toLowerCase().includes(lowerQuery)) {
+      results.push({
+        type: 'technical',
+        question,
+        answer,
+      });
+    }
+  }
 
   // Search FAQs
   for (const [question, answer] of Object.entries(KNOWLEDGE_BASE.faqs)) {
