@@ -55,3 +55,20 @@ export const authLimiter = isDev
         error: { code: 'RATE_LIMIT', message: 'Too many auth attempts' },
       },
     });
+
+export const aiChatLimiter = isDev
+  ? (req, res, next) => next()
+  : rateLimit({
+      windowMs: 60 * 1000,
+      max: 20,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req) => `${req.userId || 'anon'}:ai-chat`,
+      message: {
+        success: false,
+        error: {
+          code: 'RATE_LIMIT',
+          message: 'AI chat rate limit exceeded. Please wait before sending another message.',
+        },
+      },
+    });

@@ -19,6 +19,7 @@ import Settings from './pages/Settings';
 import Admin from './pages/Admin';
 import LiveOBD from './pages/LiveOBD';
 import GpsTracking from './pages/GpsTracking';
+import AIAssistant from './pages/AIAssistant';
 export default function App() {
   return (
     <Routes>
@@ -45,6 +46,7 @@ export default function App() {
           <Route path="/demo/work-orders" element={<WorkOrders />} />
           <Route path="/demo/settings" element={<Settings />} />
           <Route path="/demo/admin" element={<Admin />} />
+          <Route path="/demo/ai-assistant" element={<AIAssistant />} />
 
           {/* Live Analysis routes */}
           <Route path="/analysis" element={<Dashboard />} />
@@ -62,6 +64,7 @@ export default function App() {
           <Route path="/analysis/work-orders" element={<WorkOrders />} />
           <Route path="/analysis/settings" element={<Settings />} />
           <Route path="/analysis/admin" element={<Admin />} />
+          <Route path="/analysis/ai-assistant" element={<AIAssistant />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
