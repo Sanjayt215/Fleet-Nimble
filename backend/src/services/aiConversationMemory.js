@@ -3,8 +3,8 @@
  * Enhanced conversation memory with historical data comparison and user preferences
  */
 
-import prisma from '../utils/prisma.js';
-import logger from '../utils/logger.js';
+import prisma from '../../utils/prisma.js';
+import logger from '../../utils/logger.js';
 
 /**
  * Limit conversation history to prevent token overflow

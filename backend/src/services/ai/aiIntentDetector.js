@@ -3,7 +3,7 @@
  * Detects user intent from natural language queries with confidence scoring
  */
 
-import prisma from '../utils/prisma.js';
+import prisma from '../../utils/prisma.js';
 
 export const INTENTS = {
   FLEET_SUMMARY: 'fleet_summary',

@@ -3,7 +3,7 @@
  * Executes AI tools for fleet operations
  */
 
-import { executeTool, getAvailableTools } from '../aiTools.js';
+import { executeTool, getAvailableTools } from '../../services/aiTools.js';
 
 /**
  * Get available AI tools
