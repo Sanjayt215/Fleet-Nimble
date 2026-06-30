@@ -66,6 +66,47 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
       const contextBuilder = new AIContextBuilder(userId, message, intentResult.userVehicles);
       context = await contextBuilder.build();
       logger.info('AI_CONTEXT_BUILT', { userId, intent: context.intent });
+      
+      // Log context preview and length
+      const contextString = JSON.stringify(context, null, 2);
+      logger.info('AI_CONTEXT_PREVIEW', { 
+        userId, 
+        intent: context.intent,
+        preview: contextString.substring(0, 500) 
+      });
+      logger.info('AI_CONTEXT_LENGTH', { 
+        userId, 
+        chars: contextString.length,
+        intent: context.intent 
+      });
+      
+      // For fleet_summary, if context is too small, use deterministic fallback
+      if (intentResult.intent === 'fleet_summary' && contextString.length < 100) {
+        logger.warn('AI_CONTEXT_TOO_SMALL_FOR_FLEET_SUMMARY', { 
+          userId, 
+          contextLength: contextString.length 
+        });
+        const fallbackResult = await getDeterministicFallback(userId, message, vehicleId);
+        const reply = fallbackResult?.data?.reply || 'Unable to process fleet summary request.';
+        logger.info('AI_FALLBACK_USED', { userId, reason: 'context_too_small' });
+        return {
+          response: reply,
+          context,
+          knowledgeResults,
+          metadata: fallbackResult?.data?.metadata || {
+            title: "FleetNimble AI Assistant",
+            confidence: "LOW",
+            dataFreshness: "UNKNOWN",
+            simulatedNote: null,
+            suggestedActions: [
+              "Summarize my fleet health",
+              "Show critical alerts",
+              "Show vehicles needing maintenance",
+            ],
+            entities: {},
+          },
+        };
+      }
     } catch (contextError) {
       logger.error('AI_CONTEXT_BUILD_FAILED', { userId, error: contextError.message });
       context = null;

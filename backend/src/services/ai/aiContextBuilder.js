@@ -1,4 +1,5 @@
 import prisma from '../../utils/prisma.js';
+import logger from '../../utils/logger.js';
 import { detectIntent, extractEntities, INTENTS } from './aiIntentDetector.js';
 
 const MAX_CONTEXT_TOKENS = 1500;
@@ -27,45 +28,52 @@ export class AIContextBuilder {
   async build() {
     let context;
     
-    switch (this.intent) {
-      case INTENTS.FLEET_SUMMARY:
-        context = await this.buildFleetSummaryContext();
-        break;
-      case INTENTS.VEHICLE_DETAILS:
-        context = await this.buildVehicleDetailsContext();
-        break;
-      case INTENTS.VEHICLE_COMPARISON:
-        context = await this.buildVehicleComparisonContext();
-        break;
-      case INTENTS.DTC:
-        context = await this.buildDTCContext();
-        break;
-      case INTENTS.MAINTENANCE:
-        context = await this.buildMaintenanceContext();
-        break;
-      case INTENTS.GPS:
-        context = await this.buildGPSContext();
-        break;
-      case INTENTS.ALERTS:
-        context = await this.buildAlertsContext();
-        break;
-      case INTENTS.OFFLINE_VEHICLES:
-        context = await this.buildOfflineVehiclesContext();
-        break;
-      case INTENTS.STANDBY_VEHICLES:
-        context = await this.buildStandbyVehiclesContext();
-        break;
-      case INTENTS.BATTERY:
-        context = await this.buildBatteryContext();
-        break;
-      case INTENTS.FUEL:
-        context = await this.buildFuelContext();
-        break;
-      case INTENTS.PREDICTIVE_MAINTENANCE:
-        context = await this.buildPredictiveMaintenanceContext();
-        break;
-      default:
-        context = await this.buildMinimalContext();
+    try {
+      switch (this.intent) {
+        case INTENTS.FLEET_SUMMARY:
+          context = await this.buildFleetSummaryContext();
+          break;
+        case INTENTS.VEHICLE_DETAILS:
+          context = await this.buildVehicleDetailsContext();
+          break;
+        case INTENTS.VEHICLE_COMPARISON:
+          context = await this.buildVehicleComparisonContext();
+          break;
+        case INTENTS.DTC:
+          context = await this.buildDTCContext();
+          break;
+        case INTENTS.MAINTENANCE:
+          context = await this.buildMaintenanceContext();
+          break;
+        case INTENTS.GPS:
+          context = await this.buildGPSContext();
+          break;
+        case INTENTS.ALERTS:
+          context = await this.buildAlertsContext();
+          break;
+        case INTENTS.OFFLINE_VEHICLES:
+          context = await this.buildOfflineVehiclesContext();
+          break;
+        case INTENTS.STANDBY_VEHICLES:
+          context = await this.buildStandbyVehiclesContext();
+          break;
+        case INTENTS.BATTERY:
+          context = await this.buildBatteryContext();
+          break;
+        case INTENTS.FUEL:
+          context = await this.buildFuelContext();
+          break;
+        case INTENTS.PREDICTIVE_MAINTENANCE:
+          context = await this.buildPredictiveMaintenanceContext();
+          break;
+        default:
+          context = await this.buildMinimalContext();
+      }
+    } catch (error) {
+      logger.error('AI_CONTEXT_BUILD_FAILED', { intent: this.intent, error: error.message, stack: error.stack });
+      
+      // Use deterministic fallback context on error
+      context = await this.buildFallbackContext();
     }
     
     // Truncate if exceeds limit
@@ -819,6 +827,55 @@ export class AIContextBuilder {
         totalVehicles: vehicleCount,
       },
     };
+  }
+  
+  /**
+   * Fallback context when context building fails
+   * Provides basic fleet data without complex queries
+   */
+  async buildFallbackContext() {
+    try {
+      const vehicles = await prisma.vehicle.findMany({
+        where: { userId: this.userId, deletedAt: null },
+        select: {
+          vehicleName: true,
+          registrationNumber: true,
+          status: true,
+          telemetryOnline: true,
+        },
+        take: 50,
+      });
+      
+      const onlineCount = vehicles.filter(v => v.telemetryOnline === true).length;
+      const offlineCount = vehicles.filter(v => v.telemetryOnline === false || v.status === 'OFFLINE').length;
+      
+      return {
+        intent: this.intent,
+        dataSource: 'database_fallback',
+        fleet: {
+          totalVehicles: vehicles.length,
+          onlineCount,
+          offlineCount,
+          vehicles: vehicles.slice(0, 5).map(v => ({
+            name: v.vehicleName,
+            plate: v.registrationNumber,
+            status: v.status,
+          })),
+        },
+      };
+    } catch (fallbackError) {
+      logger.error('AI_CONTEXT_FALLBACK_FAILED', { error: fallbackError.message });
+      
+      // Ultimate fallback - return minimal context
+      return {
+        intent: this.intent,
+        dataSource: 'minimal_fallback',
+        fleet: {
+          totalVehicles: 0,
+          note: 'Unable to fetch fleet data',
+        },
+      };
+    }
   }
   
   /**

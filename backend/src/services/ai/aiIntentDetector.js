@@ -4,6 +4,7 @@
  */
 
 import prisma from '../../utils/prisma.js';
+import logger from '../../utils/logger.js';
 
 export const INTENTS = {
   FLEET_SUMMARY: 'fleet_summary',

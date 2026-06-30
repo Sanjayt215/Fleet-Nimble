@@ -44,6 +44,57 @@ export async function list(req, res, next) {
   }
 }
 
+export async function getVehicleFuelData(req, res, next) {
+  try {
+    const { vehicleId } = req.params;
+    
+    // Get latest fuel level from telemetry
+    const latestTelemetry = await prisma.telemetry.findFirst({
+      where: { vehicleId },
+      orderBy: { timestamp: 'desc' },
+      select: {
+        fuelLevel: true,
+        timestamp: true,
+      },
+    });
+
+    // Get recent fuel logs
+    const fuelLogs = await prisma.fuelLog.findMany({
+      where: { vehicleId },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+      select: {
+        id: true,
+        liters: true,
+        cost: true,
+        mileage: true,
+        createdAt: true,
+      },
+    });
+
+    res.json({
+      success: true,
+      data: {
+        vehicleId,
+        fuelLevel: latestTelemetry?.fuelLevel ?? null,
+        lastUpdated: latestTelemetry?.timestamp ?? null,
+        fuelHistory: fuelLogs,
+      },
+    });
+  } catch (err) {
+    // Return 200 with empty values instead of 404
+    res.json({
+      success: true,
+      data: {
+        vehicleId: req.params.vehicleId,
+        fuelLevel: null,
+        lastUpdated: null,
+        fuelHistory: [],
+      },
+    });
+  }
+}
+
 async function assertVehicle(req, vehicleId) {
   const where = {
     id: vehicleId,
