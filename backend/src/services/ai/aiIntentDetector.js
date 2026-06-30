@@ -12,6 +12,7 @@ export const INTENTS = {
   VEHICLE_COMPARISON: 'vehicle_comparison',
   DIAGNOSTICS: 'diagnostics',
   MAINTENANCE: 'maintenance',
+  WORK_ORDER: 'work_order',
   GPS: 'gps',
   ALERTS: 'alerts',
   DTC: 'dtc',
@@ -75,6 +76,17 @@ export function detectIntent(message) {
            lowerMessage.includes('service due') ||
            lowerMessage.includes('needs maintenance')) {
     intent = INTENTS.MAINTENANCE;
+    confidence = 0.9;
+  }
+  
+  // Work order intent
+  else if (lowerMessage.includes('work order') ||
+           lowerMessage.includes('create work order') ||
+           lowerMessage.includes('new work order') ||
+           lowerMessage.includes('add work order') ||
+           lowerMessage.includes('schedule repair') ||
+           (lowerMessage.includes('create') && (lowerMessage.includes('repair') || lowerMessage.includes('maintenance')))) {
+    intent = INTENTS.WORK_ORDER;
     confidence = 0.9;
   }
   

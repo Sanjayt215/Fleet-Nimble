@@ -67,20 +67,21 @@ async function buildFleetSummaryContext(userId) {
     where: { userId, deletedAt: null },
     select: {
       id: true,
-      name: true,
-      plateNumber: true,
+      vehicleName: true,
+      registrationNumber: true,
       make: true,
       model: true,
       year: true,
-      liveState: { select: { status: true } },
+      status: true,
+      telemetryOnline: true,
       _count: { select: { alerts: true, dtcCodes: true, maintenanceLogs: true } },
     },
     take: 50, // Limit to 50 vehicles max
   });
   
-  const onlineCount = vehicles.filter(v => v.liveState?.status === 'online').length;
-  const offlineCount = vehicles.filter(v => v.liveState?.status === 'offline').length;
-  const standbyCount = vehicles.filter(v => v.liveState?.status === 'standby').length;
+  const onlineCount = vehicles.filter(v => v.telemetryOnline === true).length;
+  const offlineCount = vehicles.filter(v => v.telemetryOnline === false || v.status === 'OFFLINE').length;
+  const standbyCount = vehicles.filter(v => v.status === 'STANDBY').length;
   
   const totalAlerts = vehicles.reduce((sum, v) => sum + v._count.alerts, 0);
   const totalDTCs = vehicles.reduce((sum, v) => sum + v._count.dtcCodes, 0);
@@ -91,8 +92,8 @@ async function buildFleetSummaryContext(userId) {
     .sort((a, b) => b._count.alerts - a._count.alerts)
     .slice(0, 3)
     .map(v => ({
-      name: v.name,
-      plate: v.plateNumber,
+      name: v.vehicleName,
+      plate: v.registrationNumber,
       alertCount: v._count.alerts,
     }));
   
@@ -103,7 +104,7 @@ async function buildFleetSummaryContext(userId) {
       completed: false,
     },
     include: {
-      vehicle: { select: { name: true, plateNumber: true } },
+      vehicle: { select: { vehicleName: true, registrationNumber: true } },
     },
     orderBy: { dueDate: 'asc' },
     take: 3,
@@ -137,8 +138,8 @@ async function buildFleetSummaryContext(userId) {
       activeDtcCount: totalDTCs,
       topRiskyVehicles,
       maintenanceDue: maintenanceDue.map(m => ({
-        vehicle: m.vehicle.name,
-        plate: m.vehicle.plateNumber,
+        vehicle: m.vehicle.vehicleName,
+        plate: m.vehicle.registrationNumber,
         dueDate: m.dueDate,
       })),
       latestTelemetry: latestTelemetry?.timestamp || null,
@@ -154,14 +155,15 @@ async function buildVehicleContext(userId, vehicleId) {
     where: { id: vehicleId, userId, deletedAt: null },
     select: {
       id: true,
-      name: true,
-      plateNumber: true,
+      vehicleName: true,
+      registrationNumber: true,
       vin: true,
       make: true,
       model: true,
       year: true,
       odometer: true,
-      liveState: { select: { status: true } },
+      status: true,
+      telemetryOnline: true,
     },
   });
   
@@ -247,14 +249,15 @@ async function buildVehicleContext(userId, vehicleId) {
       dtcs: dtcCodes.length,
     },
     vehicle: {
-      name: vehicle.name,
-      plate: vehicle.plateNumber,
+      name: vehicle.vehicleName,
+      plate: vehicle.registrationNumber,
       vin: vehicle.vin,
       make: vehicle.make,
       model: vehicle.model,
       year: vehicle.year,
       odometer: vehicle.odometer,
-      status: vehicle.liveState?.status || 'unknown',
+      status: vehicle.status || 'unknown',
+      telemetryOnline: vehicle.telemetryOnline,
       latestTelemetry,
       latestLocation,
       alerts,
@@ -275,12 +278,13 @@ async function buildComparisonContext(userId, message) {
     where: { userId, deletedAt: null },
     select: {
       id: true,
-      name: true,
-      plateNumber: true,
+      vehicleName: true,
+      registrationNumber: true,
       make: true,
       model: true,
       year: true,
-      liveState: { select: { status: true } },
+      status: true,
+      telemetryOnline: true,
     },
     take: 2,
   });
@@ -311,12 +315,13 @@ async function buildComparisonContext(userId, message) {
       });
       
       return {
-        name: v.name,
-        plate: v.plateNumber,
+        name: v.vehicleName,
+        plate: v.registrationNumber,
         make: v.make,
         model: v.model,
         year: v.year,
-        status: v.liveState?.status || 'unknown',
+        status: v.status || 'unknown',
+        telemetryOnline: v.telemetryOnline,
         batteryVoltage: telemetry?.batteryVoltage,
         coolantTemp: telemetry?.coolantTemp,
         fuelLevel: telemetry?.fuelLevel,
@@ -345,7 +350,7 @@ async function buildDTCContext(userId, vehicleId, message) {
   if (vehicleId) {
     vehicle = await prisma.vehicle.findFirst({
       where: { id: vehicleId, userId, deletedAt: null },
-      select: { name: true, plateNumber: true, make: true, model: true },
+      select: { vehicleName: true, registrationNumber: true, make: true, model: true },
     });
   }
   
@@ -366,8 +371,8 @@ async function buildDTCContext(userId, vehicleId, message) {
       description: dtcInfo?.description || 'Unknown code',
       severity: dtcInfo?.severity || 'unknown',
       vehicle: vehicle ? {
-        name: vehicle.name,
-        plate: vehicle.plateNumber,
+        name: vehicle.vehicleName,
+        plate: vehicle.registrationNumber,
         make: vehicle.make,
         model: vehicle.model,
       } : null,
@@ -387,8 +392,8 @@ async function buildMaintenanceContext(userId) {
     include: {
       vehicle: {
         select: {
-          name: true,
-          plateNumber: true,
+          vehicleName: true,
+          registrationNumber: true,
           make: true,
           model: true,
         },
@@ -403,8 +408,8 @@ async function buildMaintenanceContext(userId) {
     dataSource: 'database',
     recordCounts: { maintenance: maintenanceDue.length },
     maintenance: maintenanceDue.map(m => ({
-      vehicle: m.vehicle.name,
-      plate: m.vehicle.plateNumber,
+      vehicle: m.vehicle.vehicleName,
+      plate: m.vehicle.registrationNumber,
       type: m.type,
       description: m.description,
       dueDate: m.dueDate,

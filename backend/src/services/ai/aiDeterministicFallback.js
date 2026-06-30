@@ -100,6 +100,8 @@ async function buildIntentMatchedFallback(userId, message, intentResult, context
         return await getDTCFallback(userId, entities);
       case 'maintenance':
         return await getMaintenanceFallback(userId);
+      case 'work_order':
+        return await getWorkOrderFallback(userId, message, entities, userVehicles);
       case 'alerts':
         return await getAlertsFallback(userId, entities);
       case 'gps':
@@ -475,7 +477,7 @@ async function getDTCFallback(userId, entities) {
       };
     }
     
-    const response = `**Active DTC Codes**\n\n${dtcCodes.map(d => `- **${d.code}** (${d.vehicle.name}): ${d.description} - ${d.severity}`).join('\n')}\n\n**Total Active DTCs:** ${dtcCodes.length}\n\n**Recommended Action:** Address critical DTCs immediately`;
+    const response = `**Active DTC Codes**\n\n${dtcCodes.map(d => `- **${d.code}** (${d.vehicle.vehicleName}): ${d.description} - ${d.severity}`).join('\n')}\n\n**Total Active DTCs:** ${dtcCodes.length}\n\n**Recommended Action:** Address critical DTCs immediately`;
     
     return {
       response,
@@ -498,8 +500,8 @@ async function getDTCFallback(userId, entities) {
     include: {
       vehicle: {
         select: {
-          name: true,
-          plateNumber: true,
+          vehicleName: true,
+          registrationNumber: true,
         },
       },
     },
@@ -520,7 +522,7 @@ async function getDTCFallback(userId, entities) {
     };
   }
   
-  const response = `**DTC: ${dtcInfo.code}**\n\n**Description:** ${dtcInfo.description}\n**Severity:** ${dtcInfo.severity}\n**Vehicle:** ${dtcInfo.vehicle.name} (${dtcInfo.vehicle.plate})\n**Detected:** ${dtcInfo.detectedAt}\n\nThis code indicates a ${dtcInfo.severity.toLowerCase()} issue that should be addressed.\n\n**Recommended Action:** Schedule diagnostic and repair`;
+  const response = `**DTC: ${dtcInfo.code}**\n\n**Description:** ${dtcInfo.description}\n**Severity:** ${dtcInfo.severity}\n**Vehicle:** ${dtcInfo.vehicle.vehicleName} (${dtcInfo.vehicle.registrationNumber})\n**Detected:** ${dtcInfo.detectedAt}\n\nThis code indicates a ${dtcInfo.severity.toLowerCase()} issue that should be addressed.\n\n**Recommended Action:** Schedule diagnostic and repair`;
   
   return {
     response,
@@ -574,7 +576,7 @@ async function getMaintenanceFallback(userId) {
   }
   
   const items = maintenanceDue.map(m => 
-    `- ${m.vehicle.name} (${m.vehicle.plate}): ${m.type} - ${m.description} (Due: ${m.dueDate})`
+    `- ${m.vehicle.vehicleName} (${m.vehicle.registrationNumber}): ${m.type} - ${m.description} (Due: ${m.dueDate})`
   ).join('\n');
   
   const response = `**Maintenance Due**\n\n${items}\n\n**Total Items:** ${maintenanceDue.length}\n\n**Recommended Action:** Schedule maintenance for overdue items`;
@@ -589,6 +591,64 @@ async function getMaintenanceFallback(userId) {
         'Show critical alerts',
         'Show vehicle details',
         'Schedule maintenance',
+      ],
+    },
+  };
+}
+
+/**
+ * Work order fallback
+ */
+async function getWorkOrderFallback(userId, message, entities, userVehicles) {
+  // Check if a vehicle is specified in entities
+  const vehicle = entities.vehicles[0];
+  
+  if (vehicle) {
+    return {
+      response: `I can help you create a work order for **${vehicle.vehicleName}** (${vehicle.registrationNumber}).\n\nPlease provide:\n- The issue or problem description\n- Priority level (optional)\n- Any additional notes\n\nFor example: "Engine making strange noise, high priority"`,
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'LIVE',
+        simulatedNote: null,
+        suggestedActions: [
+          'Show vehicle details',
+          'Show maintenance history',
+          'Create another work order',
+        ],
+      },
+    };
+  }
+  
+  // No vehicle specified - ask user to select one
+  if (userVehicles.length === 0) {
+    return {
+      response: 'You don\'t have any vehicles in your fleet. Please add a vehicle first before creating a work order.',
+      metadata: {
+        confidence: 'LOW',
+        dataFreshness: 'UNKNOWN',
+        simulatedNote: null,
+        suggestedActions: [
+          'Add a vehicle',
+          'Show fleet summary',
+        ],
+      },
+    };
+  }
+  
+  const vehicleList = userVehicles.slice(0, 5).map(v => 
+    `- ${v.vehicleName} (${v.registrationNumber})`
+  ).join('\n');
+  
+  return {
+    response: `To create a work order, I need to know which vehicle it's for.\n\n**Your Vehicles:**\n${vehicleList}\n\nPlease tell me:\n1. Which vehicle needs the work order\n2. What is the issue or problem\n\nFor example: "Create work order for Honda Amaze - Engine making strange noise"`,
+    metadata: {
+      confidence: 'MEDIUM',
+      dataFreshness: 'LIVE',
+      simulatedNote: null,
+      suggestedActions: [
+        'Show vehicle details',
+        'Show maintenance history',
+        'Show fleet summary',
       ],
     },
   };
@@ -634,7 +694,7 @@ async function getAlertsFallback(userId, entities) {
   }
   
   const alertList = alerts.map(a => 
-    `- **${a.severity}** - ${a.vehicle.name} (${a.vehicle.plate}): ${a.message}`
+    `- **${a.severity}** - ${a.vehicle.vehicleName} (${a.vehicle.registrationNumber}): ${a.message}`
   ).join('\n');
   
   const criticalCount = alerts.filter(a => a.severity === 'CRITICAL').length;
@@ -717,7 +777,7 @@ async function getGPSFallback(userId, entities, userVehicles) {
     };
   }
   
-  const response = `**Vehicle Location**\n\n**Vehicle:** ${vehicle.name}\n**Plate:** ${vehicle.plateNumber}\n**Address:** ${latestLocation.address || 'N/A'}\n**Coordinates:** ${latestLocation.latitude}, ${latestLocation.longitude}\n**Last Updated:** ${latestLocation.timestamp}\n\n**Recommended Action:** ${latestLocation.address ? 'Vehicle location is current' : 'GPS signal may be weak'}`;
+  const response = `**Vehicle Location**\n\n**Vehicle:** ${vehicle.vehicleName}\n**Plate:** ${vehicle.registrationNumber}\n**Address:** ${latestLocation.address || 'N/A'}\n**Coordinates:** ${latestLocation.latitude}, ${latestLocation.longitude}\n**Last Updated:** ${latestLocation.timestamp}\n\n**Recommended Action:** ${latestLocation.address ? 'Vehicle location is current' : 'GPS signal may be weak'}`;
   
   return {
     response,
@@ -888,8 +948,8 @@ async function getBatteryFallback(userId, entities, userVehicles) {
         });
         
         return {
-          name: v.name,
-          plate: v.plateNumber,
+          name: v.vehicleName,
+          plate: v.registrationNumber,
           voltage: telemetry?.batteryVoltage,
           timestamp: telemetry?.timestamp,
         };
@@ -897,7 +957,7 @@ async function getBatteryFallback(userId, entities, userVehicles) {
     );
     
     const batteryList = batteryData.map(v => 
-      `- ${v.name} (${v.plate}): ${v.voltage || 'N/A'}V`
+      `- ${v.vehicleName} (${v.registrationNumber}): ${v.voltage || 'N/A'}V`
     ).join('\n');
     
     const response = `**Battery Status**\n\n${batteryList}\n\n**Recommended Action:** Check vehicles with low battery voltage`;
@@ -925,7 +985,7 @@ async function getBatteryFallback(userId, entities, userVehicles) {
   const voltage = telemetry?.batteryVoltage;
   const status = voltage && voltage < 12 ? 'LOW' : voltage && voltage < 13 ? 'NORMAL' : 'GOOD';
   
-  const response = `**Battery Status: ${vehicle.name}**\n\n**Plate:** ${vehicle.plateNumber}\n**Voltage:** ${voltage || 'N/A'}V\n**Status:** ${status}\n**Last Updated:** ${telemetry?.timestamp || 'N/A'}\n\n**Recommended Action:** ${status === 'LOW' ? 'Charge battery immediately' : 'Battery is in good condition'}`;
+  const response = `**Battery Status: ${vehicle.vehicleName}**\n\n**Plate:** ${vehicle.registrationNumber}\n**Voltage:** ${voltage || 'N/A'}V\n**Status:** ${status}\n**Last Updated:** ${telemetry?.timestamp || 'N/A'}\n\n**Recommended Action:** ${status === 'LOW' ? 'Charge battery immediately' : 'Battery is in good condition'}`;
   
   return {
     response,
@@ -978,8 +1038,8 @@ async function getFuelFallback(userId, entities, userVehicles) {
         });
         
         return {
-          name: v.name,
-          plate: v.plateNumber,
+          name: v.vehicleName,
+          plate: v.registrationNumber,
           fuelLevel: telemetry?.fuelLevel,
           timestamp: telemetry?.timestamp,
         };
@@ -987,7 +1047,7 @@ async function getFuelFallback(userId, entities, userVehicles) {
     );
     
     const fuelList = fuelData.map(v => 
-      `- ${v.name} (${v.plate}): ${v.fuelLevel || 'N/A'}%`
+      `- ${v.vehicleName} (${v.registrationNumber}): ${v.fuelLevel || 'N/A'}%`
     ).join('\n');
     
     const response = `**Fuel Status**\n\n${fuelList}\n\n**Recommended Action:** Refuel vehicles with low fuel`;
@@ -1015,7 +1075,7 @@ async function getFuelFallback(userId, entities, userVehicles) {
   const fuelLevel = telemetry?.fuelLevel;
   const status = fuelLevel && fuelLevel < 20 ? 'LOW' : fuelLevel && fuelLevel < 50 ? 'NORMAL' : 'GOOD';
   
-  const response = `**Fuel Status: ${vehicle.name}**\n\n**Plate:** ${vehicle.plateNumber}\n**Fuel Level:** ${fuelLevel || 'N/A'}%\n**Status:** ${status}\n**Last Updated:** ${telemetry?.timestamp || 'N/A'}\n\n**Recommended Action:** ${status === 'LOW' ? 'Refuel immediately' : 'Fuel level is adequate'}`;
+  const response = `**Fuel Status: ${vehicle.vehicleName}**\n\n**Plate:** ${vehicle.registrationNumber}\n**Fuel Level:** ${fuelLevel || 'N/A'}%\n**Status:** ${status}\n**Last Updated:** ${telemetry?.timestamp || 'N/A'}\n\n**Recommended Action:** ${status === 'LOW' ? 'Refuel immediately' : 'Fuel level is adequate'}`;
   
   return {
     response,
@@ -1107,8 +1167,8 @@ async function getRepairPriorityFallback(userId) {
   }
   
   const response = `**Repair Priority**\n\n${topRisky.map((v, i) => 
-    `**${i + 1}. ${v.name} (${v.plate})**\n   Risk Score: ${v.score}\n   Critical Alerts: ${v.criticalAlerts}\n   Critical DTCs: ${v.criticalDTCs}\n   Overdue Maintenance: ${v.overdueMaintenance}\n   Offline: ${v.isOffline ? `Yes (${v.offlineDays} days)` : 'No'}`
-  ).join('\n\n')}\n\n**Recommended Action:** Prioritize ${topRisky[0].name} for immediate inspection and repair`;
+    `**${i + 1}. ${v.vehicleName} (${v.registrationNumber})**\n   Risk Score: ${v.score}\n   Critical Alerts: ${v.criticalAlerts}\n   Critical DTCs: ${v.criticalDTCs}\n   Overdue Maintenance: ${v.overdueMaintenance}\n   Offline: ${v.isOffline ? `Yes (${v.offlineDays} days)` : 'No'}`
+  ).join('\n\n')}\n\n**Recommended Action:** Prioritize ${topRisky[0].vehicleName} for immediate inspection and repair`;
   
   return {
     response,
@@ -1130,7 +1190,7 @@ async function getRepairPriorityFallback(userId) {
  */
 function extractVehicleName(message, userVehicles) {
   const words = message.split(' ');
-  const vehicleNames = userVehicles.map(v => v.name.toLowerCase());
+  const vehicleNames = userVehicles.map(v => v.vehicleName?.toLowerCase() || '');
   
   for (const word of words) {
     for (const name of vehicleNames) {
@@ -1343,7 +1403,7 @@ async function getSupportFallback(message) {
 }
 function extractMultipleVehicleNames(message, userVehicles) {
   const words = message.split(' ');
-  const vehicleNames = userVehicles.map(v => v.name.toLowerCase());
+  const vehicleNames = userVehicles.map(v => v.vehicleName?.toLowerCase() || '');
   const foundNames = [];
   
   for (const word of words) {

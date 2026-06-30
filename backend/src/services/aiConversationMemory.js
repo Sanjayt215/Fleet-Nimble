@@ -491,10 +491,10 @@ export async function resolvePronouns(userId, message, vehicleContext = null) {
 
     // Resolve "it", "its", "this", "that" to vehicle
     const pronounPatterns = [
-      { pattern: /\bit\b/gi, replacement: lastVehicle?.name || entities.vehicles?.[0]?.name || 'it' },
-      { pattern: /\bits\b'?s?\b/gi, replacement: `${lastVehicle?.name || entities.vehicles?.[0]?.name || 'the vehicle'}'s` },
-      { pattern: /\bthis\b/gi, replacement: lastVehicle?.name || entities.vehicles?.[0]?.name || 'this vehicle' },
-      { pattern: /\bthat\b/gi, replacement: lastVehicle?.name || entities.vehicles?.[0]?.name || 'that vehicle' },
+      { pattern: /\bit\b/gi, replacement: lastVehicle?.vehicleName || entities.vehicles?.[0]?.vehicleName || 'it' },
+      { pattern: /\bits\b'?s?\b/gi, replacement: `${lastVehicle?.vehicleName || entities.vehicles?.[0]?.vehicleName || 'the vehicle'}'s` },
+      { pattern: /\bthis\b/gi, replacement: lastVehicle?.vehicleName || entities.vehicles?.[0]?.vehicleName || 'this vehicle' },
+      { pattern: /\bthat\b/gi, replacement: lastVehicle?.vehicleName || entities.vehicles?.[0]?.vehicleName || 'that vehicle' },
     ];
 
     pronounPatterns.forEach(({ pattern, replacement }) => {
@@ -503,7 +503,7 @@ export async function resolvePronouns(userId, message, vehicleContext = null) {
 
     // Resolve comparison pronouns
     if (entities.vehicles && entities.vehicles.length >= 2) {
-      const vehicleNames = entities.vehicles.map(v => v.name).join(' or ');
+      const vehicleNames = entities.vehicles.map(v => v.vehicleName).join(' or ');
       resolvedMessage = resolvedMessage.replace(/\bwhich\b/gi, `which of ${vehicleNames}`);
     }
 
