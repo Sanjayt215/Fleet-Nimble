@@ -1,4 +1,5 @@
 import prisma from '../utils/prisma.js';
+import logger from '../utils/logger.js';
 
 /**
  * Build compact context based on user intent
