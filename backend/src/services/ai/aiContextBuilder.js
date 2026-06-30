@@ -264,14 +264,15 @@ export class AIContextBuilder {
       intent: this.intent,
       dataSource: 'database',
       vehicle: {
-        name: vehicle.name,
-        plate: vehicle.plateNumber,
+        name: vehicle.vehicleName,
+        plate: vehicle.registrationNumber,
         vin: vehicle.vin,
         make: vehicle.make,
         model: vehicle.model,
         year: vehicle.year,
         odometer: vehicle.odometer,
-        status: vehicle.liveState?.status || 'unknown',
+        status: vehicle.status || 'unknown',
+        telemetryOnline: vehicle.telemetryOnline,
         latestTelemetry,
         latestLocation,
         alerts,
@@ -477,8 +478,8 @@ export class AIContextBuilder {
       intent: this.intent,
       dataSource: 'database',
       vehicle: {
-        name: vehicle.name,
-        plate: vehicle.plateNumber,
+        name: vehicle.vehicleName,
+        plate: vehicle.registrationNumber,
       },
       location: latestLocation,
     };
@@ -499,8 +500,8 @@ export class AIContextBuilder {
       include: {
         vehicle: {
           select: {
-            name: true,
-            plateNumber: true,
+            vehicleName: true,
+            registrationNumber: true,
           },
         },
       },
@@ -512,8 +513,8 @@ export class AIContextBuilder {
       intent: this.intent,
       dataSource: 'database',
       alerts: alerts.map(a => ({
-        vehicle: a.vehicle.name,
-        plate: a.vehicle.plateNumber,
+        vehicle: a.vehicle.vehicleName,
+        plate: a.vehicle.registrationNumber,
         type: a.type,
         severity: a.severity,
         message: a.message,
@@ -630,8 +631,8 @@ export class AIContextBuilder {
           });
           
           return {
-            name: v.name,
-            plate: v.plateNumber,
+            name: v.vehicleName,
+            plate: v.registrationNumber,
             voltage: telemetry?.batteryVoltage,
             timestamp: telemetry?.timestamp,
           };
@@ -655,8 +656,8 @@ export class AIContextBuilder {
       intent: this.intent,
       dataSource: 'database',
       vehicle: {
-        name: vehicle.name,
-        plate: vehicle.plateNumber,
+        name: vehicle.vehicleName,
+        plate: vehicle.registrationNumber,
       },
       battery: {
         voltage: telemetry?.batteryVoltage,
@@ -702,8 +703,8 @@ export class AIContextBuilder {
           });
           
           return {
-            name: v.name,
-            plate: v.plateNumber,
+            name: v.vehicleName,
+            plate: v.registrationNumber,
             fuelLevel: telemetry?.fuelLevel,
             timestamp: telemetry?.timestamp,
           };
@@ -727,8 +728,8 @@ export class AIContextBuilder {
       intent: this.intent,
       dataSource: 'database',
       vehicle: {
-        name: vehicle.name,
-        plate: vehicle.plateNumber,
+        name: vehicle.vehicleName,
+        plate: vehicle.registrationNumber,
       },
       fuel: {
         level: telemetry?.fuelLevel,
@@ -745,12 +746,12 @@ export class AIContextBuilder {
       where: { userId: this.userId, deletedAt: null },
       select: {
         id: true,
-        name: true,
-        plateNumber: true,
+        vehicleName: true,
+        registrationNumber: true,
         make: true,
         model: true,
-        liveState: { select: { status: true } },
-        lastObdAt: true,
+        status: true,
+        lastTelemetryAt: true,
       },
     });
     
@@ -772,16 +773,16 @@ export class AIContextBuilder {
           },
         });
         
-        const isOffline = v.liveState?.status === 'offline';
-        const offlineDays = v.lastObdAt
-          ? Math.floor((new Date() - new Date(v.lastObdAt)) / (1000 * 60 * 60 * 24))
+        const isOffline = v.status === 'OFFLINE';
+        const offlineDays = v.lastTelemetryAt
+          ? Math.floor((new Date() - new Date(v.lastTelemetryAt)) / (1000 * 60 * 60 * 24))
           : 0;
         
         const score = criticalAlerts * 10 + criticalDTCs * 8 + overdueMaintenance * 5 + (isOffline ? offlineDays * 2 : 0);
         
         return {
-          name: v.name,
-          plate: v.plateNumber,
+          name: v.vehicleName,
+          plate: v.registrationNumber,
           make: v.make,
           model: v.model,
           score,
@@ -853,7 +854,7 @@ export class AIContextBuilder {
   extractVehicleName() {
     const words = this.message.split(' ');
     // Find words that might be vehicle names
-    const vehicleNames = this.userVehicles.map(v => v.name.toLowerCase());
+    const vehicleNames = this.userVehicles.map(v => v.vehicleName?.toLowerCase() || '');
     for (const word of words) {
       for (const name of vehicleNames) {
         if (word.toLowerCase().includes(name)) {
@@ -869,7 +870,7 @@ export class AIContextBuilder {
    */
   extractMultipleVehicleNames() {
     const words = this.message.split(' ');
-    const vehicleNames = this.userVehicles.map(v => v.name.toLowerCase());
+    const vehicleNames = this.userVehicles.map(v => v.vehicleName?.toLowerCase() || '');
     const foundNames = [];
     
     for (const word of words) {
