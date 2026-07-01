@@ -4,20 +4,46 @@
  */
 
 /**
+ * Clean up markdown formatting in responses
+ */
+function cleanMarkdown(text) {
+  if (!text || typeof text !== 'string') return text;
+  
+  // Remove excessive newlines (more than 2 consecutive)
+  let cleaned = text.replace(/\n{3,}/g, '\n\n');
+  
+  // Ensure proper spacing after headers
+  cleaned = cleaned.replace(/(#{1,6}[^\n]+)\n(?!\n)/g, '$1\n\n');
+  
+  // Fix bullet point formatting
+  cleaned = cleaned.replace(/-\s*\n/g, '- ');
+  
+  // Fix numbered list formatting
+  cleaned = cleaned.replace(/(\d+)\.\s*\n/g, '$1. ');
+  
+  // Remove trailing whitespace from lines
+  cleaned = cleaned.split('\n').map(line => line.trimEnd()).join('\n');
+  
+  return cleaned.trim();
+}
+
+/**
  * Format successful AI response with professional structure
  */
 export function formatSuccessResponse(response, context, metadata = {}) {
+  const cleanedResponse = cleanMarkdown(response);
+  
   return {
     success: true,
     data: {
-      reply: response,
+      reply: cleanedResponse,
       chatId: null,
       metadata: {
         title: "FleetNimble AI Assistant",
         confidence: metadata.confidence || "MEDIUM",
         dataFreshness: metadata.dataFreshness || "LIVE",
         simulatedNote: metadata.simulatedNote || null,
-        suggestedActions: metadata.suggestedActions || [],
+        suggestedActions: metadata.suggestedActions || getSuggestedActions(context?.intent || 'general'),
         entities: metadata.entities || {},
       },
     },
@@ -113,6 +139,16 @@ export function getSuggestedActions(intent) {
       "Show maintenance",
       "Show critical alerts",
       "Show vehicle details"
+    ],
+    'history': [
+      "Show live data",
+      "Show vehicle details",
+      "Show maintenance history"
+    ],
+    'live_data': [
+      "Show historical data",
+      "Show vehicle details",
+      "Show vehicle location"
     ],
   };
   

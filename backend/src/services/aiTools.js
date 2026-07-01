@@ -5,6 +5,14 @@ import { getAllPredictions } from './aiPredictions.js';
 import { getBusinessAnalytics } from './aiBusinessAnalytics.js';
 import { getMaintenanceAIAnalysis } from './aiMaintenanceAI.js';
 import { generateExecutiveReport, generateFleetHealthReport, generateFuelReport, generateMaintenanceReport } from './aiExecutiveReports.js';
+import {
+  getTelemetryHistory,
+  getAlertHistory,
+  getMaintenanceHistory,
+  getDtcHistory,
+  getFuelHistory,
+  getGpsHistory,
+} from './ai/aiDataHelpers.js';
 
 /**
  * AI Tool System
@@ -947,6 +955,120 @@ export const AI_TOOLS = {
     handler: async (userId, params) => {
       const maintenanceReport = await generateMaintenanceReport(userId);
       return maintenanceReport;
+    },
+  },
+
+  get_telemetry_history: {
+    name: 'get_telemetry_history',
+    description: 'Get historical telemetry data for a vehicle within a date range',
+    parameters: {
+      type: 'object',
+      properties: {
+        vehicleId: { type: 'string', description: 'Vehicle ID' },
+        startDate: { type: 'string', description: 'Start date (ISO string)' },
+        endDate: { type: 'string', description: 'End date (ISO string)' },
+        limit: { type: 'number', description: 'Maximum number of records (optional)' },
+      },
+    },
+    handler: async (userId, params) => {
+      const { vehicleId, startDate, endDate, limit } = params;
+      const history = await getTelemetryHistory(userId, vehicleId, startDate, endDate, limit);
+      return history;
+    },
+  },
+
+  get_alert_history: {
+    name: 'get_alert_history',
+    description: 'Get historical alert data for a vehicle within a date range',
+    parameters: {
+      type: 'object',
+      properties: {
+        vehicleId: { type: 'string', description: 'Vehicle ID' },
+        startDate: { type: 'string', description: 'Start date (ISO string)' },
+        endDate: { type: 'string', description: 'End date (ISO string)' },
+        limit: { type: 'number', description: 'Maximum number of records (optional)' },
+      },
+    },
+    handler: async (userId, params) => {
+      const { vehicleId, startDate, endDate, limit } = params;
+      const history = await getAlertHistory(userId, vehicleId, startDate, endDate, limit);
+      return history;
+    },
+  },
+
+  get_maintenance_history: {
+    name: 'get_maintenance_history',
+    description: 'Get historical maintenance data for a vehicle within a date range',
+    parameters: {
+      type: 'object',
+      properties: {
+        vehicleId: { type: 'string', description: 'Vehicle ID' },
+        startDate: { type: 'string', description: 'Start date (ISO string)' },
+        endDate: { type: 'string', description: 'End date (ISO string)' },
+        limit: { type: 'number', description: 'Maximum number of records (optional)' },
+      },
+    },
+    handler: async (userId, params) => {
+      const { vehicleId, startDate, endDate, limit } = params;
+      const history = await getMaintenanceHistory(userId, vehicleId, startDate, endDate, limit);
+      return history;
+    },
+  },
+
+  get_dtc_history: {
+    name: 'get_dtc_history',
+    description: 'Get historical DTC code data for a vehicle within a date range',
+    parameters: {
+      type: 'object',
+      properties: {
+        vehicleId: { type: 'string', description: 'Vehicle ID' },
+        startDate: { type: 'string', description: 'Start date (ISO string)' },
+        endDate: { type: 'string', description: 'End date (ISO string)' },
+        limit: { type: 'number', description: 'Maximum number of records (optional)' },
+      },
+    },
+    handler: async (userId, params) => {
+      const { vehicleId, startDate, endDate, limit } = params;
+      const history = await getDtcHistory(userId, vehicleId, startDate, endDate, limit);
+      return history;
+    },
+  },
+
+  get_fuel_history: {
+    name: 'get_fuel_history',
+    description: 'Get historical fuel data for a vehicle within a date range',
+    parameters: {
+      type: 'object',
+      properties: {
+        vehicleId: { type: 'string', description: 'Vehicle ID' },
+        startDate: { type: 'string', description: 'Start date (ISO string)' },
+        endDate: { type: 'string', description: 'End date (ISO string)' },
+        limit: { type: 'number', description: 'Maximum number of records (optional)' },
+      },
+    },
+    handler: async (userId, params) => {
+      const { vehicleId, startDate, endDate, limit } = params;
+      const history = await getFuelHistory(userId, vehicleId, startDate, endDate, limit);
+      return history;
+    },
+  },
+
+  get_gps_history: {
+    name: 'get_gps_history',
+    description: 'Get historical GPS location data for a vehicle within a date range',
+    parameters: {
+      type: 'object',
+      properties: {
+        vehicleId: { type: 'string', description: 'Vehicle ID' },
+        startDate: { type: 'string', description: 'Start date (ISO string)' },
+        endDate: { type: 'string', description: 'End date (ISO string)' },
+        limit: { type: 'number', description: 'Maximum number of records (optional)' },
+      },
+    },
+    handler: async (userId, params) => {
+      const { vehicleId, startDate, endDate, limit } = params;
+      const history = await getGpsHistory(userId, vehicleId, startDate, endDate, limit);
+      return history;
     },
   },
 };

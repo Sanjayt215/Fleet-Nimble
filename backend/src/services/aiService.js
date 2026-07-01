@@ -10,7 +10,7 @@ import { AIContextBuilder } from './ai/aiContextBuilder.js';
 import { callAIWithRetry, buildAIMessages, getProviderInfo } from './ai/aiProvider.js';
 import { formatSuccessResponse, formatErrorResponse, getSuggestedActions } from './ai/aiResponseFormatter.js';
 import { getDeterministicFallback } from './ai/aiDeterministicFallback.js';
-import { limitChatHistory } from './aiConversationMemory.js';
+import { limitChatHistory, resolvePronouns, saveConversationContext, buildEnhancedContext } from './aiConversationMemory.js';
 import { searchKnowledgeBase } from './aiKnowledgeBase.js';
 
 const AI_ORCHESTRATOR_ENABLED = process.env.AI_ORCHESTRATOR_ENABLED === 'true';
@@ -21,7 +21,7 @@ const MAX_PROMPT_CHARS = 6000;
  */
 export async function processChatMessage(userId, message, vehicleId = null, chatHistory = []) {
   logger.info('AI_REQUEST_RECEIVED', { userId, message: message?.substring(0, 50) });
-  
+
   // Validate inputs
   if (!message || typeof message !== 'string' || message.trim() === '') {
     logger.warn('AI_INVALID_INPUT', { userId, message });
@@ -43,15 +43,27 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
       },
     };
   }
-  
+
   try {
+    // Step 0: Resolve pronouns using conversation context
+    let resolvedMessage = message;
+    try {
+      resolvedMessage = await resolvePronouns(userId, message);
+      if (resolvedMessage !== message) {
+        logger.info('AI_PRONOUN_RESOLUTION', { userId, original: message, resolved: resolvedMessage });
+      }
+    } catch (pronounError) {
+      logger.error('AI_PRONOUN_RESOLUTION_FAILED', { userId, error: pronounError.message });
+      resolvedMessage = message; // Use original on error
+    }
+
     // Step 1: Detect intent
     let intentResult;
     try {
       const userVehicles = await getUserVehicles(userId);
       intentResult = {
-        intent: detectIntent(message),
-        entities: extractEntities(message, userId, userVehicles),
+        intent: detectIntent(resolvedMessage),
+        entities: extractEntities(resolvedMessage, userId, userVehicles),
         userVehicles,
       };
       logger.info('AI_INTENT_DETECTED', { userId, intent: intentResult.intent });
@@ -164,6 +176,21 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
       // Step 8: Format successful response
       const suggestedActions = getSuggestedActions(context?.intent || intentResult.intent);
       logger.info('AI_RESPONSE_SUCCESS', { userId, provider: aiResult.provider, length: aiResult.response.length });
+
+      // Step 8.5: Save conversation context for follow-up
+      try {
+        await saveConversationContext(
+          userId,
+          resolvedMessage,
+          { response: aiResult.response, success: true },
+          intentResult.entities,
+          context?.vehicleContext
+        );
+      } catch (contextSaveError) {
+        logger.error('AI_CONTEXT_SAVE_FAILED', { userId, error: contextSaveError.message });
+        // Don't fail the request if context save fails
+      }
+
       return {
         response: aiResult.response,
         context,

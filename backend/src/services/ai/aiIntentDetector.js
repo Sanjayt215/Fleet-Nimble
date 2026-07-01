@@ -29,6 +29,8 @@ export const INTENTS = {
   BUSINESS_IMPACT: 'business_impact',
   RECOMMENDATIONS: 'recommendations',
   COMPANY_INFO: 'company_info',
+  HISTORY: 'history',
+  LIVE_DATA: 'live_data',
   GENERAL: 'general',
 };
 
@@ -59,12 +61,24 @@ export function detectIntent(message) {
     confidence = 0.85;
   }
   
+  // Live data intent (real-time telemetry) - check before DTC to avoid matching "diagnostic" in "live diagnostics"
+  else if (lowerMessage.includes('live') ||
+           lowerMessage.includes('real-time') ||
+           lowerMessage.includes('realtime') ||
+           lowerMessage.includes('current') ||
+           (lowerMessage.includes('show') && lowerMessage.includes('live')) ||
+           lowerMessage.includes('live diagnostics') ||
+           lowerMessage.includes('live telemetry')) {
+    intent = INTENTS.LIVE_DATA;
+    confidence = 0.9;
+  }
+
   // DTC/diagnostics intent
   else if (lowerMessage.includes('dtc') || 
-           lowerMessage.includes('diagnostic') || 
            lowerMessage.includes('error code') ||
            lowerMessage.includes('p0') ||
-           lowerMessage.includes('trouble code')) {
+           lowerMessage.includes('trouble code') ||
+           (lowerMessage.includes('diagnostic') && !lowerMessage.includes('live'))) {
     intent = INTENTS.DTC;
     confidence = 0.95;
   }
@@ -206,10 +220,26 @@ export function detectIntent(message) {
     intent = INTENTS.COMPANY_INFO;
     confidence = 0.85;
   }
-  
+
+  // History intent (historical data queries)
+  else if (lowerMessage.includes('history') ||
+           lowerMessage.includes('historical') ||
+           lowerMessage.includes('past') ||
+           lowerMessage.includes('previous') ||
+           (lowerMessage.includes('show') && (lowerMessage.includes('history') || lowerMessage.includes('past'))) ||
+           lowerMessage.includes('telemetry history') ||
+           lowerMessage.includes('maintenance history') ||
+           lowerMessage.includes('alert history') ||
+           lowerMessage.includes('gps history') ||
+           lowerMessage.includes('dtc history') ||
+           lowerMessage.includes('fuel history')) {
+    intent = INTENTS.HISTORY;
+    confidence = 0.9;
+  }
+
   // Support/help intent
-  else if (lowerMessage.includes('help') || 
-           lowerMessage.includes('how to') || 
+  else if (lowerMessage.includes('help') ||
+           lowerMessage.includes('how to') ||
            lowerMessage.includes('support') ||
            lowerMessage.includes('guide') ||
            lowerMessage.includes('tutorial') ||

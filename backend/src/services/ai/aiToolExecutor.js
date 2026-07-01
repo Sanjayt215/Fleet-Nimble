@@ -3,6 +3,7 @@
  * Executes AI tools for fleet operations
  */
 
+import logger from '../../utils/logger.js';
 import { executeTool, getAvailableTools } from '../aiTools.js';
 
 /**

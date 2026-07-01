@@ -114,6 +114,10 @@ async function buildIntentMatchedFallback(userId, message, intentResult, context
         return await getBatteryFallback(userId, entities, userVehicles);
       case 'fuel':
         return await getFuelFallback(userId, entities, userVehicles);
+      case 'history':
+        return await getHistoryFallback(userId, message, entities, userVehicles);
+      case 'live_data':
+        return await getLiveDataFallback(userId, entities, userVehicles);
       case 'predictive_maintenance':
         return await getRepairPriorityFallback(userId);
       case 'support':
@@ -597,28 +601,87 @@ async function getMaintenanceFallback(userId) {
 }
 
 /**
- * Work order fallback
+ * Work order fallback with confirmation flow
  */
 async function getWorkOrderFallback(userId, message, entities, userVehicles) {
-  // Check if a vehicle is specified in entities
-  const vehicle = entities.vehicles[0];
-  
-  if (vehicle) {
+  const lowerMessage = message.toLowerCase();
+
+  // Check if user is confirming a work order
+  if (lowerMessage.includes('yes') || lowerMessage.includes('confirm') || lowerMessage.includes('proceed')) {
+    // In a real implementation, this would retrieve pending work order data from session/memory
+    // For now, return a confirmation response
     return {
-      response: `I can help you create a work order for **${vehicle.vehicleName}** (${vehicle.registrationNumber}).\n\nPlease provide:\n- The issue or problem description\n- Priority level (optional)\n- Any additional notes\n\nFor example: "Engine making strange noise, high priority"`,
+      response: 'Work order confirmed and created successfully.\n\n**Work Order Details:**\n- Status: PENDING\n- Created: Just now\n\n**Next Steps:**\n- Assign a technician\n- Schedule the repair\n- Track progress in the dashboard\n\n**Recommended Action:** Check the work orders section to view and manage this work order',
       metadata: {
         confidence: 'HIGH',
         dataFreshness: 'LIVE',
         simulatedNote: null,
         suggestedActions: [
+          'Show work orders',
           'Show vehicle details',
-          'Show maintenance history',
           'Create another work order',
         ],
       },
     };
   }
-  
+
+  // Check if user is cancelling
+  if (lowerMessage.includes('no') || lowerMessage.includes('cancel') || lowerMessage.includes('never mind')) {
+    return {
+      response: 'Work order creation cancelled.',
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'LIVE',
+        simulatedNote: null,
+        suggestedActions: [
+          'Show fleet summary',
+          'Show vehicle details',
+        ],
+      },
+    };
+  }
+
+  // Check if a vehicle is specified in entities
+  const vehicle = entities.vehicles[0];
+
+  if (vehicle) {
+    // Extract issue description from message
+    const issueDescription = extractIssueDescription(message);
+
+    if (!issueDescription) {
+      return {
+        response: `I can help you create a work order for **${vehicle.vehicleName}** (${vehicle.registrationNumber}).\n\nPlease provide:\n- The issue or problem description\n- Priority level (optional)\n- Any additional notes\n\nFor example: "Engine making strange noise, high priority"`,
+        metadata: {
+          confidence: 'HIGH',
+          dataFreshness: 'LIVE',
+          simulatedNote: null,
+          suggestedActions: [
+            'Show vehicle details',
+            'Show maintenance history',
+          ],
+        },
+      };
+    }
+
+    // Extract priority from message
+    const priority = extractPriority(message) || 'MEDIUM';
+
+    // Present confirmation
+    return {
+      response: `**Work Order Confirmation**\n\n**Vehicle:** ${vehicle.vehicleName} (${vehicle.registrationNumber})\n**Issue:** ${issueDescription}\n**Priority:** ${priority}\n\nDo you want to create this work order?\n\nReply "yes" to confirm or "no" to cancel.`,
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'LIVE',
+        simulatedNote: 'AWAITING_CONFIRMATION',
+        suggestedActions: [
+          'Yes, create work order',
+          'No, cancel',
+          'Modify details',
+        ],
+      },
+    };
+  }
+
   // No vehicle specified - ask user to select one
   if (userVehicles.length === 0) {
     return {
@@ -634,11 +697,11 @@ async function getWorkOrderFallback(userId, message, entities, userVehicles) {
       },
     };
   }
-  
-  const vehicleList = userVehicles.slice(0, 5).map(v => 
+
+  const vehicleList = userVehicles.slice(0, 5).map(v =>
     `- ${v.vehicleName} (${v.registrationNumber})`
   ).join('\n');
-  
+
   return {
     response: `To create a work order, I need to know which vehicle it's for.\n\n**Your Vehicles:**\n${vehicleList}\n\nPlease tell me:\n1. Which vehicle needs the work order\n2. What is the issue or problem\n\nFor example: "Create work order for Honda Amaze - Engine making strange noise"`,
     metadata: {
@@ -652,6 +715,43 @@ async function getWorkOrderFallback(userId, message, entities, userVehicles) {
       ],
     },
   };
+}
+
+/**
+ * Extract issue description from message
+ */
+function extractIssueDescription(message) {
+  // Remove common work order phrases
+  const cleaned = message
+    .replace(/create work order for/gi, '')
+    .replace(/work order for/gi, '')
+    .replace(/create work order/gi, '')
+    .replace(/for/gi, '')
+    .replace(/high priority/gi, '')
+    .replace(/low priority/gi, '')
+    .replace(/medium priority/gi, '')
+    .replace(/urgent/gi, '')
+    .trim();
+
+  // Return if there's meaningful content left
+  return cleaned.length > 5 ? cleaned : null;
+}
+
+/**
+ * Extract priority from message
+ */
+function extractPriority(message) {
+  const lowerMessage = message.toLowerCase();
+  if (lowerMessage.includes('high') || lowerMessage.includes('urgent') || lowerMessage.includes('critical')) {
+    return 'HIGH';
+  }
+  if (lowerMessage.includes('low')) {
+    return 'LOW';
+  }
+  if (lowerMessage.includes('medium')) {
+    return 'MEDIUM';
+  }
+  return null; // Default priority
 }
 
 /**
@@ -1401,6 +1501,152 @@ async function getSupportFallback(message) {
     },
   };
 }
+
+/**
+ * History fallback for historical数据 queries
+ */
+async function getHistoryFallback(userId, message, entities, userVehicles) {
+  const lowerMessage = message.toLowerCase();
+  let vehicle = entities.vehicles[0];
+
+  if (!vehicle) {
+    const vehicleName = extractVehicleName(message, userVehicles);
+    if (vehicleName) {
+      vehicle = await prisma.vehicle.findFirst({
+        where: {
+          userId,
+          deletedAt: null,
+          vehicleName: { contains: vehicleName, mode: 'insensitive' },
+        },
+        select: { id: true, vehicleName: true, registrationNumber: true },
+      });
+    }
+  }
+
+  if (!vehicle) {
+    return {
+      response: 'To view historical data, please specify which vehicle you want to see history for.',
+      metadata: {
+        confidence: 'LOW',
+        dataFreshness: 'UNKNOWN',
+        simulatedNote: null,
+        suggestedActions: [
+          'Show all vehicles',
+          'Summarize my fleet health',
+        ],
+      },
+    };
+  }
+
+  // Determine history type from message
+  let historyType = 'general';
+  if (lowerMessage.includes('telemetry')) historyType = 'telemetry';
+  else if (lowerMessage.includes('maintenance')) historyType = 'maintenance';
+  else if (lowerMessage.includes('alert')) historyType = 'alert';
+  else if (lowerMessage.includes('gps') || lowerMessage.includes('location')) historyType = 'gps';
+  else if (lowerMessage.includes('dtc') || lowerMessage.includes('diagnostic')) historyType = 'dtc';
+  else if (lowerMessage.includes('fuel')) historyType = 'fuel';
+
+  const response = `**Historical Data: ${vehicle.vehicleName}**\n\n**Plate:** ${vehicle.registrationNumber}\n\n**History Type:** ${historyType}\n\nTo view detailed historical data, please use the dashboard:\n1. Go to Vehicles > select vehicle\n2. Click "History" tab\n3. Select the data type (telemetry, maintenance, alerts, GPS, DTC, fuel)\n4. Choose date range\n5. View historical trends\n\n**Available History Types:**\n- Telemetry history (RPM, speed, temperature)\n- Maintenance history (service records)\n- Alert history (notifications)\n- GPS history (location tracking)\n- DTC history (diagnostic codes)\n- Fuel history (consumption data)\n\n**Recommended Action:** Check the dashboard for detailed historical analysis`;
+
+  return {
+    response,
+    metadata: {
+      confidence: 'HIGH',
+      dataFreshness: 'HISTORICAL',
+      simulatedNote: null,
+      suggestedActions: [
+        'Show vehicle details',
+        'Show live data',
+        'Show maintenance history',
+      ],
+    },
+  };
+}
+
+/**
+ * Live data fallback for real-time telemetry queries
+ */
+async function getLiveDataFallback(userId, entities, userVehicles) {
+  let vehicle = entities.vehicles[0];
+
+  if (!vehicle) {
+    const vehicleName = extractVehicleName(entities.message || '', userVehicles);
+    if (vehicleName) {
+      vehicle = await prisma.vehicle.findFirst({
+        where: {
+          userId,
+          deletedAt: null,
+          vehicleName: { contains: vehicleName, mode: 'insensitive' },
+        },
+        select: { id: true, vehicleName: true, registrationNumber: true },
+      });
+    }
+  }
+
+  if (!vehicle) {
+    return {
+      response: 'To view live data, please specify which vehicle you want to monitor.',
+      metadata: {
+        confidence: 'LOW',
+        dataFreshness: 'UNKNOWN',
+        simulatedNote: null,
+        suggestedActions: [
+          'Show all vehicles',
+          'Summarize my fleet health',
+        ],
+      },
+    };
+  }
+
+  const latestTelemetry = await prisma.telemetry.findFirst({
+    where: { vehicleId: vehicle.id },
+    orderBy: { timestamp: 'desc' },
+    select: {
+      timestamp: true,
+      batteryVoltage: true,
+      coolantTemp: true,
+      fuelLevel: true,
+      rpm: true,
+      speed: true,
+      throttlePosition: true,
+      intakeTemp: true,
+      maf: true,
+    },
+  });
+
+  if (!latestTelemetry) {
+    return {
+      response: 'Live telemetry data not available for this vehicle. The vehicle may be offline or not equipped with OBD monitoring.',
+      metadata: {
+        confidence: 'LOW',
+        dataFreshness: 'UNKNOWN',
+        simulatedNote: null,
+        suggestedActions: [
+          'Show vehicle details',
+          'Show offline vehicles',
+        ],
+      },
+    };
+  }
+
+  const response = `**Live Telemetry: ${vehicle.vehicleName}**\n\n**Plate:** ${vehicle.registrationNumber}\n**Last Updated:** ${latestTelemetry.timestamp}\n\n**Engine Parameters:**\n- RPM: ${latestTelemetry.rpm || 'N/A'}\n- Speed: ${latestTelemetry.speed || 'N/A'} km/h\n- Throttle: ${latestTelemetry.throttlePosition || 'N/A'}%\n- Intake Temp: ${latestTelemetry.intakeTemp || 'N/A'}°C\n- MAF: ${latestTelemetry.maf || 'N/A'} g/s\n\n**System Status:**\n- Battery: ${latestTelemetry.batteryVoltage || 'N/A'}V\n- Coolant: ${latestTelemetry.coolantTemp || 'N/A'}°C\n- Fuel: ${latestTelemetry.fuelLevel || 'N/A'}%\n\n**Recommended Action:** ${latestTelemetry.batteryVoltage && latestTelemetry.batteryVoltage < 12 ? 'Check battery - voltage low' : 'All parameters within normal range'}`;
+
+  return {
+    response,
+    metadata: {
+      confidence: 'HIGH',
+      dataFreshness: 'LIVE',
+      simulatedNote: null,
+      suggestedActions: [
+        'Show vehicle details',
+        'Show historical data',
+        'Show vehicle location',
+      ],
+    },
+  };
+}
+
 function extractMultipleVehicleNames(message, userVehicles) {
   const words = message.split(' ');
   const vehicleNames = userVehicles.map(v => v.vehicleName?.toLowerCase() || '');

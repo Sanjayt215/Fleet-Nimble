@@ -10,8 +10,87 @@ const AI_MODEL = process.env.AI_MODEL || 'gpt-4o-mini';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const REQUEST_TIMEOUT = Number(process.env.AI_REQUEST_TIMEOUT || 30000); // 30 seconds default
 
 const SYSTEM_PROMPT = `You are FleetNimble AI Assistant. Answer using only provided fleet context. Be concise, professional, and actionable. If data is unavailable, say so. Do not invent data.`;
+
+// Circuit breaker state for each provider
+const circuitBreakerState = {
+  openai: { failures: 0, lastFailure: null, isOpen: false },
+  openrouter: { failures: 0, lastFailure: null, isOpen: false },
+  gemini: { failures: 0, lastFailure: null, isOpen: false },
+};
+
+const CIRCUIT_BREAKER_THRESHOLD = 5; // Open circuit after 5 consecutive failures
+const CIRCUIT_BREAKER_RESET_TIME = 60000; // Reset after 60 seconds
+
+/**
+ * Check if circuit breaker is open for a provider
+ */
+function isCircuitBreakerOpen(provider) {
+  const state = circuitBreakerState[provider];
+  if (!state) return false;
+
+  // Check if circuit should reset
+  if (state.isOpen && Date.now() - state.lastFailure > CIRCUIT_BREAKER_RESET_TIME) {
+    logger.info('AI_CIRCUIT_BREAKER_RESET', { provider });
+    state.isOpen = false;
+    state.failures = 0;
+    return false;
+  }
+
+  return state.isOpen;
+}
+
+/**
+ * Record provider failure for circuit breaker
+ */
+function recordProviderFailure(provider) {
+  const state = circuitBreakerState[provider];
+  if (!state) return;
+
+  state.failures++;
+  state.lastFailure = Date.now();
+
+  if (state.failures >= CIRCUIT_BREAKER_THRESHOLD) {
+    state.isOpen = true;
+    logger.warn('AI_CIRCUIT_BREAKER_OPENED', { provider, failures: state.failures });
+  }
+}
+
+/**
+ * Record provider success for circuit breaker
+ */
+function recordProviderSuccess(provider) {
+  const state = circuitBreakerState[provider];
+  if (!state) return;
+
+  state.failures = 0;
+  state.isOpen = false;
+}
+
+/**
+ * Fetch with timeout
+ */
+async function fetchWithTimeout(url, options, timeout = REQUEST_TIMEOUT) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error('Request timeout');
+    }
+    throw error;
+  }
+}
 
 /**
  * Call OpenAI API
@@ -21,7 +100,7 @@ export async function callOpenAI(messages) {
     throw new Error('OpenAI API key not configured');
   }
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const response = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -54,7 +133,7 @@ export async function callOpenRouter(messages, maxTokensOverride = null) {
 
   const maxTokens = maxTokensOverride || Number(process.env.AI_MAX_TOKENS || 700);
 
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+  const response = await fetchWithTimeout('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -91,7 +170,7 @@ export async function callGemini(messages) {
     parts: [{ text: msg.content }]
   }));
 
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${AI_MODEL}:generateContent?key=${GEMINI_API_KEY}`, {
+  const response = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${AI_MODEL}:generateContent?key=${GEMINI_API_KEY}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -120,26 +199,32 @@ export async function callGemini(messages) {
 export async function callAIWithRetry(messages, context, maxRetries = 1) {
   logger.info('AI_PROVIDER_SELECTED', { provider: AI_PROVIDER, model: AI_MODEL });
   logger.info('AI_PROVIDER_REQUEST_START', { provider: AI_PROVIDER });
-  
+
   const providers = [AI_PROVIDER];
-  
-  // Add fallback providers
-  if (AI_PROVIDER === 'openai' && OPENROUTER_API_KEY) {
+
+  // Add fallback providers (skip if circuit breaker is open)
+  if (AI_PROVIDER === 'openai' && OPENROUTER_API_KEY && !isCircuitBreakerOpen('openrouter')) {
     providers.push('openrouter');
-  } else if (AI_PROVIDER === 'openrouter' && OPENAI_API_KEY) {
+  } else if (AI_PROVIDER === 'openrouter' && OPENAI_API_KEY && !isCircuitBreakerOpen('openai')) {
     providers.push('openai');
   }
-  
-  if (GEMINI_API_KEY && !providers.includes('gemini')) {
+
+  if (GEMINI_API_KEY && !providers.includes('gemini') && !isCircuitBreakerOpen('gemini')) {
     providers.push('gemini');
   }
-  
+
   for (const provider of providers) {
+    // Skip if circuit breaker is open
+    if (isCircuitBreakerOpen(provider)) {
+      logger.warn('AI_PROVIDER_CIRCUIT_BREAKER_OPEN', { provider });
+      continue;
+    }
+
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         let response;
         const maxTokensOverride = attempt > 0 ? 400 : null; // Reduce tokens on retry
-        
+
         if (provider === 'openrouter') {
           response = await callOpenRouter(messages, maxTokensOverride);
         } else if (provider === 'gemini') {
@@ -147,16 +232,19 @@ export async function callAIWithRetry(messages, context, maxRetries = 1) {
         } else {
           response = await callOpenAI(messages);
         }
-        
+
         logger.info('AI_PROVIDER_RESPONSE_RECEIVED', { provider, attempt });
         logger.info('AI_PROVIDER_REPLY_LENGTH', { length: response?.length || 0 });
-        
+
         // Validate response
         if (!response || response.trim() === '') {
           logger.warn('AI_PROVIDER_RESPONSE_NULL', { provider });
           throw new Error('Empty response from provider');
         }
-        
+
+        // Record success for circuit breaker
+        recordProviderSuccess(provider);
+
         return {
           success: true,
           response: response,
@@ -164,28 +252,31 @@ export async function callAIWithRetry(messages, context, maxRetries = 1) {
         };
       } catch (aiError) {
         logger.error('AI_PROVIDER_ERROR', { provider, attempt, error: aiError.message });
-        
+
+        // Record failure for circuit breaker
+        recordProviderFailure(provider);
+
         // Check if error is retryable (402, 429, timeout, 5xx)
         const errorMessage = aiError.message?.toLowerCase() || '';
-        const isRetryable = errorMessage.includes('timeout') || 
-                           errorMessage.includes('429') || 
+        const isRetryable = errorMessage.includes('timeout') ||
+                           errorMessage.includes('429') ||
                            errorMessage.includes('402') ||
                            errorMessage.includes('rate limit') ||
                            errorMessage.includes('5xx') ||
                            errorMessage.includes('502') ||
                            errorMessage.includes('503') ||
                            errorMessage.includes('504');
-        
+
         // If not retryable or last attempt failed, try next provider
         if (!isRetryable || attempt === maxRetries) {
-          logger.warn('AI_PROVIDER_SWITCH_PROVIDER', { 
+          logger.warn('AI_PROVIDER_SWITCH_PROVIDER', {
             currentProvider: provider,
             reason: isRetryable ? 'max_retries_exceeded' : 'non_retryable_error',
-            error: errorMessage 
+            error: errorMessage
           });
           break; // Try next provider
         }
-        
+
         // Wait before retry (exponential backoff)
         const delay = Math.pow(2, attempt) * 1000;
         logger.info('AI_PROVIDER_RETRY', { provider, attempt, delay, maxTokensOverride: 400 });
@@ -193,7 +284,7 @@ export async function callAIWithRetry(messages, context, maxRetries = 1) {
       }
     }
   }
-  
+
   // All providers failed
   logger.warn('AI_ALL_PROVIDERS_FAILED', { reason: 'all_providers_failed' });
   return {

@@ -27,6 +27,8 @@ export default function AIAssistant() {
   const [selectedVehicle, setSelectedVehicle] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [lastResponse, setLastResponse] = useState(null);
+  const [error, setError] = useState(null);
+  const [abortController, setAbortController] = useState(null);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -78,6 +80,24 @@ export default function AIAssistant() {
     setSelectedVehicle('');
     setSidebarOpen(false);
     setLastResponse(null);
+    setError(null);
+    setAbortController(null);
+  };
+
+  const stopGeneration = () => {
+    if (abortController) {
+      abortController.abort();
+      setAbortController(null);
+    }
+  };
+
+  const clearChat = () => {
+    if (messages.length === 0) return;
+    if (confirm('Are you sure you want to clear this conversation?')) {
+      setMessages([]);
+      setLastResponse(null);
+      setError(null);
+    }
   };
 
   const sendMessage = async (messageText = input) => {
@@ -86,9 +106,14 @@ export default function AIAssistant() {
     const userMessage = messageText.trim();
 
     setInput('');
+    setError(null);
     setMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
     setLoading(true);
     setTyping(true);
+
+    // Create abort controller for this request
+    const controller = new AbortController();
+    setAbortController(controller);
 
     try {
       const token = localStorage.getItem('accessToken');
@@ -106,7 +131,10 @@ export default function AIAssistant() {
           vehicleId: selectedVehicle || null,
           chatId: currentChat?.id || null,
         },
-        { timeout: 30000 }
+        { 
+          timeout: 30000,
+          signal: controller.signal,
+        }
       );
 
       const responseData = res.data?.data || res.data || {};
@@ -140,6 +168,16 @@ export default function AIAssistant() {
         await fetchChats();
       }
     } catch (error) {
+      if (error.name === 'AbortError' || error.name === 'CanceledError') {
+        setMessages((prev) => [...prev, {
+          role: 'assistant',
+          content: 'Generation stopped by user.',
+          confidence: 'LOW',
+          dataFreshness: 'UNKNOWN',
+        }]);
+        return;
+      }
+
       console.error('Error sending message:', error);
 
       if (error.response?.status === 401) {
@@ -160,11 +198,13 @@ export default function AIAssistant() {
           ? rawError
           : JSON.stringify(rawError, null, 2);
 
+      setError(backendMessage);
+
       setMessages((prev) => [
         ...prev,
         {
           role: 'assistant',
-          content: `AI Assistant error: ${backendMessage}\n\nPlease try again after a few seconds.`,
+          content: `I encountered an error: ${backendMessage}\n\nPlease try again after a few seconds.`,
           confidence: 'LOW',
           dataFreshness: 'UNKNOWN',
         },
@@ -172,6 +212,7 @@ export default function AIAssistant() {
     } finally {
       setTyping(false);
       setLoading(false);
+      setAbortController(null);
     }
   };
 
@@ -307,18 +348,38 @@ export default function AIAssistant() {
             <h1 className="text-xl font-bold text-white">FleetNimble AI Assistant</h1>
           </div>
 
-          <select
-            value={selectedVehicle}
-            onChange={(e) => setSelectedVehicle(e.target.value)}
-            className="rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
-          >
-            <option value="">All Vehicles</option>
-            {vehicles.map((v) => (
-              <option key={v.id} value={v.id}>
-                {v.make || ''} {v.model || v.name || ''} ({v.plateNumber || v.vin || 'No plate'})
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center gap-3">
+            {loading && (
+              <button
+                onClick={stopGeneration}
+                className="rounded-lg border border-red-600 bg-red-600/20 px-3 py-1.5 text-sm text-red-400 hover:bg-red-600/30 transition-colors"
+              >
+                Stop
+              </button>
+            )}
+
+            {messages.length > 0 && !loading && (
+              <button
+                onClick={clearChat}
+                className="rounded-lg border border-slate-600 bg-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-600 transition-colors"
+              >
+                Clear
+              </button>
+            )}
+
+            <select
+              value={selectedVehicle}
+              onChange={(e) => setSelectedVehicle(e.target.value)}
+              className="rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+            >
+              <option value="">All Vehicles</option>
+              {vehicles.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.make || ''} {v.model || v.vehicleName || ''} ({v.registrationNumber || v.vin || 'No plate'})
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
