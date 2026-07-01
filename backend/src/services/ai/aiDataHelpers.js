@@ -635,6 +635,224 @@ export async function getGpsHistory(userId, vehicleId, dateFilter = 'last_7_days
   }
 }
 
+/**
+ * Get enhanced battery history with analysis
+ */
+export async function getBatteryHistoryAnalysis(userId, vehicleId) {
+  try {
+    const telemetryRecords = await prisma.telemetry.findMany({
+      where: { vehicleId },
+      orderBy: { timestamp: 'desc' },
+      take: 100,
+      select: {
+        timestamp: true,
+        batteryVoltage: true,
+      },
+    });
+
+    if (telemetryRecords.length === 0) {
+      return {
+        latest: null,
+        average: null,
+        lowest: null,
+        trend: 'No data available',
+        lastUpdate: null,
+        recommendation: 'Connect OBD device to start monitoring battery voltage',
+      };
+    }
+
+    const voltages = telemetryRecords
+      .map(r => r.batteryVoltage)
+      .filter(v => v !== null && v !== undefined);
+
+    const latest = voltages[0];
+    const average = voltages.reduce((sum, v) => sum + v, 0) / voltages.length;
+    const lowest = Math.min(...voltages);
+
+    // Determine trend
+    const recent = voltages.slice(0, 10);
+    const older = voltages.slice(10, 20);
+    const recentAvg = recent.reduce((sum, v) => sum + v, 0) / recent.length;
+    const olderAvg = older.length > 0 ? older.reduce((sum, v) => sum + v, 0) / older.length : recentAvg;
+    let trend = 'Stable';
+    if (recentAvg < olderAvg - 0.5) trend = 'Declining';
+    if (recentAvg > olderAvg + 0.5) trend = 'Improving';
+
+    const lastUpdate = telemetryRecords[0].timestamp;
+
+    // Recommendation
+    let recommendation = 'Battery voltage is normal';
+    if (latest < 11) recommendation = 'CRITICAL: Battery voltage critically low. Replace battery immediately.';
+    else if (latest < 12) recommendation = 'WARNING: Battery voltage low. Check alternator and battery health.';
+    else if (latest < 12.5) recommendation = 'Monitor battery voltage closely.';
+    else if (trend === 'Declining') recommendation = 'Battery voltage is declining. Check charging system.';
+
+    return {
+      latest: latest?.toFixed(2),
+      average: average?.toFixed(2),
+      lowest: lowest?.toFixed(2),
+      trend,
+      lastUpdate,
+      recommendation,
+    };
+  } catch (error) {
+    logger.error('GET_BATTERY_HISTORY_ANALYSIS_ERROR', { userId, vehicleId, error: error.message });
+    return {
+      latest: null,
+      average: null,
+      lowest: null,
+      trend: 'Error',
+      lastUpdate: null,
+      recommendation: 'Unable to analyze battery history',
+    };
+  }
+}
+
+/**
+ * Get enhanced fuel history with analysis
+ */
+export async function getFuelHistoryAnalysis(userId, vehicleId) {
+  try {
+    const telemetryRecords = await prisma.telemetry.findMany({
+      where: { vehicleId },
+      orderBy: { timestamp: 'desc' },
+      take: 100,
+      select: {
+        timestamp: true,
+        fuelLevel: true,
+      },
+    });
+
+    if (telemetryRecords.length === 0) {
+      return {
+        latest: null,
+        average: null,
+        lowest: null,
+        trend: 'No data available',
+        lastUpdate: null,
+        recommendation: 'Connect OBD device to start monitoring fuel level',
+      };
+    }
+
+    const fuelLevels = telemetryRecords
+      .map(r => r.fuelLevel)
+      .filter(f => f !== null && f !== undefined);
+
+    const latest = fuelLevels[0];
+    const average = fuelLevels.reduce((sum, f) => sum + f, 0) / fuelLevels.length;
+    const lowest = Math.min(...fuelLevels);
+
+    // Determine trend
+    const recent = fuelLevels.slice(0, 10);
+    const older = fuelLevels.slice(10, 20);
+    const recentAvg = recent.reduce((sum, f) => sum + f, 0) / recent.length;
+    const olderAvg = older.length > 0 ? older.reduce((sum, f) => sum + f, 0) / older.length : recentAvg;
+    let trend = 'Stable';
+    if (recentAvg < olderAvg - 5) trend = 'Consuming';
+    if (recentAvg > olderAvg + 5) trend = 'Refueled';
+
+    const lastUpdate = telemetryRecords[0].timestamp;
+
+    // Recommendation
+    let recommendation = 'Fuel level is normal';
+    if (latest < 10) recommendation = 'CRITICAL: Fuel level critically low. Refuel immediately.';
+    else if (latest < 20) recommendation = 'WARNING: Fuel level low. Plan to refuel soon.';
+    else if (latest < 30) recommendation = 'Monitor fuel level. Consider refueling if planning long trip.';
+
+    return {
+      latest: latest?.toFixed(1),
+      average: average?.toFixed(1),
+      lowest: lowest?.toFixed(1),
+      trend,
+      lastUpdate,
+      recommendation,
+    };
+  } catch (error) {
+    logger.error('GET_FUEL_HISTORY_ANALYSIS_ERROR', { userId, vehicleId, error: error.message });
+    return {
+      latest: null,
+      average: null,
+      lowest: null,
+      trend: 'Error',
+      lastUpdate: null,
+      recommendation: 'Unable to analyze fuel history',
+    };
+  }
+}
+
+/**
+ * Get enhanced coolant history with analysis
+ */
+export async function getCoolantHistoryAnalysis(userId, vehicleId) {
+  try {
+    const telemetryRecords = await prisma.telemetry.findMany({
+      where: { vehicleId },
+      orderBy: { timestamp: 'desc' },
+      take: 100,
+      select: {
+        timestamp: true,
+        coolantTemp: true,
+      },
+    });
+
+    if (telemetryRecords.length === 0) {
+      return {
+        latest: null,
+        average: null,
+        highest: null,
+        trend: 'No data available',
+        lastUpdate: null,
+        recommendation: 'Connect OBD device to start monitoring coolant temperature',
+      };
+    }
+
+    const temps = telemetryRecords
+      .map(r => r.coolantTemp)
+      .filter(t => t !== null && t !== undefined);
+
+    const latest = temps[0];
+    const average = temps.reduce((sum, t) => sum + t, 0) / temps.length;
+    const highest = Math.max(...temps);
+
+    // Determine trend
+    const recent = temps.slice(0, 10);
+    const older = temps.slice(10, 20);
+    const recentAvg = recent.reduce((sum, t) => sum + t, 0) / recent.length;
+    const olderAvg = older.length > 0 ? older.reduce((sum, t) => sum + t, 0) / older.length : recentAvg;
+    let trend = 'Stable';
+    if (recentAvg > olderAvg + 5) trend = 'Rising';
+    if (recentAvg < olderAvg - 5) trend = 'Cooling';
+
+    const lastUpdate = telemetryRecords[0].timestamp;
+
+    // Recommendation
+    let recommendation = 'Coolant temperature is normal';
+    if (latest > 105) recommendation = 'CRITICAL: Engine overheating. Stop vehicle immediately and check cooling system.';
+    else if (latest > 100) recommendation = 'WARNING: Coolant temperature high. Check radiator and coolant level.';
+    else if (latest > 95) recommendation = 'Monitor coolant temperature closely.';
+    else if (latest < 60) recommendation = 'Coolant temperature low. Engine may not be at optimal operating temperature.';
+
+    return {
+      latest: latest?.toFixed(1),
+      average: average?.toFixed(1),
+      highest: highest?.toFixed(1),
+      trend,
+      lastUpdate,
+      recommendation,
+    };
+  } catch (error) {
+    logger.error('GET_COOLANT_HISTORY_ANALYSIS_ERROR', { userId, vehicleId, error: error.message });
+    return {
+      latest: null,
+      average: null,
+      highest: null,
+      trend: 'Error',
+      lastUpdate: null,
+      recommendation: 'Unable to analyze coolant history',
+    };
+  }
+}
+
 export default {
   findVehicleByText,
   getFleetSummary,
@@ -646,4 +864,7 @@ export default {
   getDtcHistory,
   getFuelHistory,
   getGpsHistory,
+  getBatteryHistoryAnalysis,
+  getFuelHistoryAnalysis,
+  getCoolantHistoryAnalysis,
 };

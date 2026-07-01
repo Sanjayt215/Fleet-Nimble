@@ -12,6 +12,7 @@ import { formatSuccessResponse, formatErrorResponse, getSuggestedActions } from 
 import { getDeterministicFallback } from './ai/aiDeterministicFallback.js';
 import { limitChatHistory, resolvePronouns, saveConversationContext, buildEnhancedContext } from './aiConversationMemory.js';
 import { searchKnowledgeBase } from './aiKnowledgeBase.js';
+import { getNavigationAnswer, searchProductKnowledge } from './ai/fleetNimbleKnowledgeBase.js';
 
 const AI_ORCHESTRATOR_ENABLED = process.env.AI_ORCHESTRATOR_ENABLED === 'true';
 const MAX_PROMPT_CHARS = 6000;
@@ -45,7 +46,30 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
   }
 
   try {
-    // Step 0: Resolve pronouns using conversation context
+    // Step 0: Check for navigation/product knowledge questions first
+    const navigationAnswer = getNavigationAnswer(message);
+    if (navigationAnswer) {
+      logger.info('AI_NAVIGATION_ANSWER_USED', { userId, message });
+      return {
+        response: navigationAnswer,
+        context: null,
+        knowledgeResults: [],
+        metadata: {
+          title: "FleetNimble AI Assistant",
+          confidence: "HIGH",
+          dataFreshness: "STATIC",
+          simulatedNote: null,
+          suggestedActions: [
+            "Show vehicle details",
+            "Show live diagnostics",
+            "View dashboard",
+          ],
+          entities: {},
+        },
+      };
+    }
+
+    // Step 0.5: Resolve pronouns using conversation context
     let resolvedMessage = message;
     try {
       resolvedMessage = await resolvePronouns(userId, message);

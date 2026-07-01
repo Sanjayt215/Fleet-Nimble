@@ -78,7 +78,7 @@ export function formatErrorResponse(error, context = null) {
 /**
  * Get suggested actions based on intent
  */
-export function getSuggestedActions(intent) {
+export function getSuggestedActions(intent, context = {}) {
   const actionMap = {
     'fleet_summary': [
       "Show critical alerts",
@@ -128,7 +128,7 @@ export function getSuggestedActions(intent) {
     'battery': [
       "Show vehicle details",
       "Show fuel status",
-      "Show maintenance"
+      "Show battery history"
     ],
     'fuel': [
       "Show vehicle details",
@@ -150,8 +150,48 @@ export function getSuggestedActions(intent) {
       "Show vehicle details",
       "Show vehicle location"
     ],
+    'work_order': [
+      "Show work orders",
+      "Show maintenance",
+      "Create work order"
+    ],
+    'report': [
+      "Generate executive report",
+      "Show fleet summary",
+      "Generate fuel report"
+    ],
+    'support': [
+      "Show vehicle details",
+      "Show live diagnostics",
+      "View dashboard"
+    ],
   };
-  
+
+  // Context-aware adjustments
+  if (intent === 'live_data' && context?.message?.toLowerCase().includes('diagnostic')) {
+    return [
+      "Open Live Diagnostics",
+      "Check OBD connection",
+      "Show RPM for a vehicle"
+    ];
+  }
+
+  if (intent === 'vehicle_details' && context?.message?.toLowerCase().includes('battery')) {
+    return [
+      "Show battery health",
+      "Show GPS location",
+      "Show maintenance history"
+    ];
+  }
+
+  if (intent === 'alerts' && context?.message?.toLowerCase().includes('critical')) {
+    return [
+      "Show critical alerts",
+      "Create work order",
+      "Show affected vehicles"
+    ];
+  }
+
   return actionMap[intent] || [
     "Summarize my fleet health",
     "Show critical alerts",

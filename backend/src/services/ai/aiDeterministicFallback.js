@@ -148,17 +148,46 @@ async function getFleetSummaryFallback(userId) {
     select: {
       vehicleName: true,
       registrationNumber: true,
+      make: true,
+      model: true,
       status: true,
       telemetryOnline: true,
       lastTelemetryAt: true,
       _count: { select: { alerts: true, dtcCodes: true, maintenanceLogs: true } },
     },
+    take: 50,
   });
-  
+
+  if (vehicles.length === 0) {
+    return {
+      response: `**Fleet Health Summary**\n\nNo vehicles in your fleet.\n\n**Recommended Action:** Add your first vehicle to start monitoring.`,
+      metadata: {
+        confidence: 'LOW',
+        dataFreshness: 'UNKNOWN',
+        simulatedNote: null,
+        suggestedActions: [
+          'Add a vehicle',
+        ],
+      },
+    };
+  }
+
   const online = vehicles.filter(v => v.telemetryOnline === true).length;
   const offline = vehicles.filter(v => v.telemetryOnline === false || v.status === 'OFFLINE').length;
   const standby = vehicles.filter(v => v.status === 'STANDBY').length;
-  const totalAlerts = vehicles.reduce((sum, v) => sum + v._count.alerts, 0);
+
+  // Get current critical alerts (unread)
+  const currentCriticalAlerts = await prisma.alert.count({
+    where: {
+      vehicle: { userId, deletedAt: null },
+      read: false,
+      severity: 'CRITICAL',
+    },
+  });
+
+  // Get total historical alerts
+  const totalHistoricalAlerts = vehicles.reduce((sum, v) => sum + v._count.alerts, 0);
+
   const totalDTCs = vehicles.reduce((sum, v) => sum + v._count.dtcCodes, 0);
   const maintenanceDue = await prisma.maintenanceLog.count({
     where: {
@@ -166,14 +195,19 @@ async function getFleetSummaryFallback(userId) {
       completed: false,
     },
   });
-  
+
+  // Top 3 risky vehicles with proper names
   const topRiskyVehicles = vehicles
     .sort((a, b) => b._count.alerts - a._count.alerts)
     .slice(0, 3)
-    .map(v => ({ name: v.vehicleName, plate: v.registrationNumber, alertCount: v._count.alerts }));
-  
-  const response = `**Fleet Health Summary**\n\n**Total Vehicles:** ${vehicles.length}\n**Online:** ${online}\n**Offline:** ${offline}\n**Standby:** ${standby}\n**Critical Alerts:** ${totalAlerts}\n**Maintenance Due:** ${maintenanceDue}\n**Active DTCs:** ${totalDTCs}\n\n**Top Risky Vehicles:**\n${topRiskyVehicles.map(v => `- ${v.name} (${v.plate}): ${v.alertCount} alerts`).join('\n')}\n\n**Recommended Action:** ${totalAlerts > 5 ? 'Address critical alerts immediately' : 'Monitor fleet status regularly'}`;
-  
+    .map(v => ({
+      name: `${v.make || ''} ${v.model || v.vehicleName || ''}`.trim(),
+      plate: v.registrationNumber || 'No plate',
+      alertCount: v._count.alerts,
+    }));
+
+  const response = `**Fleet Health Summary**\n\n**Total Vehicles:** ${vehicles.length}\n**Online:** ${online}\n**Offline:** ${offline}\n**Standby:** ${standby}\n\n**Current Critical Alerts:** ${currentCriticalAlerts}\n${totalHistoricalAlerts > currentCriticalAlerts ? `Historical Alerts: ${totalHistoricalAlerts}\n` : ''}**Active DTCs:** ${totalDTCs}\n**Maintenance Due:** ${maintenanceDue}\n\n**Top Risky Vehicles:**\n${topRiskyVehicles.map(v => `- ${v.name} (${v.plate}): ${v.alertCount} alerts`).join('\n')}\n\n**Recommended Action:** ${currentCriticalAlerts > 5 ? 'Address critical alerts immediately' : maintenanceDue > 3 ? 'Schedule pending maintenance' : 'Monitor fleet status regularly'}`;
+
   return {
     response,
     metadata: {
@@ -241,10 +275,10 @@ async function getVehicleDetailsFallback(userId, message, entities, userVehicles
       },
     });
   }
-  
+
   if (!vehicle) {
     return {
-      response: 'I could not find matching vehicle data for this request.',
+      response: 'Vehicle not found. Please specify the vehicle name or plate number.',
       metadata: {
         confidence: 'LOW',
         dataFreshness: 'UNKNOWN',
@@ -835,10 +869,10 @@ async function getGPSFallback(userId, entities, userVehicles) {
       });
     }
   }
-  
+
   if (!vehicle) {
     return {
-      response: 'I could not find matching vehicle data for this request.',
+      response: 'Vehicle not found. Please specify the vehicle name or plate number.',
       metadata: {
         confidence: 'LOW',
         dataFreshness: 'UNKNOWN',
@@ -1015,10 +1049,15 @@ async function getStandbyVehiclesFallback(userId) {
  * Battery fallback
  */
 async function getBatteryFallback(userId, entities, userVehicles) {
+  const { getBatteryHistoryAnalysis } = await import('./aiDataHelpers.js');
   let vehicle = entities.vehicles[0];
-  
+  const message = entities.message || '';
+
+  // Check if user is asking for battery history
+  const isHistoryQuery = message.toLowerCase().includes('history') || message.toLowerCase().includes('historical');
+
   if (!vehicle) {
-    const vehicleName = extractVehicleName(entities.message || '', userVehicles);
+    const vehicleName = extractVehicleName(message, userVehicles);
     if (vehicleName) {
       vehicle = await prisma.vehicle.findFirst({
         where: {
@@ -1030,7 +1069,28 @@ async function getBatteryFallback(userId, entities, userVehicles) {
       });
     }
   }
-  
+
+  if (vehicle && isHistoryQuery) {
+    // Return enhanced battery history analysis
+    const analysis = await getBatteryHistoryAnalysis(userId, vehicle.id);
+
+    const response = `**Battery History: ${vehicle.vehicleName}**\n\nLatest Voltage: ${analysis.latest || 'N/A'}V\nAverage Voltage: ${analysis.average || 'N/A'}V\nLowest Voltage: ${analysis.lowest || 'N/A'}V\nTrend: ${analysis.trend}\nLast Update: ${analysis.lastUpdate || 'N/A'}\n\n**Recommendation:** ${analysis.recommendation}`;
+
+    return {
+      response,
+      metadata: {
+        confidence: 'HIGH',
+        dataFreshness: 'HISTORICAL',
+        simulatedNote: null,
+        suggestedActions: [
+          'Show vehicle details',
+          'Show live data',
+          'Show fuel history',
+        ],
+      },
+    };
+  }
+
   if (!vehicle) {
     // Get all vehicles with battery data
     const vehicles = await prisma.vehicle.findMany({
@@ -1038,7 +1098,7 @@ async function getBatteryFallback(userId, entities, userVehicles) {
       select: { id: true, vehicleName: true, registrationNumber: true },
       take: 10,
     });
-    
+
     const batteryData = await Promise.all(
       vehicles.map(async (v) => {
         const telemetry = await prisma.telemetry.findFirst({
@@ -1046,7 +1106,7 @@ async function getBatteryFallback(userId, entities, userVehicles) {
           orderBy: { timestamp: 'desc' },
           select: { batteryVoltage: true, timestamp: true },
         });
-        
+
         return {
           name: v.vehicleName,
           plate: v.registrationNumber,
@@ -1055,13 +1115,13 @@ async function getBatteryFallback(userId, entities, userVehicles) {
         };
       })
     );
-    
-    const batteryList = batteryData.map(v => 
-      `- ${v.vehicleName} (${v.registrationNumber}): ${v.voltage || 'N/A'}V`
+
+    const batteryList = batteryData.map(v =>
+      `- ${v.name} (${v.plate}): ${v.voltage || 'N/A'}V`
     ).join('\n');
-    
+
     const response = `**Battery Status**\n\n${batteryList}\n\n**Recommended Action:** Check vehicles with low battery voltage`;
-    
+
     return {
       response,
       metadata: {
@@ -1075,18 +1135,18 @@ async function getBatteryFallback(userId, entities, userVehicles) {
       },
     };
   }
-  
+
   const telemetry = await prisma.telemetry.findFirst({
     where: { vehicleId: vehicle.id },
     orderBy: { timestamp: 'desc' },
     select: { batteryVoltage: true, timestamp: true },
   });
-  
+
   const voltage = telemetry?.batteryVoltage;
   const status = voltage && voltage < 12 ? 'LOW' : voltage && voltage < 13 ? 'NORMAL' : 'GOOD';
-  
+
   const response = `**Battery Status: ${vehicle.vehicleName}**\n\n**Plate:** ${vehicle.registrationNumber}\n**Voltage:** ${voltage || 'N/A'}V\n**Status:** ${status}\n**Last Updated:** ${telemetry?.timestamp || 'N/A'}\n\n**Recommended Action:** ${status === 'LOW' ? 'Charge battery immediately' : 'Battery is in good condition'}`;
-  
+
   return {
     response,
     metadata: {
@@ -1096,6 +1156,7 @@ async function getBatteryFallback(userId, entities, userVehicles) {
       suggestedActions: [
         'Show vehicle details',
         'Show fuel status',
+        'Show battery history',
       ],
     },
   };
@@ -1306,189 +1367,214 @@ function extractVehicleName(message, userVehicles) {
  * Customer support fallback
  */
 async function getSupportFallback(message) {
+  const { getProductKnowledge } = await import('./fleetNimbleKnowledgeBase.js');
   const lowerMessage = message.toLowerCase();
-  
+
+  // Check for specific support questions and use product knowledge
+  if (lowerMessage.includes('connect obd') || lowerMessage.includes('obd device') || lowerMessage.includes('how to connect obd')) {
+    const obdInfo = getProductKnowledge('obdConnection');
+    if (obdInfo) {
+      return {
+        response: obdInfo.steps,
+        metadata: {
+          confidence: 'HIGH',
+          dataFreshness: 'STATIC',
+          simulatedNote: null,
+          suggestedActions: [
+            'Show vehicle details',
+            'Show offline vehicles',
+          ],
+        },
+      };
+    }
+  }
+
+  if (lowerMessage.includes('rpm not updating') || lowerMessage.includes('rpm not working')) {
+    const troubleshooting = getProductKnowledge('troubleshooting');
+    if (troubleshooting?.rpmNotUpdating) {
+      return {
+        response: troubleshooting.rpmNotUpdating,
+        metadata: {
+          confidence: 'HIGH',
+          dataFreshness: 'STATIC',
+          simulatedNote: null,
+          suggestedActions: [
+            'Show vehicle details',
+            'Show live diagnostics',
+          ],
+        },
+      };
+    }
+  }
+
+  if (lowerMessage.includes('gps not showing') || lowerMessage.includes('gps not working') || lowerMessage.includes('location not showing')) {
+    const troubleshooting = getProductKnowledge('troubleshooting');
+    if (troubleshooting?.gpsNotShowing) {
+      return {
+        response: troubleshooting.gpsNotShowing,
+        metadata: {
+          confidence: 'HIGH',
+          dataFreshness: 'STATIC',
+          simulatedNote: null,
+          suggestedActions: [
+            'Show vehicle details',
+            'Show GPS location',
+          ],
+        },
+      };
+    }
+  }
+
+  if (lowerMessage.includes('vin decode failed') || lowerMessage.includes('vin not decoding')) {
+    const troubleshooting = getProductKnowledge('troubleshooting');
+    if (troubleshooting?.vinDecodeFailed) {
+      return {
+        response: troubleshooting.vinDecodeFailed,
+        metadata: {
+          confidence: 'HIGH',
+          dataFreshness: 'STATIC',
+          simulatedNote: null,
+          suggestedActions: [
+            'Show vehicle details',
+            'Add vehicle',
+          ],
+        },
+      };
+    }
+  }
+
+  if (lowerMessage.includes('vehicle offline') || lowerMessage.includes('why vehicle offline')) {
+    const troubleshooting = getProductKnowledge('troubleshooting');
+    if (troubleshooting?.vehicleOffline) {
+      return {
+        response: troubleshooting.vehicleOffline,
+        metadata: {
+          confidence: 'HIGH',
+          dataFreshness: 'STATIC',
+          simulatedNote: null,
+          suggestedActions: [
+            'Show offline vehicles',
+            'Show vehicle details',
+          ],
+        },
+      };
+    }
+  }
+
+  if (lowerMessage.includes('add vehicle') || lowerMessage.includes('how to add vehicle') || lowerMessage.includes('create vehicle')) {
+    const addVehicle = getProductKnowledge('addVehicle');
+    if (addVehicle) {
+      return {
+        response: addVehicle.steps,
+        metadata: {
+          confidence: 'HIGH',
+          dataFreshness: 'STATIC',
+          simulatedNote: null,
+          suggestedActions: [
+            'Show all vehicles',
+            'Show fleet summary',
+          ],
+        },
+      };
+    }
+  }
+
+  if (lowerMessage.includes('create work order') || lowerMessage.includes('how to create work order') || lowerMessage.includes('add work order')) {
+    const workOrders = getProductKnowledge('workOrders');
+    if (workOrders) {
+      return {
+        response: workOrders.overview,
+        metadata: {
+          confidence: 'HIGH',
+          dataFreshness: 'STATIC',
+          simulatedNote: null,
+          suggestedActions: [
+            'Show work orders',
+            'Show maintenance',
+          ],
+        },
+      };
+    }
+  }
+
+  if (lowerMessage.includes('generate report') || lowerMessage.includes('how to generate report') || lowerMessage.includes('create report')) {
+    const reports = getProductKnowledge('reports');
+    if (reports) {
+      return {
+        response: reports.overview,
+        metadata: {
+          confidence: 'HIGH',
+          dataFreshness: 'STATIC',
+          simulatedNote: null,
+          suggestedActions: [
+            'Show fleet summary',
+            'Generate executive report',
+          ],
+        },
+      };
+    }
+  }
+
+  if (lowerMessage.includes('schedule maintenance') || lowerMessage.includes('how to schedule maintenance')) {
+    const maintenance = getProductKnowledge('maintenance');
+    if (maintenance) {
+      return {
+        response: maintenance.overview,
+        metadata: {
+          confidence: 'HIGH',
+          dataFreshness: 'STATIC',
+          simulatedNote: null,
+          suggestedActions: [
+            'Show maintenance',
+            'Show vehicles needing maintenance',
+          ],
+        },
+      };
+    }
+  }
+
+  if (lowerMessage.includes('live data') || lowerMessage.includes('see live data') || lowerMessage.includes('show live data')) {
+    const liveDiagnostics = getProductKnowledge('liveDiagnostics');
+    if (liveDiagnostics) {
+      return {
+        response: liveDiagnostics.overview,
+        metadata: {
+          confidence: 'HIGH',
+          dataFreshness: 'STATIC',
+          simulatedNote: null,
+          suggestedActions: [
+            'Show vehicle details',
+            'Open Live Diagnostics',
+          ],
+        },
+      };
+    }
+  }
+
   // FleetNimble overview
   if (lowerMessage.includes('fleetnimble') || lowerMessage.includes('what is fleetnimble') || lowerMessage.includes('how does fleetnimble work')) {
-    return {
-      response: `**FleetNimble Overview**\n\nFleetNimble is a comprehensive fleet management platform that provides real-time vehicle tracking, diagnostics, maintenance scheduling, and AI-powered insights.\n\n**Key Features:**\n- Real-time GPS tracking\n- OBD device integration\n- Predictive maintenance\n- Digital twin technology\n- AI-powered analytics\n- Alert management\n- Geofencing\n\n**Recommended Action:** Explore the dashboard to see your fleet in action`,
-      metadata: {
-        confidence: 'HIGH',
-        dataFreshness: 'STATIC',
-        simulatedNote: null,
-        suggestedActions: [
-          'Summarize my fleet health',
-          'Show vehicle details',
-          'Show critical alerts',
-        ],
-      },
-    };
+    const dashboard = getProductKnowledge('dashboard');
+    if (dashboard) {
+      return {
+        response: dashboard.overview,
+        metadata: {
+          confidence: 'HIGH',
+          dataFreshness: 'STATIC',
+          simulatedNote: null,
+          suggestedActions: [
+            'Summarize my fleet health',
+            'Show vehicle details',
+            'Show critical alerts',
+          ],
+        },
+      };
+    }
   }
-  
-  // OBD device
-  if (lowerMessage.includes('obd') || lowerMessage.includes('device')) {
-    return {
-      response: `**OBD Device Information**\n\nFleetNimble uses OBD-II devices to connect to your vehicle's onboard computer and collect real-time data.\n\n**Installation:**\n1. Plug the OBD device into your vehicle's OBD-II port (usually under the dashboard)\n2. The device will automatically connect to our servers\n3. Data will start appearing in your dashboard\n\n**Supported Data:**\n- Engine diagnostics\n- Fuel consumption\n- Battery voltage\n- Temperature readings\n- Speed and RPM\n- Error codes (DTCs)\n\n**Troubleshooting:**\n- Ensure the device is properly plugged in\n- Check that the vehicle ignition is on\n- Verify the device has cellular signal\n\n**Recommended Action:** Check your vehicle's OBD port location`,
-      metadata: {
-        confidence: 'HIGH',
-        dataFreshness: 'STATIC',
-        simulatedNote: null,
-        suggestedActions: [
-          'Show vehicle details',
-          'Show offline vehicles',
-        ],
-      },
-    };
-  }
-  
-  // GPS tracking
-  if (lowerMessage.includes('gps') || lowerMessage.includes('tracking') || lowerMessage.includes('location')) {
-    return {
-      response: `**GPS Tracking Information**\n\nFleetNimble provides real-time GPS tracking for all your vehicles.\n\n**Features:**\n- Live location updates\n- Historical route tracking\n- Geofencing capabilities\n- Speed monitoring\n- Distance traveled\n- Estimated arrival times\n\n**Accuracy:**\n- GPS accuracy: ~5-10 meters\n- Update frequency: Every 30-60 seconds\n- Works with cellular and satellite\n\n**Recommended Action:** Create a geofence for your vehicles`,
-      metadata: {
-        confidence: 'HIGH',
-        dataFreshness: 'STATIC',
-        simulatedNote: null,
-        suggestedActions: [
-          'Show vehicle location',
-          'Create geofence',
-          'Show offline vehicles',
-        ],
-      },
-    };
-  }
-  
-  // Subscriptions and pricing
-  if (lowerMessage.includes('subscription') || lowerMessage.includes('pricing') || lowerMessage.includes('cost') || lowerMessage.includes('plan')) {
-    return {
-      response: `**Subscription Plans**\n\nFleetNimble offers flexible plans to fit your fleet size:\n\n**Starter Plan:**\n- Up to 5 vehicles\n- Basic tracking\n- Email alerts\n- $29/month\n\n**Professional Plan:**\n- Up to 20 vehicles\n- Advanced analytics\n- SMS alerts\n- Priority support\n- $79/month\n\n**Enterprise Plan:**\n- Unlimited vehicles\n- Custom integrations\n- Dedicated support\n- White-label options\n- Contact for pricing\n\n**Recommended Action:** Contact sales for enterprise pricing`,
-      metadata: {
-        confidence: 'HIGH',
-        dataFreshness: 'STATIC',
-        simulatedNote: null,
-        suggestedActions: [
-          'Summarize my fleet health',
-          'Show vehicle details',
-        ],
-      },
-    };
-  }
-  
-  // Login and authentication
-  if (lowerMessage.includes('login') || lowerMessage.includes('password') || lowerMessage.includes('auth')) {
-    return {
-      response: `**Login and Authentication**\n\n**How to Login:**\n1. Visit fleetnimble.com\n2. Click "Login" in the top right\n3. Enter your email and password\n4. Click "Sign In"\n\n**Troubleshooting:**\n- Forgot password? Click "Forgot Password" on login page\n- Account locked? Contact support\n- 2FA issues? Check your authenticator app\n\n**Security:**\n- Two-factor authentication available\n- Session timeout: 30 minutes\n- Password requirements: 8+ characters, mixed case, numbers\n\n**Recommended Action:** Reset your password if needed`,
-      metadata: {
-        confidence: 'HIGH',
-        dataFreshness: 'STATIC',
-        simulatedNote: null,
-        suggestedActions: [
-          'Contact support',
-          'Reset password',
-        ],
-      },
-    };
-  }
-  
-  // Mobile app
-  if (lowerMessage.includes('mobile') || lowerMessage.includes('app') || lowerMessage.includes('android') || lowerMessage.includes('ios')) {
-    return {
-      response: `**Mobile App Information**\n\nFleetNimble offers mobile apps for iOS and Android.\n\n**Features:**\n- Real-time tracking\n- Push notifications\n- Vehicle management\n- Alert management\n- Offline mode\n\n**Download:**\n- iOS: App Store\n- Android: Google Play Store\n\n**Requirements:**\n- iOS 12+\n- Android 8+\n- Internet connection\n\n**Recommended Action:** Download the app for on-the-go access`,
-      metadata: {
-        confidence: 'HIGH',
-        dataFreshness: 'STATIC',
-        simulatedNote: null,
-        suggestedActions: [
-          'Show vehicle details',
-          'Show alerts',
-        ],
-      },
-    };
-  }
-  
-  // Digital twin
-  if (lowerMessage.includes('digital twin') || lowerMessage.includes('twin')) {
-    return {
-      response: `**Digital Twin Technology**\n\nFleetNimble's Digital Twin creates a virtual replica of each vehicle in your fleet.\n\n**Capabilities:**\n- Real-time vehicle state simulation\n- Predictive maintenance modeling\n- What-if scenario analysis\n- Performance optimization\n- Fault prediction\n\n**Benefits:**\n- Reduce downtime\n- Optimize maintenance schedules\n- Improve safety\n- Lower operational costs\n\n**Recommended Action:** View your vehicle digital twins in the dashboard`,
-      metadata: {
-        confidence: 'HIGH',
-        dataFreshness: 'STATIC',
-        simulatedNote: null,
-        suggestedActions: [
-          'Show vehicle details',
-          'Show maintenance',
-        ],
-      },
-    };
-  }
-  
-  // Geofence
-  if (lowerMessage.includes('geofence') || lowerMessage.includes('geo fence')) {
-    return {
-      response: `**Geofencing Information**\n\nGeofencing allows you to create virtual boundaries for your vehicles.\n\n**Features:**\n- Entry/exit alerts\n- Speed limit enforcement\n- Route monitoring\n- Area restrictions\n- Time-based rules\n\n**Setup:**\n1. Go to Geofences in dashboard\n2. Click "Create Geofence"\n3. Draw boundary on map\n4. Set rules and alerts\n5. Assign vehicles\n\n**Use Cases:**\n- Monitor vehicle locations\n- Enforce route compliance\n- Prevent unauthorized areas\n- Track time on site\n\n**Recommended Action:** Create a geofence for your fleet`,
-      metadata: {
-        confidence: 'HIGH',
-        dataFreshness: 'STATIC',
-        simulatedNote: null,
-        suggestedActions: [
-          'Show vehicle location',
-          'Create geofence',
-        ],
-      },
-    };
-  }
-  
-  // Battery protection
-  if (lowerMessage.includes('battery protection') || lowerMessage.includes('battery drain')) {
-    return {
-      response: `**Battery Protection**\n\nFleetNimble helps prevent battery drain through intelligent monitoring.\n\n**Features:**\n- Voltage monitoring\n- Low battery alerts\n- Automatic shutdown prevention\n- Charging recommendations\n- Battery health tracking\n\n**Best Practices:**\n- Keep voltage above 12V\n- Monitor during long idle periods\n- Disconnect accessories when parked\n- Regular battery maintenance\n\n**Recommended Action:** Check your vehicle battery status`,
-      metadata: {
-        confidence: 'HIGH',
-        dataFreshness: 'STATIC',
-        simulatedNote: null,
-        suggestedActions: [
-          'Show battery status',
-          'Show vehicle details',
-        ],
-      },
-    };
-  }
-  
-  // Engine standby
-  if (lowerMessage.includes('engine standby') || lowerMessage.includes('ignition')) {
-    return {
-      response: `**Engine Standby Mode**\n\nFleetNimble's engine standby feature helps reduce fuel consumption and emissions.\n\n**How It Works:**\n- Monitors vehicle idle time\n- Automatically suggests engine shutdown\n- Tracks fuel savings\n- Reports environmental impact\n\n**Benefits:**\n- Reduced fuel costs\n- Lower emissions\n- Extended engine life\n- Compliance with regulations\n\n**Recommended Action:** Monitor your standby vehicles`,
-      metadata: {
-        confidence: 'HIGH',
-        dataFreshness: 'STATIC',
-        simulatedNote: null,
-        suggestedActions: [
-          'Show standby vehicles',
-          'Show fuel status',
-        ],
-      },
-    };
-  }
-  
-  // VIN
-  if (lowerMessage.includes('vin') || lowerMessage.includes('vehicle identification')) {
-    return {
-      response: `**VIN (Vehicle Identification Number)**\n\nThe VIN is a unique 17-character code that identifies your vehicle.\n\n**Uses in FleetNimble:**\n- Vehicle identification\n- Maintenance records\n- Insurance verification\n- Recall notifications\n- Parts ordering\n\n**Where to Find VIN:**\n- Dashboard (driver's side)\n- Vehicle registration\n- Insurance documents\n- Engine bay\n- Door frame\n\n**Recommended Action:** Add VIN to your vehicle profile`,
-      metadata: {
-        confidence: 'HIGH',
-        dataFreshness: 'STATIC',
-        simulatedNote: null,
-        suggestedActions: [
-          'Show vehicle details',
-          'Add VIN to profile',
-        ],
-      },
-    };
-  }
-  
-  // General support
+
+  // Default support response
+  const dashboard = getProductKnowledge('dashboard');
   return {
-    response: `**FleetNimble Support**\n\nI can help you with:\n\n**Fleet Management:**\n- Vehicle tracking and monitoring\n- Maintenance scheduling\n- Alert management\n- GPS and location services\n\n**Technical Support:**\n- OBD device setup\n- Mobile app usage\n- Login and authentication\n- Digital twin features\n\n**Account Management:**\n- Subscription plans\n- Pricing information\n- User management\n- Settings configuration\n\n**Features:**\n- Geofencing\n- Battery protection\n- Engine standby\n- VIN management\n\n**Recommended Action:** Ask a specific question about any feature`,
+    response: dashboard?.overview || `**FleetNimble Support**\n\nI can help you with:\n\n**Vehicle Management:**\n- Adding vehicles\n- Connecting OBD devices\n- VIN decoding\n- Vehicle details\n\n**Monitoring:**\n- Live diagnostics\n- GPS tracking\n- Alerts\n- Maintenance\n\n**Reports & Work Orders:**\n- Generating reports\n- Creating work orders\n- Scheduling maintenance\n\n**Troubleshooting:**\n- RPM not updating\n- GPS not showing\n- Vehicle offline\n- VIN decode failed\n\n**Recommended Action:** Ask a specific question about any feature`,
     metadata: {
       confidence: 'HIGH',
       dataFreshness: 'STATIC',
@@ -1503,7 +1589,7 @@ async function getSupportFallback(message) {
 }
 
 /**
- * History fallback for historical数据 queries
+ * History fallback for historical data queries
  */
 async function getHistoryFallback(userId, message, entities, userVehicles) {
   const lowerMessage = message.toLowerCase();
