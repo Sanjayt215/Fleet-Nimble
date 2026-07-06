@@ -1,5 +1,5 @@
 import http from 'http';
-import WebSocket from 'ws';
+import { WebSocketServer } from 'ws';
 import { Server } from 'socket.io';
 import app from './app.js';
 import { config } from './config/index.js';
@@ -33,9 +33,16 @@ startMqttConsumer(io).catch((err) => {
 });
 
 // ── Twilio Media Stream WebSocket server ──
-const wss = new WebSocket.Server({ noServer: true });
+const wss = new WebSocketServer({ noServer: true });
 
-wss.on('connection', handleMediaStream);
+wss.on('connection', (ws, request) => {
+  try {
+    handleMediaStream(ws, request);
+  } catch (error) {
+    logger.error('Media stream handler error', { error: error.message });
+    ws.close();
+  }
+});
 
 server.on('upgrade', (request, socket, head) => {
   const pathname = new URL(request.url, `http://localhost`).pathname;

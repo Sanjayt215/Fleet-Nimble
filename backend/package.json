@@ -4,6 +4,9 @@
   "description": "FleetNimble API — OBD-II telematics and fleet intelligence",
   "main": "src/server.js",
   "type": "module",
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
