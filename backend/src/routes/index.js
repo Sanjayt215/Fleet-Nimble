@@ -17,6 +17,8 @@ import adminRoutes from './adminRoutes.js';
 import backupRoutes from './backupRoutes.js';
 import twinRoutes from './twinRoutes.js';
 import mobileRoutes from './mobileRoutes.js';
+import aiReceptionistRoutes from './aiReceptionist.routes.js';
+import twilioReceptionistRoutes from './twilioReceptionist.routes.js';
 import * as reportController from '../controllers/reportController.js';
 import { authenticate } from '../middleware/auth.js';
 import { getMqttStats } from '../mqtt/consumer.js';
@@ -47,6 +49,8 @@ router.use('/admin', adminRoutes);
 router.use('/backup', backupRoutes);
 router.use('/twin', twinRoutes);
 router.use('/mobile', mobileRoutes);
+router.use('/ai-receptionist', aiReceptionistRoutes);
+router.use('/ai-receptionist', twilioReceptionistRoutes);
 router.get('/dashboard/stats', authenticate, reportController.dashboardStats);
 
 export default router;

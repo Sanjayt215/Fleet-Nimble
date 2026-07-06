@@ -174,10 +174,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
-                    children: [
-                      const Icon(Icons.warning, color: Colors.orange, size: 20),
-                      const SizedBox(width: 8),
-                      const Text(
+                    children: const [
+                      Icon(Icons.warning, color: Colors.orange, size: 20),
+                      SizedBox(width: 8),
+                      Text(
                         'BACKUP MODE: Fixed Vehicle ID',
                         style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange),
                       ),

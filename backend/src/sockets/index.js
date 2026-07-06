@@ -125,6 +125,28 @@ export function initSockets(io) {
       }
     });
 
+    // ── AI Receptionist live call events ──
+    socket.on('receptionist:join', () => {
+      socket.join(`user:${socket.userId}`);
+      logger.debug('RECEPTIONIST_JOINED', { userId: socket.userId });
+    });
+
+    socket.on('receptionist:endCall', (callSid) => {
+      logger.info('RECEPTIONIST_END_CALL', { userId: socket.userId, callSid });
+      socket.to(`user:${socket.userId}`).emit('call.ended', {
+        callSid,
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    socket.on('receptionist:escalate', (data) => {
+      logger.info('RECEPTIONIST_ESCALATE', { userId: socket.userId, ...data });
+      socket.to(`user:${socket.userId}`).emit('call.escalated', {
+        ...data,
+        timestamp: new Date().toISOString(),
+      });
+    });
+
     rejoinRooms();
 
     socket.on('disconnect', () => {

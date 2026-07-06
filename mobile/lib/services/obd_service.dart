@@ -1,3 +1,5 @@
+// ignore_for_file: avoid_print
+
 import 'dart:async';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../utils/pid_parser.dart';
@@ -20,14 +22,10 @@ class ObdService {
     '010C', '010D', '0105', '012F', '0104', '0110', '010F', '0111',
   ];
 
+  BluetoothDevice? get device => _device;
   bool get isConnected => _device != null;
 
   /// Read VIN from ECU using mode 09 PID 02
-  Future<String> readVin() async {
-    if (_writeChar == null) throw Exception('Not connected');
-    return await sendCommand('0902');
-  }
-
   Future<void> connect(BluetoothDevice device) async {
     _device = device;
     await device.connect();

@@ -1,3 +1,5 @@
+// ignore_for_file: avoid_print
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
@@ -6,7 +8,7 @@ import '../services/obd_service.dart';
 
 /// Screen for VIN reading, decoding, and vehicle setup
 class VinSetupScreen extends StatefulWidget {
-  const VinSetupScreen({Key? key}) : super(key: key);
+  const VinSetupScreen({super.key});
 
   @override
   State<VinSetupScreen> createState() => _VinSetupScreenState();
@@ -124,8 +126,8 @@ class _VinSetupScreenState extends State<VinSetupScreen> {
         fuelType: _decodedData?['fuelType'],
         bodyClass: _decodedData?['bodyClass'],
         engineModel: _decodedData?['engineModel'],
-        obdDeviceName: _obdService._device?.platformName ?? 'ELM327',
-        bluetoothAddress: _obdService._device?.remoteId.toString(),
+        obdDeviceName: _obdService.device?.platformName ?? 'ELM327',
+        bluetoothAddress: _obdService.device?.remoteId.toString(),
       );
 
       final vehicleId = result['vehicleId'] as String;

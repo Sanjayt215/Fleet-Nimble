@@ -164,7 +164,7 @@ class OBDTaskHandler extends TaskHandler {
       // Update every 30 seconds (10 * 3 seconds)
       FlutterForegroundTask.updateService(
         notificationTitle: 'FleetNimble Active',
-        notificationText: 'OBD monitoring - ${_updateCount} updates',
+        notificationText: 'OBD monitoring - $_updateCount updates',
       );
     }
   }
@@ -181,7 +181,7 @@ class OBDTaskHandler extends TaskHandler {
   }
 
   @override
-  void onButtonPressed(String id) {
+  void onNotificationButtonPressed(String id) {
     // Handle notification button presses if needed
     logger.info('$_tag: Notification button pressed: $id');
   }

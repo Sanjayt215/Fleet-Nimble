@@ -56,6 +56,20 @@ export const authLimiter = isDev
       },
     });
 
+export const twilioWebhookLimiter = isDev
+  ? (req, res, next) => next()
+  : rateLimit({
+      windowMs: 60 * 1000,
+      max: 60,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req) => req.body?.CallSid || req.ip,
+      message: {
+        success: false,
+        error: { code: 'RATE_LIMIT', message: 'Too many webhook requests' },
+      },
+    });
+
 export const aiChatLimiter = isDev
   ? (req, res, next) => next()
   : rateLimit({

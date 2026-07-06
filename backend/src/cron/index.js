@@ -93,5 +93,17 @@ export function startCronJobs(app) {
     }
   });
 
+  // AI Receptionist: cleanup stale call sessions every 30s
+  cron.schedule('*/30 * * * * *', async () => {
+    try {
+      const { cleanupStaleSessions } = await import('../services/receptionistRealtime.service.js');
+      const { flushPendingTranscripts } = await import('../services/receptionistTranscript.service.js');
+      cleanupStaleSessions(300000);
+      await flushPendingTranscripts();
+    } catch (err) {
+      logger.error('RECEPTIONIST_CLEANUP_CRON_ERROR', { err: err.message });
+    }
+  });
+
   logger.info('Cron jobs started');
 }

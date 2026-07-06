@@ -35,27 +35,34 @@ model Company {
 }
 
 model User {
-  id            String         @id @default(uuid())
-  name          String
-  email         String         @unique
-  passwordHash  String         @map("password_hash")
-  roleId        Int            @map("role_id")
-  deletedAt     DateTime?      @map("deleted_at")
-  createdAt     DateTime       @default(now()) @map("created_at")
-  updatedAt     DateTime       @updatedAt @map("updated_at")
-  companyId     String?        @map("company_id")
-  aiAuditLogs   AiAuditLog[]
-  aiChats       AiChat[]
-  auditLogs     AuditLog[]
-  deviceTokens  DeviceToken[]
-  notifications Notification[]
-  obdDevices    OBDDevice[]
-  refreshTokens RefreshToken[]
-  telemetries   Telemetry[]
-  company       Company?       @relation(fields: [companyId], references: [id])
-  role          Role           @relation(fields: [roleId], references: [id])
-  vehicles      Vehicle[]
-  workOrders    WorkOrder[]    @relation("AssignedWorkOrders")
+  id                         String                        @id @default(uuid())
+  name                       String
+  email                      String                        @unique
+  passwordHash               String                        @map("password_hash")
+  roleId                     Int                           @map("role_id")
+  deletedAt                  DateTime?                     @map("deleted_at")
+  createdAt                  DateTime                      @default(now()) @map("created_at")
+  updatedAt                  DateTime                      @updatedAt @map("updated_at")
+  companyId                  String?                       @map("company_id")
+  aiAuditLogs                AiAuditLog[]
+  aiChats                    AiChat[]
+  auditLogs                  AuditLog[]
+  deviceTokens               DeviceToken[]
+  notifications              Notification[]
+  obdDevices                 OBDDevice[]
+  refreshTokens              RefreshToken[]
+  telemetries                Telemetry[]
+  company                    Company?                      @relation(fields: [companyId], references: [id])
+  role                       Role                          @relation(fields: [roleId], references: [id])
+  vehicles                   Vehicle[]
+  workOrders                 WorkOrder[]                   @relation("AssignedWorkOrders")
+  receptionistCalls          AiReceptionistCall[]
+  receptionistAppointments   AiReceptionistAppointment[]
+  receptionistSupportTickets AiReceptionistSupportTicket[]
+  receptionistConfig         AiReceptionistConfig?
+  receptionistAuditLogs      AiReceptionistAuditLog[]
+  receptionistCustomers      ReceptionistCustomer[]
+  receptionistCustomerNotes  ReceptionistCustomerNote[]
 
   @@index([email])
   @@index([roleId])
@@ -76,70 +83,71 @@ model RefreshToken {
 }
 
 model Vehicle {
-  id                    String                @id @default(uuid())
-  userId                String                @map("user_id")
-  vin                   String?
-  plateNumber           String?               @map("plate_number")
-  make                  String?
-  model                 String?
-  year                  Int?
-  odometer              Float                 @default(0)
-  obdDeviceId           String?               @map("obd_device_id")
-  deletedAt             DateTime?             @map("deleted_at")
-  createdAt             DateTime              @default(now()) @map("created_at")
-  updatedAt             DateTime              @updatedAt @map("updated_at")
-  lastObdAt             DateTime?             @map("last_obd_at")
-  telemetryOnline       Boolean               @default(false) @map("telemetry_online")
-  companyId             String?               @map("company_id")
-  milOn                 Boolean?              @map("mil_on")
-  readinessMonitors     Json?                 @map("readiness_monitors")
-  engineHoursObd        Float?                @map("engine_hours_obd")
-  bodyClass             String?
-  engineModel           String?
-  fuelType              String?
-  gpsLastAt             DateTime?             @map("gps_last_at")
-  gpsLastLatitude       Float?                @map("gps_last_latitude")
-  gpsLastLongitude      Float?                @map("gps_last_longitude")
-  lastTelemetryAt       DateTime?             @map("last_telemetry_at")
-  manufacturer          String?
-  registrationNumber    String?               @map("registration_number")
-  status                VehicleStatus         @default(OFFLINE)
-  vehicleName           String?               @map("vehicle_name")
-  isPartialDecode       Boolean               @default(false) @map("is_partial_decode")
-  vinConfidence         String?               @map("vin_confidence")
-  vinCountry            String?               @map("vin_country")
-  vinDecodeSource       String?               @map("vin_decode_source")
-  vinDecodeType         String?               @map("vin_decode_type")
-  batteryProtectionMode String?               @map("battery_protection_mode")
-  engineState           String?               @map("engine_state")
-  ignitionStatus        String?               @map("ignition_status")
-  lastEngineOffAt       DateTime?             @map("last_engine_off_at")
-  lastEngineOnAt        DateTime?             @map("last_engine_on_at")
-  lastStandbyAt         DateTime?             @map("last_standby_at")
-  obdPollingActive      Boolean?              @map("obd_polling_active")
-  alerts                Alert[]
-  behaviorEvents        DriverBehaviorEvent[]
-  driverScores          DriverScore[]
-  dtcCodes              DtcCode[]
-  ecuSessions           EcuSession[]
-  fuelHistory           FuelHistory[]
-  fuelLogs              FuelLog[]
-  geofenceEvents        GeofenceEvent[]
-  gpsLocation           GpsLocation?
-  maintenanceLogs       MaintenanceLog[]
-  obdDevices            OBDDevice[]
-  liveData              ObdLiveData[]
-  rawBackups            ObdRawBackup[]
-  reports               Report[]
-  serviceHistory        ServiceHistory[]
-  telematicsDevice      TelematicsDevice?
-  telemetries           Telemetry[]
-  trips                 TripLog[]
-  connections           VehicleConnection[]
-  liveState             VehicleLiveState?
-  company               Company?              @relation(fields: [companyId], references: [id])
-  user                  User                  @relation(fields: [userId], references: [id])
-  workOrders            WorkOrder[]           @relation("VehicleWorkOrders")
+  id                          String                        @id @default(uuid())
+  userId                      String                        @map("user_id")
+  vin                         String?
+  plateNumber                 String?                       @map("plate_number")
+  make                        String?
+  model                       String?
+  year                        Int?
+  odometer                    Float                         @default(0)
+  obdDeviceId                 String?                       @map("obd_device_id")
+  deletedAt                   DateTime?                     @map("deleted_at")
+  createdAt                   DateTime                      @default(now()) @map("created_at")
+  updatedAt                   DateTime                      @updatedAt @map("updated_at")
+  lastObdAt                   DateTime?                     @map("last_obd_at")
+  telemetryOnline             Boolean                       @default(false) @map("telemetry_online")
+  companyId                   String?                       @map("company_id")
+  milOn                       Boolean?                      @map("mil_on")
+  readinessMonitors           Json?                         @map("readiness_monitors")
+  engineHoursObd              Float?                        @map("engine_hours_obd")
+  bodyClass                   String?
+  engineModel                 String?
+  fuelType                    String?
+  gpsLastAt                   DateTime?                     @map("gps_last_at")
+  gpsLastLatitude             Float?                        @map("gps_last_latitude")
+  gpsLastLongitude            Float?                        @map("gps_last_longitude")
+  lastTelemetryAt             DateTime?                     @map("last_telemetry_at")
+  manufacturer                String?
+  registrationNumber          String?                       @map("registration_number")
+  status                      VehicleStatus                 @default(OFFLINE)
+  vehicleName                 String?                       @map("vehicle_name")
+  isPartialDecode             Boolean                       @default(false) @map("is_partial_decode")
+  vinConfidence               String?                       @map("vin_confidence")
+  vinCountry                  String?                       @map("vin_country")
+  vinDecodeSource             String?                       @map("vin_decode_source")
+  vinDecodeType               String?                       @map("vin_decode_type")
+  batteryProtectionMode       String?                       @map("battery_protection_mode")
+  engineState                 String?                       @map("engine_state")
+  ignitionStatus              String?                       @map("ignition_status")
+  lastEngineOffAt             DateTime?                     @map("last_engine_off_at")
+  lastEngineOnAt              DateTime?                     @map("last_engine_on_at")
+  lastStandbyAt               DateTime?                     @map("last_standby_at")
+  obdPollingActive            Boolean?                      @map("obd_polling_active")
+  alerts                      Alert[]
+  behaviorEvents              DriverBehaviorEvent[]
+  driverScores                DriverScore[]
+  dtcCodes                    DtcCode[]
+  ecuSessions                 EcuSession[]
+  fuelHistory                 FuelHistory[]
+  fuelLogs                    FuelLog[]
+  geofenceEvents              GeofenceEvent[]
+  gpsLocation                 GpsLocation?
+  maintenanceLogs             MaintenanceLog[]
+  obdDevices                  OBDDevice[]
+  liveData                    ObdLiveData[]
+  rawBackups                  ObdRawBackup[]
+  reports                     Report[]
+  serviceHistory              ServiceHistory[]
+  telematicsDevice            TelematicsDevice?
+  telemetries                 Telemetry[]
+  trips                       TripLog[]
+  connections                 VehicleConnection[]
+  liveState                   VehicleLiveState?
+  company                     Company?                      @relation(fields: [companyId], references: [id])
+  user                        User                          @relation(fields: [userId], references: [id])
+  workOrders                  WorkOrder[]                   @relation("VehicleWorkOrders")
+  AiReceptionistSupportTicket AiReceptionistSupportTicket[]
 
   @@index([userId])
   @@index([companyId])
@@ -673,6 +681,227 @@ model AiAuditLog {
   @@map("ai_audit_logs")
 }
 
+// ──────────────────────────────────────────────
+// AI Receptionist — Customer Profile & CRM
+// ──────────────────────────────────────────────
+
+model ReceptionistCustomer {
+  id                String                     @id @default(uuid())
+  userId            String                     @map("user_id")
+  companyId         String?                    @map("company_id")
+  phone             String?                    @unique @map("phone")
+  email             String?                    @map("email")
+  name              String                     @map("name")
+  companyName       String?                    @map("company_name")
+  fleetSize         Int?                       @map("fleet_size")
+  status            CustomerStatus             @default(LEAD)
+  leadScore         Int                        @default(0) @map("lead_score")
+  salesStage        SalesStage                 @default(LEAD)
+  lifetimeValue     Float                      @default(0) @map("lifetime_value")
+  totalCalls        Int                        @default(0) @map("total_calls")
+  totalAppointments Int                        @default(0) @map("total_appointments")
+  totalTickets      Int                        @default(0) @map("total_tickets")
+  lastContactAt     DateTime?                  @map("last_contact_at")
+  preferredTime     String?                    @map("preferred_time")
+  preferredDate     String?                    @map("preferred_date")
+  lastSummary       String?                    @map("last_summary")
+  lastIntent        String?                    @map("last_intent")
+  sentimentHistory  Json                       @default("[]") @map("sentiment_history")
+  tags              Json                       @default("[]")
+  metadata          Json                       @default("{}")
+  createdAt         DateTime                   @default(now()) @map("created_at")
+  updatedAt         DateTime                   @updatedAt @map("updated_at")
+  user              User                       @relation(fields: [userId], references: [id])
+  calls             AiReceptionistCall[]
+  notes             ReceptionistCustomerNote[]
+
+  @@index([userId])
+  @@index([companyId])
+  @@index([status])
+  @@index([leadScore(sort: Desc)])
+  @@index([phone])
+  @@index([email])
+  @@map("receptionist_customers")
+}
+
+model ReceptionistCustomerNote {
+  id         String               @id @default(uuid())
+  customerId String               @map("customer_id")
+  userId     String               @map("user_id")
+  content    String
+  type       NoteType             @default(GENERAL)
+  createdAt  DateTime             @default(now()) @map("created_at")
+  customer   ReceptionistCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  user       User                 @relation(fields: [userId], references: [id])
+
+  @@index([customerId, createdAt(sort: Desc)])
+  @@map("receptionist_customer_notes")
+}
+
+model AiReceptionistAuditLog {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  eventType String   @map("event_type")
+  metadata  Json     @default("{}")
+  ipAddress String?  @map("ip_address")
+  userAgent String?  @map("user_agent")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([eventType])
+  @@map("ai_receptionist_audit_logs")
+}
+
+// ──────────────────────────────────────────────
+// AI Receptionist Core Models
+// ──────────────────────────────────────────────
+
+model AiReceptionistCall {
+  id              String                       @id @default(uuid())
+  userId          String                       @map("user_id")
+  companyId       String?                      @map("company_id")
+  customerId      String?                      @map("customer_id")
+  callerName      String                       @map("caller_name")
+  callerPhone     String?                      @map("caller_phone")
+  callerEmail     String?                      @map("caller_email")
+  companyName     String?                      @map("company_name")
+  fleetSize       Int?                         @map("fleet_size")
+  callType        CallType                     @default(OTHER)
+  callStatus      CallStatus                   @default(NEW)
+  callStartedAt   DateTime                     @default(now()) @map("call_started_at")
+  callEndedAt     DateTime?                    @map("call_ended_at")
+  durationSeconds Int?                         @map("duration_seconds")
+  transcript      String?                      @default("")
+  summary         String?                      @default("")
+  sentiment       String?                      @default("neutral")
+  actionItems     Json                         @default("[]")
+  extractedData   Json                         @default("{}")
+  appointmentId   String?                      @map("appointment_id")
+  supportTicketId String?                      @map("support_ticket_id")
+  // ── Twilio / Recording ──
+  twilioCallSid   String?                      @unique @map("twilio_call_sid")
+  twilioAccountSid String?                     @map("twilio_account_sid")
+  twilioFrom      String?                      @map("twilio_from")
+  twilioTo        String?                      @map("twilio_to")
+  recordingUrl    String?                      @map("recording_url")
+  recordingDuration Int?                       @map("recording_duration")
+  // ── Handoff ──
+  escalatedAt     DateTime?                    @map("escalated_at")
+  handoffReason   String?                      @map("handoff_reason")
+  handoffTo       String?                      @map("handoff_to")
+  // ── Analytics ──
+  detectedLanguage String?                     @default("en") @map("detected_language")
+  aiConfidence    Float?                       @map("ai_confidence")
+  createdAt       DateTime                     @default(now()) @map("created_at")
+  updatedAt       DateTime                     @updatedAt @map("updated_at")
+  user            User                         @relation(fields: [userId], references: [id])
+  customer        ReceptionistCustomer?        @relation(fields: [customerId], references: [id])
+  appointment     AiReceptionistAppointment?   @relation("CallAppointment", fields: [appointmentId], references: [id])
+  supportTicket   AiReceptionistSupportTicket? @relation("CallSupportTicket", fields: [supportTicketId], references: [id])
+
+  @@index([userId])
+  @@index([companyId])
+  @@index([callStatus])
+  @@index([callType])
+  @@index([callStartedAt(sort: Desc)])
+  @@index([twilioCallSid])
+  @@index([detectedLanguage])
+  @@index([aiConfidence])
+  @@map("ai_receptionist_calls")
+}
+
+model AiReceptionistAppointment {
+  id               String               @id @default(uuid())
+  userId           String               @map("user_id")
+  companyId        String?              @map("company_id")
+  callerName       String               @map("caller_name")
+  callerPhone      String?              @map("caller_phone")
+  callerEmail      String?              @map("caller_email")
+  companyName      String?              @map("company_name")
+  fleetSize        Int?                 @map("fleet_size")
+  meetingTitle     String               @default("Scheduled Meeting") @map("meeting_title")
+  meetingPurpose   String?              @map("meeting_purpose")
+  scheduledDate    DateTime             @map("scheduled_date")
+  durationMinutes  Int                  @default(30) @map("duration_minutes")
+  status           AppointmentStatus    @default(SCHEDULED)
+  calendarProvider String               @default("internal") @map("calendar_provider")
+  calendarEventId  String?              @map("calendar_event_id")
+  meetingLink      String?              @map("meeting_link")
+  notes            String?              @default("")
+  assignedTo       String?              @map("assigned_to")
+  createdAt        DateTime             @default(now()) @map("created_at")
+  updatedAt        DateTime             @updatedAt @map("updated_at")
+  user             User                 @relation(fields: [userId], references: [id])
+  calls            AiReceptionistCall[] @relation("CallAppointment")
+
+  @@index([userId])
+  @@index([companyId])
+  @@index([status])
+  @@index([scheduledDate])
+  @@map("ai_receptionist_appointments")
+}
+
+model AiReceptionistSupportTicket {
+  id               String               @id @default(uuid())
+  userId           String               @map("user_id")
+  companyId        String?              @map("company_id")
+  callerName       String               @map("caller_name")
+  callerPhone      String?              @map("caller_phone")
+  callerEmail      String?              @map("caller_email")
+  companyName      String?              @map("company_name")
+  issueTitle       String               @map("issue_title")
+  issueDescription String?              @map("issue_description")
+  urgency          UrgencyLevel         @default(MEDIUM)
+  status           SupportTicketStatus  @default(OPEN)
+  assignedTo       String?              @map("assigned_to")
+  relatedVehicleId String?              @map("related_vehicle_id")
+  createdAt        DateTime             @default(now()) @map("created_at")
+  updatedAt        DateTime             @updatedAt @map("updated_at")
+  user             User                 @relation(fields: [userId], references: [id])
+  calls            AiReceptionistCall[] @relation("CallSupportTicket")
+  relatedVehicle   Vehicle?             @relation(fields: [relatedVehicleId], references: [id])
+
+  @@index([userId])
+  @@index([companyId])
+  @@index([status])
+  @@index([urgency])
+  @@map("ai_receptionist_support_tickets")
+}
+
+model AiReceptionistConfig {
+  id                  String   @id @default(uuid())
+  userId              String   @unique @map("user_id")
+  companyId           String?  @map("company_id")
+  businessName        String   @default("My Business") @map("business_name")
+  greetingMessage     String   @default("Hello! Thank you for calling FleetNimble. How can I assist you today?") @map("greeting_message")
+  workingHours        Json     @default("{\"monday\":{\"start\":\"09:00\",\"end\":\"17:00\"},\"tuesday\":{\"start\":\"09:00\",\"end\":\"17:00\"},\"wednesday\":{\"start\":\"09:00\",\"end\":\"17:00\"},\"thursday\":{\"start\":\"09:00\",\"end\":\"17:00\"},\"friday\":{\"start\":\"09:00\",\"end\":\"17:00\"},\"saturday\":{\"start\":null,\"end\":null},\"sunday\":{\"start\":null,\"end\":null}}") @map("working_hours")
+  timezone            String   @default("UTC") @map("timezone")
+  language            String   @default("en") @map("language")
+  voiceId             String?  @default("alloy") @map("voice_id")
+  escalationPhone     String?  @map("escalation_phone")
+  escalationEmail     String?  @map("escalation_email")
+  appointmentDuration Int      @default(30) @map("appointment_duration")
+  departmentRouting   Json     @default("{\"sales\":{\"enabled\":true},\"support\":{\"enabled\":true},\"technical\":{\"enabled\":true}}") @map("department_routing")
+  selfServiceEnabled  Boolean  @default(true) @map("self_service_enabled")
+  maxCallDuration     Int      @default(600) @map("max_call_duration")
+  holidayCalendar     Json     @default("[]") @map("holiday_calendar")
+  workingDays         Json     @default("[\"monday\",\"tuesday\",\"wednesday\",\"thursday\",\"friday\"]") @map("working_days")
+  afterHoursMessage   String?  @default("Thank you for calling. Our business hours are Monday to Friday, 9 AM to 5 PM. Please leave a message and we will get back to you.") @map("after_hours_message")
+  // ── Handoff numbers ──
+  salesHandoffNumber    String? @map("sales_handoff_number")
+  supportHandoffNumber  String? @map("support_handoff_number")
+  emergencyHandoffNumber String? @map("emergency_handoff_number")
+  afterHoursBehavior    String  @default("voicemail") @map("after_hours_behavior")
+  enabled             Boolean  @default(true)
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@map("ai_receptionist_configs")
+}
+
 enum RoleName {
   ADMIN
   MANAGER
@@ -738,4 +967,73 @@ enum BehaviorEventType {
 enum DtcStatus {
   CONFIRMED
   PENDING
+}
+
+enum CallType {
+  DEMO
+  SUPPORT
+  PRICING
+  ONBOARDING
+  COMPLAINT
+  EMERGENCY
+  GENERAL
+  OTHER
+}
+
+enum CallStatus {
+  NEW
+  IN_PROGRESS
+  COMPLETED
+  ESCALATED
+  FAILED
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum UrgencyLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum CustomerStatus {
+  LEAD
+  PROSPECT
+  CUSTOMER
+  PARTNER
+  ENTERPRISE
+  CHURNED
+}
+
+enum SalesStage {
+  LEAD
+  QUALIFIED
+  DEMO
+  PROPOSAL
+  NEGOTIATION
+  CLOSED_WON
+  CLOSED_LOST
+}
+
+enum NoteType {
+  GENERAL
+  CALL
+  MEETING
+  SUPPORT
+  FOLLOW_UP
+  SYSTEM
 }

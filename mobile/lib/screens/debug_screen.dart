@@ -5,7 +5,7 @@ import '../services/obd_service.dart';
 import '../utils/config.dart';
 
 class DebugScreen extends StatefulWidget {
-  const DebugScreen({Key? key}) : super(key: key);
+  const DebugScreen({super.key});
 
   @override
   State<DebugScreen> createState() => _DebugScreenState();
@@ -129,7 +129,7 @@ class _DebugScreenState extends State<DebugScreen> {
             // Backend Configuration
             _buildSection('Backend Configuration', [
               _buildRow('Backend URL', AppConfig.apiBaseUrl),
-              _buildRow('Socket URL', AppConfig.socketUrl ?? 'Same as API'),
+              _buildRow('Socket URL', AppConfig.socketUrl),
               _buildRow('Use Fixed Vehicle ID', 
                   AppConfig.useFixedFleetVehicleId ? '⚠️ YES (Testing)' : '✅ NO (Production)'),
               if (AppConfig.useFixedFleetVehicleId)

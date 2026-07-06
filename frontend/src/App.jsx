@@ -20,6 +20,7 @@ import Admin from './pages/Admin';
 import LiveOBD from './pages/LiveOBD';
 import GpsTracking from './pages/GpsTracking';
 import AIAssistant from './pages/AIAssistant';
+import AIReceptionist from './pages/AIReceptionist';
 export default function App() {
   return (
     <Routes>
@@ -47,6 +48,7 @@ export default function App() {
           <Route path="/demo/settings" element={<Settings />} />
           <Route path="/demo/admin" element={<Admin />} />
           <Route path="/demo/ai-assistant" element={<AIAssistant />} />
+          <Route path="/demo/ai-receptionist" element={<AIReceptionist />} />
 
           {/* Live Analysis routes */}
           <Route path="/analysis" element={<Dashboard />} />
@@ -65,6 +67,7 @@ export default function App() {
           <Route path="/analysis/settings" element={<Settings />} />
           <Route path="/analysis/admin" element={<Admin />} />
           <Route path="/analysis/ai-assistant" element={<AIAssistant />} />
+          <Route path="/analysis/ai-receptionist" element={<AIReceptionist />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

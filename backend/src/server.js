@@ -1,4 +1,5 @@
 import http from 'http';
+import WebSocket from 'ws';
 import { Server } from 'socket.io';
 import app from './app.js';
 import { config } from './config/index.js';
@@ -8,6 +9,7 @@ import { startCronJobs } from './cron/index.js';
 import { socketCorsOrigin } from './utils/corsOrigins.js';
 import { startMqttConsumer, stopMqttConsumer } from './mqtt/consumer.js';
 import { verifyAIServiceStartup } from './services/aiService.js';
+import { handleMediaStream } from './services/mediaStreamHandler.js';
 
 const server = http.createServer(app);
 
@@ -28,6 +30,23 @@ startCronJobs(app);
 
 startMqttConsumer(io).catch((err) => {
   logger.error('MQTT consumer failed to start', { err: err.message });
+});
+
+// ── Twilio Media Stream WebSocket server ──
+const wss = new WebSocket.Server({ noServer: true });
+
+wss.on('connection', handleMediaStream);
+
+server.on('upgrade', (request, socket, head) => {
+  const pathname = new URL(request.url, `http://localhost`).pathname;
+
+  if (pathname === '/api/ai-receptionist/twilio/media-stream') {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
 });
 
 const host = process.env.HOST || '0.0.0.0';
@@ -58,7 +77,25 @@ server.listen(config.port, host, async () => {
   logger.info('Digital twin auto-creation disabled');
 });
 
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
+  logger.info('SHUTDOWN_INITIATED');
   stopMqttConsumer();
-  server.close(() => process.exit(0));
+
+  try {
+    const { cleanupStaleSessions } = await import('./services/receptionistRealtime.service.js');
+    const { flushPendingTranscripts } = await import('./services/receptionistTranscript.service.js');
+    cleanupStaleSessions(0);
+    await flushPendingTranscripts();
+  } catch { }
+
+  wss.close(() => {
+    logger.info('WEBSOCKET_SERVER_CLOSED');
+  });
+
+  server.close(() => {
+    logger.info('HTTP_SERVER_CLOSED');
+    process.exit(0);
+  });
+
+  setTimeout(() => process.exit(0), 5000);
 });

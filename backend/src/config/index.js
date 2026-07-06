@@ -31,4 +31,15 @@ export const config = {
     maxRetries: parseInt(process.env.MQTT_MAX_RETRIES || '5', 10),
     deadLetterBatchSize: parseInt(process.env.MQTT_DLQ_BATCH_SIZE || '25', 10),
   },
+  twilio: {
+    accountSid: process.env.TWILIO_ACCOUNT_SID || '',
+    authToken: process.env.TWILIO_AUTH_TOKEN || '',
+    phoneNumber: process.env.TWILIO_PHONE_NUMBER || '',
+  },
+  openai: {
+    apiKey: process.env.OPENAI_API_KEY || '',
+    voice: process.env.AI_RECEPTIONIST_VOICE || 'alloy',
+    model: process.env.AI_RECEPTIONIST_MODEL || 'gpt-4o-realtime-preview',
+  },
+  publicUrl: process.env.PUBLIC_BACKEND_URL || 'http://localhost:5000',
 };

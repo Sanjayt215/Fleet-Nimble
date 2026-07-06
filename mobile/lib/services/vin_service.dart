@@ -1,5 +1,6 @@
+// ignore_for_file: avoid_print
+
 import 'dart:async';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'obd_service.dart';
 
 /// Service for reading and validating VIN from OBD
