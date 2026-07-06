@@ -13,6 +13,12 @@ import {
 } from '../schemas/receptionist.schema.js';
 
 const router = Router();
+
+// Public health check (no auth required)
+router.get('/health', (_req, res) => {
+  res.json({ status: 'ok', module: 'ai-receptionist' });
+});
+
 router.use(authenticate);
 
 router.get('/summary', ctrl.getSummary);

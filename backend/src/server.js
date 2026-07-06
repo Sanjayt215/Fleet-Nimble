@@ -75,6 +75,8 @@ server.listen(config.port, host, async () => {
   }
 
   logger.info('Digital twin auto-creation disabled');
+  logger.info('AI Receptionist routes registered at /api/ai-receptionist');
+  logger.info('Twilio media stream WebSocket at /api/ai-receptionist/twilio/media-stream');
 });
 
 process.on('SIGTERM', async () => {
