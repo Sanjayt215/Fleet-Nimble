@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 export default function Login() {
@@ -9,6 +9,14 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const expired = searchParams.get('expired');
+
+  useEffect(() => {
+    if (expired) {
+      setError('Session expired. Please sign in again.');
+    }
+  }, [expired]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();

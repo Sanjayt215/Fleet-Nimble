@@ -10,10 +10,12 @@ export default function LiveCallsPanel({ showToast }) {
 
   const fetchLiveCalls = useCallback(async () => {
     try {
+      setLoading(true);
       const res = await api.get('/ai-receptionist/live-calls');
       setActiveCalls(res.data.data.activeCalls || []);
     } catch (err) {
       console.error('Error fetching live calls:', err);
+      setActiveCalls([]);
     } finally {
       setLoading(false);
     }

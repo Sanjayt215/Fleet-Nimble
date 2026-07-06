@@ -13,6 +13,8 @@ export function getSocket() {
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
+      transports: ['websocket', 'polling'],
+      withCredentials: true,
       auth: { token: localStorage.getItem('accessToken') },
     });
   }

@@ -6,6 +6,7 @@ export const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   const loadProfile = useCallback(async () => {
     const token = localStorage.getItem('accessToken');
@@ -16,9 +17,11 @@ export function AuthProvider({ children }) {
     try {
       const { data } = await api.get('/auth/profile');
       setUser(data.data.user);
+      setSessionExpired(false);
     } catch {
       localStorage.removeItem('accessToken');
       localStorage.removeItem('refreshToken');
+      setSessionExpired(true);
     } finally {
       setLoading(false);
     }
@@ -30,27 +33,27 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const { data } = await api.post('/auth/login', { email, password });
-    // Support both response formats: data.accessToken OR data.data.accessToken
     const accessToken = data.accessToken || data.data?.accessToken;
     const refreshToken = data.refreshToken || data.data?.refreshToken;
-    const user = data.user || data.data?.user;
-    
+    const userData = data.user || data.data?.user;
+
     localStorage.setItem('accessToken', accessToken);
     localStorage.setItem('refreshToken', refreshToken);
-    setUser(user);
+    setUser(userData);
+    setSessionExpired(false);
     return data.data || data;
   };
 
   const register = async (name, email, password) => {
     const { data } = await api.post('/auth/register', { name, email, password });
-    // Support both response formats: data.accessToken OR data.data.accessToken
     const accessToken = data.accessToken || data.data?.accessToken;
     const refreshToken = data.refreshToken || data.data?.refreshToken;
-    const user = data.user || data.data?.user;
-    
+    const userData = data.user || data.data?.user;
+
     localStorage.setItem('accessToken', accessToken);
     localStorage.setItem('refreshToken', refreshToken);
-    setUser(user);
+    setUser(userData);
+    setSessionExpired(false);
     return data.data || data;
   };
 
@@ -64,10 +67,18 @@ export function AuthProvider({ children }) {
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
     setUser(null);
+    setSessionExpired(false);
   };
 
+  const clearSession = useCallback(() => {
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+    setUser(null);
+    setSessionExpired(true);
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, isAuthenticated: !!user }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, isAuthenticated: !!user, sessionExpired, clearSession }}>
       {children}
     </AuthContext.Provider>
   );

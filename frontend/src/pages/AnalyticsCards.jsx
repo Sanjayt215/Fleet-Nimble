@@ -16,6 +16,7 @@ export default function AnalyticsCards() {
       setAnalytics(res.data.data);
     } catch (err) {
       console.error('Error loading analytics:', err);
+      setAnalytics(null);
     } finally {
       setLoading(false);
     }

@@ -44,17 +44,22 @@ export default function AIReceptionist() {
     try {
       setLoading(true);
       setError(null);
-      const [summaryRes, callsRes, apptsRes, ticketsRes] = await Promise.all([
+      const [summaryRes, callsRes, apptsRes, ticketsRes] = await Promise.allSettled([
         api.get('/ai-receptionist/summary'),
         api.get('/ai-receptionist/calls?page=1&limit=10'),
         api.get('/ai-receptionist/appointments?limit=5'),
         api.get('/ai-receptionist/support-tickets?limit=5'),
       ]);
-      setSummary(summaryRes.data.data);
-      setCalls(callsRes.data.data.calls || []);
-      setCallTotalPages(callsRes.data.data.totalPages || 1);
-      setAppointments(apptsRes.data.data.appointments || []);
-      setTickets(ticketsRes.data.data.tickets || []);
+      if (summaryRes.status === 'fulfilled') setSummary(summaryRes.value.data.data);
+      else console.error('Summary fetch failed:', summaryRes.reason);
+      if (callsRes.status === 'fulfilled') {
+        setCalls(callsRes.value.data.data.calls || []);
+        setCallTotalPages(callsRes.value.data.data.totalPages || 1);
+      } else console.error('Calls fetch failed:', callsRes.reason);
+      if (apptsRes.status === 'fulfilled') setAppointments(apptsRes.value.data.data.appointments || []);
+      else console.error('Appointments fetch failed:', apptsRes.reason);
+      if (ticketsRes.status === 'fulfilled') setTickets(ticketsRes.value.data.data.tickets || []);
+      else console.error('Tickets fetch failed:', ticketsRes.reason);
     } catch (err) {
       console.error('Error fetching receptionist data:', err);
       setError('Failed to load AI Receptionist data. Please try again.');

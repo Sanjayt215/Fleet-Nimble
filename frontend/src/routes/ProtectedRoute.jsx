@@ -1,8 +1,9 @@
-import { Navigate, Outlet } from 'react-router-dom';
+import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 export default function ProtectedRoute({ roles }) {
-  const { user, loading, isAuthenticated } = useAuth();
+  const { user, loading, isAuthenticated, sessionExpired } = useAuth();
+  const location = useLocation();
 
   if (loading) {
     return (
@@ -12,7 +13,9 @@ export default function ProtectedRoute({ roles }) {
     );
   }
 
-  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (!isAuthenticated) {
+    return <Navigate to={sessionExpired ? '/login?expired=1' : '/login'} replace state={{ from: location }} />;
+  }
 
   if (roles?.length && !roles.includes(user?.role?.name)) {
     return <Navigate to="/dashboard" replace />;
