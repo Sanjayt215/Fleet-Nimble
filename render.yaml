@@ -5,6 +5,7 @@ services:
     plan: free
     region: oregon
     branch: main
+    rootDir: backend
     buildCommand: "npm ci && npx prisma generate"
     startCommand: "sh -lc 'npx prisma migrate deploy || true && npm run db:seed || true && npm run db:seed:phase2 || true && node src/server.js'"
     envVars:
@@ -30,11 +31,12 @@ services:
     plan: free
     region: oregon
     branch: main
+    rootDir: frontend
     buildCommand: "npm ci && npm run build"
     publishCommand: "npm run build"
-    publishPath: "frontend/dist"
+    publishPath: "dist"
     envVars:
       - key: VITE_API_URL
-        value: "https://api.your-domain.com/api"
+        value: "https://fleet-nimble.onrender.com/api"
       - key: VITE_SOCKET_URL
-        value: "https://api.your-domain.com"
+        value: "https://fleet-nimble.onrender.com"
