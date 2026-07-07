@@ -331,7 +331,13 @@ export async function simulateCall(req, res, next) {
 export async function startAgent(req, res, next) {
   try {
     const result = await agentService.startSession(req.userId);
-    res.json({ success: true, data: result });
+    res.json({
+      sessionId: result.sessionId,
+      greeting: result.reply,
+      status: 'started',
+      conversationStage: result.conversationStage,
+      suggestedReplies: result.suggestedReplies || [],
+    });
   } catch (err) { next(err); }
 }
 
@@ -339,13 +345,31 @@ export async function processAgentMessage(req, res, next) {
   try {
     const { sessionId, message, mode } = req.body;
     if (!sessionId || !message) {
-      return res.status(400).json({ success: false, error: 'sessionId and message are required' });
+      return res.status(400).json({
+        error: 'Validation failed',
+        message: 'sessionId and message are required',
+        details: [
+          { field: 'sessionId', message: !sessionId ? 'sessionId is required' : null },
+          { field: 'message', message: !message ? 'message is required' : null },
+        ].filter(d => d.message),
+      });
     }
     const result = await agentService.processMessage(sessionId, message, mode || 'text');
     if (result.error) {
-      return res.status(400).json({ success: false, error: result.reply });
+      return res.status(400).json({ error: 'Session error', message: result.reply });
     }
-    res.json({ success: true, data: result });
+    const response = {
+      sessionId: result.sessionId,
+      reply: result.reply,
+      conversationStage: result.conversationStage,
+      extractedData: result.extractedData || {},
+      missingFields: result.missingFields || [],
+      requiresConfirmation: !!result.requiresConfirmation,
+      pendingAction: result.pendingAction || null,
+      isComplete: !!result.isComplete,
+      suggestedReplies: result.suggestedReplies || [],
+    };
+    res.json(response);
   } catch (err) { next(err); }
 }
 
@@ -353,13 +377,24 @@ export async function confirmAgentAction(req, res, next) {
   try {
     const { sessionId, action } = req.body;
     if (!sessionId) {
-      return res.status(400).json({ success: false, error: 'sessionId is required' });
+      return res.status(400).json({ error: 'Validation failed', message: 'sessionId is required' });
     }
     const result = await agentService.confirmAction(sessionId, action);
     if (result.error) {
-      return res.status(400).json({ success: false, error: result.message });
+      return res.status(400).json({ error: 'Session error', message: result.message });
     }
-    res.json({ success: true, data: result });
+    const response = {
+      sessionId: result.sessionId,
+      reply: result.reply,
+      conversationStage: result.conversationStage,
+      extractedData: result.extractedData || {},
+      missingFields: result.missingFields || [],
+      requiresConfirmation: !!result.requiresConfirmation,
+      pendingAction: result.pendingAction || null,
+      isComplete: !!result.isComplete,
+      suggestedReplies: result.suggestedReplies || [],
+    };
+    res.json(response);
   } catch (err) { next(err); }
 }
 
@@ -367,10 +402,10 @@ export async function endAgent(req, res, next) {
   try {
     const { sessionId } = req.body;
     if (!sessionId) {
-      return res.status(400).json({ success: false, error: 'sessionId is required' });
+      return res.status(400).json({ error: 'Validation failed', message: 'sessionId is required' });
     }
     const result = agentService.endSession(sessionId);
-    res.json({ success: true, data: { ended: true, ...result } });
+    res.json({ ended: true, ...result });
   } catch (err) { next(err); }
 }
 

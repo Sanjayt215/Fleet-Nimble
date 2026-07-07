@@ -1,7 +1,12 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 
 export const AuthContext = createContext(null);
+
+function clearTokens() {
+  ['accessToken', 'refreshToken', 'token', 'authToken'].forEach(k => localStorage.removeItem(k));
+}
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -9,18 +14,20 @@ export function AuthProvider({ children }) {
   const [sessionExpired, setSessionExpired] = useState(false);
 
   const loadProfile = useCallback(async () => {
-    const token = localStorage.getItem('accessToken');
+    const token =
+      localStorage.getItem('token') ||
+      localStorage.getItem('accessToken') ||
+      localStorage.getItem('authToken');
     if (!token) {
       setLoading(false);
       return;
     }
     try {
       const { data } = await api.get('/auth/profile');
-      setUser(data.data.user);
+      setUser(data.data?.user || data.user);
       setSessionExpired(false);
     } catch {
-      localStorage.removeItem('accessToken');
-      localStorage.removeItem('refreshToken');
+      clearTokens();
       setSessionExpired(true);
     } finally {
       setLoading(false);
@@ -38,7 +45,8 @@ export function AuthProvider({ children }) {
     const userData = data.user || data.data?.user;
 
     localStorage.setItem('accessToken', accessToken);
-    localStorage.setItem('refreshToken', refreshToken);
+    localStorage.setItem('token', accessToken);
+    if (refreshToken) localStorage.setItem('refreshToken', refreshToken);
     setUser(userData);
     setSessionExpired(false);
     return data.data || data;
@@ -51,28 +59,25 @@ export function AuthProvider({ children }) {
     const userData = data.user || data.data?.user;
 
     localStorage.setItem('accessToken', accessToken);
-    localStorage.setItem('refreshToken', refreshToken);
+    localStorage.setItem('token', accessToken);
+    if (refreshToken) localStorage.setItem('refreshToken', refreshToken);
     setUser(userData);
     setSessionExpired(false);
     return data.data || data;
   };
 
   const logout = async () => {
-    const refreshToken = localStorage.getItem('refreshToken');
+    const rt = localStorage.getItem('refreshToken');
     try {
-      await api.post('/auth/logout', { refreshToken });
-    } catch {
-      /* ignore */
-    }
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
+      await api.post('/auth/logout', { refreshToken: rt });
+    } catch { /* ignore */ }
+    clearTokens();
     setUser(null);
     setSessionExpired(false);
   };
 
   const clearSession = useCallback(() => {
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
+    clearTokens();
     setUser(null);
     setSessionExpired(true);
   }, []);

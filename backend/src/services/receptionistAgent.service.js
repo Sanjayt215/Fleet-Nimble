@@ -48,32 +48,32 @@ function classifyIntent(message) {
     return 'emergency';
   }
 
-  const knowledgeAnswer = queryKnowledgeBase(message);
-  if (knowledgeAnswer) {
-    return INTENTS.PRODUCT_QUESTION;
-  }
-
-  if ((lower.includes('demo') || lower.includes('book')) && (lower.includes('schedule') || lower.includes('appointment') || lower.includes('meeting') || lower.includes('call'))) {
+  // Action intents must be checked before knowledge base (booking a demo != asking about demo)
+  if ((lower.includes('schedule') || lower.includes('book') || lower.includes('appointment'))) {
     return INTENTS.SCHEDULE_MEETING;
   }
-  if (lower.includes('demo') || (lower.includes('book') && !lower.includes('ticket'))) {
+  if (lower.includes('demo') && (lower.includes('book') || lower.includes('schedule') || lower.includes('want') || lower.includes('like to') || lower.includes('need'))) {
     return INTENTS.BOOK_DEMO;
   }
-  if (lower.includes('schedule') || lower.includes('appointment') || lower.includes('meeting')) {
-    return INTENTS.SCHEDULE_MEETING;
-  }
-  if (lower.includes('support') || (lower.includes('help') && !lower.includes('onboard'))) {
+  if (lower.includes('support') || lower.includes('ticket') || (lower.includes('help') && !lower.includes('onboard'))) {
     return INTENTS.SUPPORT_REQUEST;
   }
   if (lower.includes('issue') || lower.includes('problem') || lower.includes('broken') || lower.includes('not working') || lower.includes('error')) {
     return INTENTS.TECHNICAL_ISSUE;
   }
-  if (lower.includes('price') || lower.includes('pricing') || lower.includes('cost') || lower.includes('how much') || lower.includes('plan') || lower.includes('subscription') || lower.includes('package')) {
-    return INTENTS.PRICING_QUESTION;
-  }
   if (lower.includes('onboard') || lower.includes('setup') || lower.includes('getting started') || lower.includes('new to') || lower.includes('first time')) {
     return INTENTS.ONBOARDING_HELP;
   }
+  if (lower.includes('price') || lower.includes('pricing') || lower.includes('cost') || lower.includes('how much') || lower.includes('plan') || lower.includes('subscription') || lower.includes('package')) {
+    return INTENTS.PRICING_QUESTION;
+  }
+
+  // Knowledge base check for product questions (not action intents)
+  const knowledgeAnswer = queryKnowledgeBase(message);
+  if (knowledgeAnswer) {
+    return INTENTS.PRODUCT_QUESTION;
+  }
+
   if (lower.includes('how') || lower.includes('what') || lower.includes('where') || lower.includes('tell me') || lower.includes('explain') || lower.includes('can you') || lower.includes('wondering')) {
     return INTENTS.GENERAL_QUESTION;
   }

@@ -12,7 +12,10 @@ const api = axios.create({
 });
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('accessToken');
+  const token =
+    localStorage.getItem('token') ||
+    localStorage.getItem('accessToken') ||
+    localStorage.getItem('authToken');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -38,13 +41,11 @@ api.interceptors.response.use(
             return api(original);
           }
         } catch {
-          localStorage.removeItem('accessToken');
-          localStorage.removeItem('refreshToken');
+          ['accessToken', 'refreshToken', 'token', 'authToken'].forEach(k => localStorage.removeItem(k));
           window.location.href = '/login?expired=1';
         }
       } else {
-        localStorage.removeItem('accessToken');
-        localStorage.removeItem('refreshToken');
+        ['accessToken', 'refreshToken', 'token', 'authToken'].forEach(k => localStorage.removeItem(k));
         window.location.href = '/login?expired=1';
       }
     }

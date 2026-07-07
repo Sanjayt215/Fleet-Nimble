@@ -1,23 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import api from '../services/api';
 
-const STAGES = {
-  GREETING: 'greeting',
-  COLLECTING_NAME: 'collecting_name',
-  COLLECTING_COMPANY: 'collecting_company',
-  COLLECTING_CONTACT: 'collecting_contact',
-  COLLECTING_FLEET_SIZE: 'collecting_fleet_size',
-  COLLECTING_DATE: 'collecting_date',
-  COLLECTING_TIME: 'collecting_time',
-  COLLECTING_PURPOSE: 'collecting_purpose',
-  COLLECTING_ISSUE: 'collecting_issue',
-  SUMMARIZE_APPOINTMENT: 'summarize_appointment',
-  SUMMARIZE_SUPPORT: 'summarize_support',
-  AWAITING_CONFIRMATION: 'awaiting_confirmation',
-  COMPLETED: 'completed',
-  ANSWERING_QUESTION: 'answering_question',
-};
-
 export default function VoiceReceptionistAgent({ showToast }) {
   const [sessionId, setSessionId] = useState(null);
   const [stage, setStage] = useState('idle');
@@ -38,13 +21,11 @@ export default function VoiceReceptionistAgent({ showToast }) {
   const recognitionRef = useRef(null);
   const synthRef = useRef(window.speechSynthesis);
   const messagesEndRef = useRef(null);
-  const mediaRecorderRef = useRef(null);
-  const audioChunksRef = useRef([]);
 
   useEffect(() => {
-    const hasSpeechRecognition = 'SpeechRecognition' in window || 'webkitSpeechRecognition' in window;
-    const hasSpeechSynthesis = 'speechSynthesis' in window;
-    setVoiceSupported(hasSpeechRecognition && hasSpeechSynthesis);
+    const hasSR = 'SpeechRecognition' in window || 'webkitSpeechRecognition' in window;
+    const hasSS = 'speechSynthesis' in window;
+    setVoiceSupported(hasSR && hasSS);
   }, []);
 
   useEffect(() => {
@@ -52,6 +33,7 @@ export default function VoiceReceptionistAgent({ showToast }) {
   }, [messages, reply]);
 
   const addMessage = useCallback((role, content) => {
+    if (!content) return;
     setMessages(prev => [...prev, { role, content, timestamp: new Date().toISOString() }]);
   }, []);
 
@@ -59,7 +41,8 @@ export default function VoiceReceptionistAgent({ showToast }) {
     if (!synthRef.current || !text) return;
     setIsSpeaking(true);
     synthRef.current.cancel();
-    const utterance = new SpeechSynthesisUtterance(text.replace(/[#*`\[\]]/g, ''));
+    const clean = text.replace(/[*_`#\[\]]/g, '');
+    const utterance = new SpeechSynthesisUtterance(clean);
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
     utterance.volume = 1.0;
@@ -75,7 +58,7 @@ export default function VoiceReceptionistAgent({ showToast }) {
     }
   }, []);
 
-  const startSession = useCallback(async () => {
+  const startConversation = useCallback(async () => {
     try {
       cancelSpeech();
       setMessages([]);
@@ -89,100 +72,119 @@ export default function VoiceReceptionistAgent({ showToast }) {
       setStage('starting');
 
       const res = await api.post('/ai-receptionist/agent/start');
-      const data = res.data.data;
+      const data = res.data;
+
+      console.log('Agent start response:', data);
 
       setSessionId(data.sessionId);
-      setStage(data.conversationStage);
-      setReply(data.reply);
+      setStage(data.conversationStage || 'greeting');
+      setReply(data.greeting || '');
       setSuggestedReplies(data.suggestedReplies || []);
       setIsThinking(false);
 
-      addMessage('assistant', data.reply);
-      setTimeout(() => speakResponse(data.reply), 300);
+      addMessage('assistant', data.greeting);
+      setTimeout(() => speakResponse(data.greeting), 300);
     } catch (err) {
       console.error('Session start error:', err);
       setIsThinking(false);
       setStage('error');
-      setReply('I apologize, but I encountered an error starting the conversation. Please try again.');
-      showToast?.('Failed to start conversation', 'error');
+      const errMsg = err.response?.data?.error || err.response?.data?.message || 'Failed to start conversation. Please try again.';
+      setReply(errMsg);
+      showToast?.(errMsg, 'error');
     }
   }, [addMessage, speakResponse, cancelSpeech, showToast]);
 
-  const sendMessage = useCallback(async (message) => {
-    if (!sessionId || !message.trim() || isThinking) return;
+  const sendMessage = useCallback(async (text) => {
+    const trimmed = (text || '').trim();
+    if (!trimmed) {
+      showToast?.("I couldn't hear anything. Please try again.", 'error');
+      return;
+    }
+
+    let sid = sessionId;
+    if (!sid) {
+      console.log('No sessionId, starting conversation first...');
+      await startConversation();
+      sid = sessionId;
+      if (!sid) {
+        showToast?.('Failed to create session. Please try again.', 'error');
+        return;
+      }
+    }
+
+    if (isThinking) return;
     setIsThinking(true);
     cancelSpeech();
 
-    addMessage('user', message.trim());
+    addMessage('user', trimmed);
     setReply('');
 
-    try {
-      const res = await api.post('/ai-receptionist/agent/message', {
-        sessionId,
-        message: message.trim(),
-        mode: 'text',
-      });
+    const payload = { sessionId: sid, message: trimmed, mode: 'voice' };
+    console.log('Agent message payload:', payload);
 
-      const data = res.data.data;
-      setStage(data.conversationStage);
-      setReply(data.reply);
+    try {
+      const res = await api.post('/ai-receptionist/agent/message', payload);
+      const data = res.data;
+
+      console.log('Agent message response:', data);
+
+      setStage(data.conversationStage || '');
+      setReply(data.reply || '');
       setExtractedData(data.extractedData || {});
       setSuggestedReplies(data.suggestedReplies || []);
       setRequiresConfirmation(!!data.requiresConfirmation);
-      setPendingAction(data.pendingAction);
+      setPendingAction(data.pendingAction || null);
       setIsComplete(!!data.isComplete);
       setIsThinking(false);
 
-      addMessage('assistant', data.reply);
-
-      if (data.isComplete) {
-        setTimeout(() => speakResponse(data.reply), 300);
-      } else {
+      if (data.reply) {
+        addMessage('assistant', data.reply);
         setTimeout(() => speakResponse(data.reply), 300);
       }
     } catch (err) {
       console.error('Message error:', err);
       setIsThinking(false);
-      const errMsg = err.response?.data?.error || 'I apologize, but I encountered an error. Please try again.';
+      const errMsg = err.response?.data?.message || err.response?.data?.error || 'I encountered an error. Please try again.';
       setReply(errMsg);
       addMessage('assistant', errMsg);
     }
-  }, [sessionId, isThinking, addMessage, cancelSpeech, showToast]);
+  }, [sessionId, isThinking, addMessage, cancelSpeech, showToast, startConversation]);
 
   const sendConfirmation = useCallback(async (confirmed) => {
     if (!sessionId || isThinking) return;
     setIsThinking(true);
     cancelSpeech();
 
-    addMessage('user', confirmed ? 'Yes, please proceed' : 'No, let me change something');
+    const msg = confirmed ? 'Yes, please proceed' : 'No, let me change something';
+    addMessage('user', msg);
 
     try {
       const res = await api.post('/ai-receptionist/agent/confirm', {
         sessionId,
         action: confirmed ? pendingAction : null,
       });
+      const data = res.data;
 
-      const data = res.data.data;
-      setStage(data.conversationStage);
-      setReply(data.reply);
+      console.log('Agent confirm response:', data);
+
+      setStage(data.conversationStage || '');
+      setReply(data.reply || '');
       setExtractedData(data.extractedData || {});
       setSuggestedReplies(data.suggestedReplies || []);
       setRequiresConfirmation(!!data.requiresConfirmation);
-      setPendingAction(data.pendingAction);
+      setPendingAction(data.pendingAction || null);
       setIsComplete(!!data.isComplete);
       setIsThinking(false);
 
-      addMessage('assistant', data.reply);
-
-      if (data.isComplete) {
-        showToast?.('Action completed successfully!', 'success');
+      if (data.reply) {
+        addMessage('assistant', data.reply);
+        if (data.isComplete) showToast?.('Action completed successfully!', 'success');
+        setTimeout(() => speakResponse(data.reply), 300);
       }
-
-      setTimeout(() => speakResponse(data.reply), 300);
     } catch (err) {
       console.error('Confirmation error:', err);
       setIsThinking(false);
-      const errMsg = err.response?.data?.error || 'I encountered an error processing your confirmation. Please try again.';
+      const errMsg = err.response?.data?.message || 'I encountered an error processing your confirmation. Please try again.';
       setReply(errMsg);
       addMessage('assistant', errMsg);
     }
@@ -207,19 +209,21 @@ export default function VoiceReceptionistAgent({ showToast }) {
       recognition.interimResults = true;
       recognition.lang = 'en-US';
 
-      recognition.onstart = () => {
-        setIsListening(true);
-      };
+      recognition.onstart = () => setIsListening(true);
 
       recognition.onresult = (event) => {
-        const transcript = Array.from(event.results)
-          .map(result => result[0].transcript)
-          .join('');
-
-        if (event.results[event.results.length - 1].isFinal) {
+        const results = event.results;
+        const last = results[results.length - 1];
+        if (last.isFinal) {
+          const transcript = Array.from(results).map(r => r[0].transcript).join(' ').trim();
           setIsListening(false);
           recognition.stop();
-          sendMessage(transcript);
+          if (transcript) {
+            sendMessage(transcript);
+          } else {
+            showToast?.("I couldn't hear anything. Please try again.", 'error');
+            setIsListening(false);
+          }
         }
       };
 
@@ -229,14 +233,14 @@ export default function VoiceReceptionistAgent({ showToast }) {
         if (event.error === 'not-allowed') {
           setMicPermission('denied');
           showToast?.('Microphone access denied. Please use text input.', 'error');
+        } else if (event.error === 'no-speech') {
+          showToast?.('No speech detected. Please try again.', 'error');
         } else {
           showToast?.('Could not hear clearly. Please try again or use text.', 'error');
         }
       };
 
-      recognition.onend = () => {
-        setIsListening(false);
-      };
+      recognition.onend = () => setIsListening(false);
 
       recognition.start();
     } catch (err) {
@@ -253,9 +257,7 @@ export default function VoiceReceptionistAgent({ showToast }) {
     setTextInput('');
   };
 
-  const handleSuggestedReply = (reply) => {
-    sendMessage(reply);
-  };
+  const handleSuggestedReply = (reply) => sendMessage(reply);
 
   const handleEndSession = async () => {
     cancelSpeech();
@@ -270,6 +272,7 @@ export default function VoiceReceptionistAgent({ showToast }) {
     setReply('');
     setExtractedData({});
     setIsComplete(false);
+    setSuggestedReplies([]);
   };
 
   if (stage === 'idle') {
@@ -285,7 +288,7 @@ export default function VoiceReceptionistAgent({ showToast }) {
           Voice-first receptionist that speaks with customers, answers FleetNimble questions, collects details, and schedules appointments automatically.
         </p>
         <button
-          onClick={startSession}
+          onClick={startConversation}
           className="flex items-center gap-3 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 px-8 py-4 text-lg font-semibold text-white shadow-lg shadow-cyan-500/25 hover:from-cyan-500 hover:to-blue-500 transition-all"
         >
           <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -304,7 +307,6 @@ export default function VoiceReceptionistAgent({ showToast }) {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className={`h-3 w-3 rounded-full ${isListening ? 'bg-green-500 animate-pulse' : isSpeaking ? 'bg-cyan-500 animate-pulse' : isThinking ? 'bg-amber-500 animate-pulse' : 'bg-slate-500'}`} />
@@ -317,10 +319,9 @@ export default function VoiceReceptionistAgent({ showToast }) {
         </button>
       </div>
 
-      {/* Voice Button */}
       <div className="flex justify-center py-4">
         <button
-          onClick={isListening ? () => {} : startVoiceInput}
+          onClick={isListening ? undefined : startVoiceInput}
           disabled={isThinking || isComplete}
           className={`rounded-full p-6 transition-all ${
             isListening
@@ -334,25 +335,19 @@ export default function VoiceReceptionistAgent({ showToast }) {
         </button>
       </div>
 
-      {/* Main Reply */}
       {reply && (
         <div className="card border border-cyan-800/40 bg-slate-800/80">
-          <p className="text-sm text-slate-100 leading-relaxed whitespace-pre-line">
-            {reply}
-          </p>
+          <p className="text-sm text-slate-100 leading-relaxed whitespace-pre-line">{reply}</p>
         </div>
       )}
 
-      {/* Messages History */}
       {messages.length > 1 && (
         <div className="max-h-48 overflow-y-auto space-y-2 rounded-lg border border-slate-700 bg-slate-900/50 p-3">
           <p className="text-xs font-medium text-slate-500 mb-2">Conversation History</p>
           {messages.map((msg, i) => (
             <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[85%] rounded-xl px-3 py-2 text-xs ${
-                msg.role === 'user'
-                  ? 'bg-cyan-600/30 text-cyan-200'
-                  : 'bg-slate-700/50 text-slate-300'
+                msg.role === 'user' ? 'bg-cyan-600/30 text-cyan-200' : 'bg-slate-700/50 text-slate-300'
               }`}>
                 {msg.content?.substring(0, 200)}
               </div>
@@ -362,7 +357,6 @@ export default function VoiceReceptionistAgent({ showToast }) {
         </div>
       )}
 
-      {/* Extracted Details */}
       {Object.keys(extractedData).some(k => extractedData[k]) && (
         <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-3">
           <p className="mb-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wider">Collected Details</p>
@@ -381,7 +375,6 @@ export default function VoiceReceptionistAgent({ showToast }) {
         </div>
       )}
 
-      {/* Confirmation */}
       {requiresConfirmation && (
         <div className="flex justify-center gap-4">
           <button
@@ -401,7 +394,6 @@ export default function VoiceReceptionistAgent({ showToast }) {
         </div>
       )}
 
-      {/* Suggested Replies */}
       {suggestedReplies.length > 0 && !requiresConfirmation && (
         <div className="flex flex-wrap gap-2 justify-center">
           {suggestedReplies.map((suggestion, i) => (
@@ -417,7 +409,6 @@ export default function VoiceReceptionistAgent({ showToast }) {
         </div>
       )}
 
-      {/* Thinking Indicator */}
       {isThinking && (
         <div className="flex justify-center py-2">
           <div className="flex space-x-2">
@@ -428,7 +419,6 @@ export default function VoiceReceptionistAgent({ showToast }) {
         </div>
       )}
 
-      {/* Text Input Fallback */}
       <form onSubmit={handleTextSubmit} className="flex gap-2">
         <input
           type="text"
@@ -447,11 +437,10 @@ export default function VoiceReceptionistAgent({ showToast }) {
         </button>
       </form>
 
-      {/* New Conversation After Complete */}
       {isComplete && (
         <div className="flex justify-center pt-2">
           <button
-            onClick={startSession}
+            onClick={startConversation}
             className="rounded-lg bg-cyan-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-cyan-500 transition-colors"
           >
             Start New Conversation
@@ -459,11 +448,8 @@ export default function VoiceReceptionistAgent({ showToast }) {
         </div>
       )}
 
-      {/* Voice Support Notice */}
       {!voiceSupported && (
-        <p className="text-center text-xs text-amber-400">
-          Voice input not supported. Please use text input.
-        </p>
+        <p className="text-center text-xs text-amber-400">Voice input not supported. Please use text input.</p>
       )}
     </div>
   );
