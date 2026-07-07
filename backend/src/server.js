@@ -70,6 +70,17 @@ server.on('error', (err) => {
   process.exit(1);
 });
 
+setInterval(async () => {
+  const { cleanupStaleSessions } = await import('./services/receptionistAgent.service.js');
+  const count = cleanupStaleSessions(1800000);
+  if (count > 0) logger.info('STALE_AGENT_SESSIONS_CLEANED', { count });
+}, 600000);
+
+setInterval(async () => {
+  const { cleanupStaleSessions: cleanupOld } = await import('./services/receptionistRealtime.service.js');
+  cleanupOld(600000);
+}, 600000);
+
 server.listen(config.port, host, async () => {
   logger.info(`FleetNimble API running on http://${host}:${config.port}`);
   logger.info(`Environment: ${config.env}`);
@@ -82,8 +93,10 @@ server.listen(config.port, host, async () => {
   }
 
   logger.info('Digital twin auto-creation disabled');
-  logger.info('AI Receptionist routes registered at /api/ai-receptionist');
+  logger.info('AI Receptionist routes at /api/ai-receptionist');
+  logger.info('AI Receptionist agent endpoints at /api/ai-receptionist/agent/*');
   logger.info('Twilio media stream WebSocket at /api/ai-receptionist/twilio/media-stream');
+  logger.info('Public health endpoints: GET /api/health, GET /api/ai-receptionist/health');
 });
 
 process.on('SIGTERM', async () => {
@@ -95,6 +108,10 @@ process.on('SIGTERM', async () => {
     const { flushPendingTranscripts } = await import('./services/receptionistTranscript.service.js');
     cleanupStaleSessions(0);
     await flushPendingTranscripts();
+  } catch { }
+  try {
+    const { cleanupStaleSessions: cleanAgent } = await import('./services/receptionistAgent.service.js');
+    cleanAgent(0);
   } catch { }
 
   wss.close(() => {

@@ -6,6 +6,7 @@ import * as memoryService from '../services/receptionistMemory.service.js';
 import * as crmService from '../services/receptionistCRM.service.js';
 import * as auditService from '../services/receptionistAudit.service.js';
 import { processSimulatedCall } from '../services/receptionistAI.service.js';
+import * as agentService from '../services/receptionistAgent.service.js';
 import * as notificationService from '../services/receptionistNotification.service.js';
 import * as calendarService from '../services/receptionistCalendar.service.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -324,6 +325,53 @@ export async function simulateCall(req, res, next) {
     logger.error('SIMULATE_CALL_ERROR', { userId: req.userId, error: err.message });
     next(err);
   }
+}
+
+// ── Voice Agent ──
+export async function startAgent(req, res, next) {
+  try {
+    const result = await agentService.startSession(req.userId);
+    res.json({ success: true, data: result });
+  } catch (err) { next(err); }
+}
+
+export async function processAgentMessage(req, res, next) {
+  try {
+    const { sessionId, message, mode } = req.body;
+    if (!sessionId || !message) {
+      return res.status(400).json({ success: false, error: 'sessionId and message are required' });
+    }
+    const result = await agentService.processMessage(sessionId, message, mode || 'text');
+    if (result.error) {
+      return res.status(400).json({ success: false, error: result.reply });
+    }
+    res.json({ success: true, data: result });
+  } catch (err) { next(err); }
+}
+
+export async function confirmAgentAction(req, res, next) {
+  try {
+    const { sessionId, action } = req.body;
+    if (!sessionId) {
+      return res.status(400).json({ success: false, error: 'sessionId is required' });
+    }
+    const result = await agentService.confirmAction(sessionId, action);
+    if (result.error) {
+      return res.status(400).json({ success: false, error: result.message });
+    }
+    res.json({ success: true, data: result });
+  } catch (err) { next(err); }
+}
+
+export async function endAgent(req, res, next) {
+  try {
+    const { sessionId } = req.body;
+    if (!sessionId) {
+      return res.status(400).json({ success: false, error: 'sessionId is required' });
+    }
+    const result = agentService.endSession(sessionId);
+    res.json({ success: true, data: { ended: true, ...result } });
+  } catch (err) { next(err); }
 }
 
 function extractBasicDetails(message) {

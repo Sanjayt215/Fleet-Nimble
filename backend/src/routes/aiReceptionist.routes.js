@@ -16,7 +16,22 @@ const router = Router();
 
 // Public health check (no auth required)
 router.get('/health', (_req, res) => {
-  res.json({ status: 'ok', module: 'ai-receptionist' });
+  res.json({ status: 'ok', module: 'ai-receptionist', timestamp: new Date().toISOString() });
+});
+
+router.get('/status', (_req, res) => {
+  const { config } = res.app?.locals || {};
+  res.json({
+    success: true,
+    data: {
+      browserVoice: 'available',
+      twilioPhone: process.env.TWILIO_ACCOUNT_SID ? 'configured' : 'not_configured',
+      openaiRealtime: process.env.OPENAI_API_KEY ? 'configured' : 'not_configured',
+      message: !process.env.TWILIO_ACCOUNT_SID
+        ? 'Phone calling is not configured yet. Browser voice agent is available.'
+        : 'All channels available.',
+    },
+  });
 });
 
 router.use(authenticate);
@@ -39,6 +54,12 @@ router.get('/config', ctrl.getConfig);
 router.patch('/config', validate(updateConfigSchema), ctrl.updateConfig);
 
 router.post('/simulate-call', validate(simulateCallSchema), ctrl.simulateCall);
+
+// ── Voice Agent ──
+router.post('/agent/start', ctrl.startAgent);
+router.post('/agent/message', ctrl.processAgentMessage);
+router.post('/agent/confirm', ctrl.confirmAgentAction);
+router.post('/agent/end', ctrl.endAgent);
 
 // ── CRM ──
 router.get('/customers', ctrl.getCustomers);

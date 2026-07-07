@@ -2,6 +2,10 @@ import axios from 'axios';
 
 const API_URL = import.meta.env.VITE_API_URL || import.meta.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
 
+if (window.location.hostname !== 'localhost' && API_URL.includes('localhost')) {
+  console.warn('⚠️ VITE_API_URL is not set! Frontend will not connect to backend. Set it in your environment.');
+}
+
 const api = axios.create({
   baseURL: API_URL,
   headers: { 'Content-Type': 'application/json' },
