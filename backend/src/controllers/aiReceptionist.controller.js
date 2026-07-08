@@ -359,8 +359,10 @@ export async function processAgentMessage(req, res, next) {
       return res.status(400).json({ error: 'Session error', message: result.reply });
     }
     const response = {
+      success: true,
       sessionId: result.sessionId,
       reply: result.reply,
+      currentIntent: result.intent || null,
       conversationStage: result.conversationStage,
       extractedData: result.extractedData || {},
       missingFields: result.missingFields || [],
@@ -384,8 +386,10 @@ export async function confirmAgentAction(req, res, next) {
       return res.status(400).json({ error: 'Session error', message: result.message });
     }
     const response = {
+      success: true,
       sessionId: result.sessionId,
       reply: result.reply,
+      currentIntent: result.intent || null,
       conversationStage: result.conversationStage,
       extractedData: result.extractedData || {},
       missingFields: result.missingFields || [],

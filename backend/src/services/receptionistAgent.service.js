@@ -93,8 +93,9 @@ function extractDetails(message, existing = {}) {
     || message.match(/this is (\w+\s*\w*)/i)
     || message.match(/calling (?:from|as)\s+(\w+\s*\w*)/i)
     || message.match(/I am (\w+\s*\w*)/i);
-  if (nameMatch) extracted.callerName = nameMatch[1].trim();
-  else if (message.length < 30 && !extracted.callerName) {
+  const nameStopWords = ['from', 'for', 'with', 'to', 'the', 'a', 'an', 'in', 'on', 'at', 'by', 'and', 'or', 'of'];
+  if (nameMatch && !extracted.callerName && !nameStopWords.includes(nameMatch[1].trim().toLowerCase())) extracted.callerName = nameMatch[1].trim();
+  if (!extracted.callerName && message.length < 30) {
     const words = message.trim().split(/\s+/);
     if (words.length >= 1 && words.length <= 3 && !message.match(/^(yes|no|sure|okay|ok|correct|right|yeah|yep|nope|nah)/i)) {
       extracted.callerName = message.trim();
@@ -296,7 +297,23 @@ export async function processMessage(sessionId, message, mode = 'text') {
   delete details._confirmed;
   delete details._denied;
 
-  if (session.stage === STAGES.AWAITING_CONFIRMATION) {
+  if (session.stage === STAGES.COLLECTING_COMPANY && !details.company && !isConfirmed && !isDenied && message.trim().length < 60) {
+    details.company = message.trim();
+  }
+  if (session.stage === STAGES.COLLECTING_FLEET_SIZE && !details.fleetSize && !isConfirmed && !isDenied) {
+    const numMatch = message.match(/(\d+)/);
+    if (numMatch) details.fleetSize = parseInt(numMatch[1], 10);
+  }
+  if (session.stage === STAGES.COLLECTING_ISSUE && !details.issue && !isConfirmed && !isDenied && message.trim().length > 5) {
+    details.issue = message.trim();
+  }
+  if (session.stage === STAGES.COLLECTING_PURPOSE && !details.meetingPurpose && !isConfirmed && !isDenied && message.trim().length > 3) {
+    details.meetingPurpose = message.trim();
+  }
+
+  if (session.stage === STAGES.AWAITING_CONFIRMATION ||
+      session.stage === STAGES.SUMMARIZE_APPOINTMENT ||
+      session.stage === STAGES.SUMMARIZE_SUPPORT) {
     if (isConfirmed) {
       return handleConfirmation(session);
     } else if (isDenied) {
@@ -316,13 +333,25 @@ export async function processMessage(sessionId, message, mode = 'text') {
       });
   }
 
-  const intent = classifyIntent(message);
+  const collectingStages = [
+    STAGES.COLLECTING_NAME, STAGES.COLLECTING_COMPANY, STAGES.COLLECTING_CONTACT,
+    STAGES.COLLECTING_FLEET_SIZE, STAGES.COLLECTING_DATE, STAGES.COLLECTING_TIME,
+    STAGES.COLLECTING_PURPOSE, STAGES.COLLECTING_ISSUE, STAGES.COLLECTING_VEHICLE,
+    STAGES.COLLECTING_URGENCY,
+  ];
+
+  let intent;
+  if (collectingStages.includes(session.stage) && session.intent) {
+    intent = session.intent;
+  } else {
+    intent = classifyIntent(message);
+  }
 
   if (intent === 'emergency') {
     return handleEmergency(session);
   }
 
-  if (intent === INTENTS.PRODUCT_QUESTION) {
+  if (intent === INTENTS.PRODUCT_QUESTION && !collectingStages.includes(session.stage)) {
     const answer = queryKnowledgeBase(message);
     session.messages.push({ role: 'assistant', content: answer });
     return buildResponse(session, answer, STAGES.ANSWERING_QUESTION, 'product_question', {

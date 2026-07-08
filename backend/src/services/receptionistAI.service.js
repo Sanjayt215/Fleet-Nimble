@@ -71,7 +71,14 @@ function extractDetails(message) {
   };
 
   const nameMatch = message.match(/my name is (\w+\s*\w*)/i) || message.match(/name['"]?s?\s*(\w+\s*\w*)/i) || message.match(/I['"]?m (\w+\s*\w*)/i) || message.match(/this is (\w+\s*\w*)/i) || message.match(/calling (?:from|as)\s+(\w+\s*\w*)/i);
-  if (nameMatch) extracted.callerName = nameMatch[1].trim();
+  const nameStopWords = ['from', 'for', 'with', 'to', 'the', 'a', 'an', 'in', 'on', 'at', 'by', 'and', 'or', 'of'];
+  if (nameMatch && !nameStopWords.includes(nameMatch[1].trim().toLowerCase())) extracted.callerName = nameMatch[1].trim();
+  if (!extracted.callerName && message.length < 30) {
+    const words = message.trim().split(/\s+/);
+    if (words.length >= 1 && words.length <= 3 && !/^(yes|no|sure|okay|ok|correct|right|yeah|yep|nope|nah|thanks|thank you)/i.test(message.trim())) {
+      extracted.callerName = message.trim();
+    }
+  }
 
   const phoneMatch = message.match(/([\+\d][\d\s\-\(\)]{7,15}\d)/);
   if (phoneMatch) extracted.phone = phoneMatch[1].trim().replace(/[\s\-\(\)]/g, '');

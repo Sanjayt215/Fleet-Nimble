@@ -120,13 +120,13 @@ export default function VoiceReceptionistAgent({ showToast }) {
     setReply('');
 
     const payload = { sessionId: sid, message: trimmed, mode: 'voice' };
-    console.log('Agent message payload:', payload);
+    console.log('VOICE_AGENT_SEND', payload);
 
     try {
       const res = await api.post('/ai-receptionist/agent/message', payload);
       const data = res.data;
 
-      console.log('Agent message response:', data);
+      console.log('VOICE_AGENT_RESPONSE', data);
 
       setStage(data.conversationStage || '');
       setReply(data.reply || '');

@@ -104,7 +104,10 @@ export function queryKnowledgeBase(userMessage) {
       }
       const words = keyword.split(' ');
       if (words.length > 1) {
-        const matchedWords = words.filter(w => lower.includes(w));
+        const matchedWords = words.filter(w => {
+          const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          return new RegExp(`\\b${escaped}\\b`, 'i').test(lower);
+        });
         score += (matchedWords.length / words.length) * keyword.length;
       }
     }
