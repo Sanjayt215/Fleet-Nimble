@@ -481,30 +481,54 @@ export async function resolvePronouns(userId, message, vehicleContext = null) {
   try {
     const context = await getConversationContext(userId);
     
-    if (!context || !context.lastEntities) {
-      return message; // No context to resolve from
+    if (!context) {
+      return message;
     }
 
     let resolvedMessage = message;
     const entities = context.lastEntities;
     const lastVehicle = context.lastVehicleContext;
 
-    // Resolve "it", "its", "this", "that" to vehicle
-    const pronounPatterns = [
-      { pattern: /\bit\b/gi, replacement: lastVehicle?.vehicleName || entities.vehicles?.[0]?.vehicleName || 'it' },
-      { pattern: /\bits\b'?s?\b/gi, replacement: `${lastVehicle?.vehicleName || entities.vehicles?.[0]?.vehicleName || 'the vehicle'}'s` },
-      { pattern: /\bthis\b/gi, replacement: lastVehicle?.vehicleName || entities.vehicles?.[0]?.vehicleName || 'this vehicle' },
-      { pattern: /\bthat\b/gi, replacement: lastVehicle?.vehicleName || entities.vehicles?.[0]?.vehicleName || 'that vehicle' },
-    ];
+    const vehicleName = lastVehicle?.vehicleName ||
+                        lastVehicle?.name ||
+                        entities?.vehicles?.[0]?.vehicleName ||
+                        entities?.vehicles?.[0]?.name ||
+                        null;
 
-    pronounPatterns.forEach(({ pattern, replacement }) => {
-      resolvedMessage = resolvedMessage.replace(pattern, replacement);
-    });
+    const vehicleMake = lastVehicle?.make || entities?.vehicles?.[0]?.make || null;
+    const vehicleModel = lastVehicle?.model || entities?.vehicles?.[0]?.model || null;
 
-    // Resolve comparison pronouns
-    if (entities.vehicles && entities.vehicles.length >= 2) {
-      const vehicleNames = entities.vehicles.map(v => v.vehicleName).join(' or ');
-      resolvedMessage = resolvedMessage.replace(/\bwhich\b/gi, `which of ${vehicleNames}`);
+    const hasVehicleRef = /(it|its|this|that)\b/i.test(message);
+
+    if (hasVehicleRef && !vehicleName && (vehicleMake || vehicleModel)) {
+      const displayName = [vehicleMake, vehicleModel].filter(Boolean).join(' ');
+      const pronounPatterns = [
+        { pattern: /\bit\b/gi, replacement: displayName || 'it' },
+        { pattern: /\bits\b'?s?\b/gi, replacement: `${displayName || 'the vehicle'}'s` },
+        { pattern: /\bthis\b/gi, replacement: displayName || 'this vehicle' },
+        { pattern: /\bthat\b/gi, replacement: displayName || 'that vehicle' },
+      ];
+      pronounPatterns.forEach(({ pattern, replacement }) => {
+        resolvedMessage = resolvedMessage.replace(pattern, replacement);
+      });
+    } else if (hasVehicleRef && vehicleName) {
+      const pronounPatterns = [
+        { pattern: /\bit\b/gi, replacement: vehicleName },
+        { pattern: /\bits\b'?s?\b/gi, replacement: `${vehicleName}'s` },
+        { pattern: /\bthis\b/gi, replacement: vehicleName },
+        { pattern: /\bthat\b/gi, replacement: vehicleName },
+      ];
+      pronounPatterns.forEach(({ pattern, replacement }) => {
+        resolvedMessage = resolvedMessage.replace(pattern, replacement);
+      });
+    }
+
+    if (entities?.vehicles && entities.vehicles.length >= 2) {
+      const names = entities.vehicles.map(v => v.vehicleName || v.name).filter(Boolean);
+      if (names.length >= 2) {
+        const vehicleNamesStr = names.join(' or ');
+        resolvedMessage = resolvedMessage.replace(/\bwhich\b/gi, `which of ${vehicleNamesStr}`);
+      }
     }
 
     if (resolvedMessage !== message) {
@@ -515,7 +539,7 @@ export async function resolvePronouns(userId, message, vehicleContext = null) {
   } catch (error) {
     console.error('AI FAILED AT RESOLVE PRONOUNS', error);
     console.error(error.stack);
-    return message; // Return original on error
+    return message;
   }
 }
 

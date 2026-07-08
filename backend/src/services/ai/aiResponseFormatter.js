@@ -1,38 +1,18 @@
-/**
- * AI Response Formatter Module
- * Formats AI responses with professional structure and consistent metadata
- */
-
-/**
- * Clean up markdown formatting in responses
- */
 function cleanMarkdown(text) {
   if (!text || typeof text !== 'string') return text;
-  
-  // Remove excessive newlines (more than 2 consecutive)
+
   let cleaned = text.replace(/\n{3,}/g, '\n\n');
-  
-  // Ensure proper spacing after headers
   cleaned = cleaned.replace(/(#{1,6}[^\n]+)\n(?!\n)/g, '$1\n\n');
-  
-  // Fix bullet point formatting
   cleaned = cleaned.replace(/-\s*\n/g, '- ');
-  
-  // Fix numbered list formatting
   cleaned = cleaned.replace(/(\d+)\.\s*\n/g, '$1. ');
-  
-  // Remove trailing whitespace from lines
   cleaned = cleaned.split('\n').map(line => line.trimEnd()).join('\n');
-  
+
   return cleaned.trim();
 }
 
-/**
- * Format successful AI response with professional structure
- */
 export function formatSuccessResponse(response, context, metadata = {}) {
   const cleanedResponse = cleanMarkdown(response);
-  
+
   return {
     success: true,
     data: {
@@ -50,12 +30,9 @@ export function formatSuccessResponse(response, context, metadata = {}) {
   };
 }
 
-/**
- * Format error response
- */
 export function formatErrorResponse(error, context = null) {
   return {
-    success: true, // Always return success with fallback
+    success: true,
     data: {
       reply: 'I apologize, but I encountered an error processing your request. Please try again.',
       chatId: null,
@@ -75,9 +52,6 @@ export function formatErrorResponse(error, context = null) {
   };
 }
 
-/**
- * Get suggested actions based on intent
- */
 export function getSuggestedActions(intent, context = {}) {
   const actionMap = {
     'fleet_summary': [
@@ -85,10 +59,20 @@ export function getSuggestedActions(intent, context = {}) {
       "Show vehicles needing maintenance",
       "Show offline vehicles"
     ],
+    'list_vehicles': [
+      "Show fleet summary",
+      "Show offline vehicles",
+      "Show vehicle details for a specific vehicle"
+    ],
     'vehicle_details': [
       "Show vehicle maintenance",
       "Show vehicle alerts",
       "Show vehicle location"
+    ],
+    'vehicle_search': [
+      "Show vehicle details",
+      "Show similar vehicles",
+      "Show vehicle maintenance"
     ],
     'vehicle_comparison': [
       "Show vehicle details",
@@ -100,25 +84,50 @@ export function getSuggestedActions(intent, context = {}) {
       "Clear DTCs",
       "Schedule diagnostic"
     ],
+    'dtc_codes': [
+      "Show all DTCs",
+      "Show vehicle details",
+      "Schedule diagnostic"
+    ],
     'maintenance': [
       "Show critical alerts",
       "Show vehicle details",
       "Schedule maintenance"
+    ],
+    'maintenance_due': [
+      "Show all maintenance",
+      "Show critical alerts",
+      "Show vehicle details"
     ],
     'gps': [
       "Show vehicle details",
       "Show nearby vehicles",
       "Create geofence"
     ],
+    'gps_tracking': [
+      "Track another vehicle",
+      "Show vehicle details",
+      "Show fleet summary"
+    ],
     'alerts': [
       "Show vehicle details",
       "Show maintenance",
       "Acknowledge alerts"
     ],
+    'critical_alerts': [
+      "Acknowledge critical alerts",
+      "Show affected vehicles",
+      "Create work order"
+    ],
     'offline_vehicles': [
       "Summarize my fleet health",
       "Show critical alerts",
       "Show standby vehicles"
+    ],
+    'online_vehicles': [
+      "Show offline vehicles",
+      "Show standby vehicles",
+      "Show fleet summary"
     ],
     'standby_vehicles': [
       "Summarize my fleet health",
@@ -140,15 +149,20 @@ export function getSuggestedActions(intent, context = {}) {
       "Show critical alerts",
       "Show vehicle details"
     ],
-    'history': [
-      "Show live data",
-      "Show vehicle details",
-      "Show maintenance history"
-    ],
     'live_data': [
       "Show historical data",
       "Show vehicle details",
       "Show vehicle location"
+    ],
+    'live_diagnostics': [
+      "Show live diagnostics",
+      "Check vehicle health",
+      "Show engine data"
+    ],
+    'history': [
+      "Show live data",
+      "Show vehicle details",
+      "Show maintenance history"
     ],
     'work_order': [
       "Show work orders",
@@ -167,7 +181,6 @@ export function getSuggestedActions(intent, context = {}) {
     ],
   };
 
-  // Context-aware adjustments
   if (intent === 'live_data' && context?.message?.toLowerCase().includes('diagnostic')) {
     return [
       "Open Live Diagnostics",

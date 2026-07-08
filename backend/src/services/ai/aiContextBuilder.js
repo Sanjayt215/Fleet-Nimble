@@ -6,11 +6,21 @@ const MAX_CONTEXT_TOKENS = 1500;
 const APPROX_CHARS_PER_TOKEN = 4;
 const MAX_CONTEXT_CHARS = MAX_CONTEXT_TOKENS * APPROX_CHARS_PER_TOKEN;
 
-/**
- * AI Context Builder
- * Builds context based on detected intent and extracted entities
- * Strictly limits context to 1500 tokens maximum
- */
+function getVehicleDisplayName(vehicle) {
+  if (!vehicle) return 'Unknown Vehicle';
+  return vehicle.vehicleName ||
+         [vehicle.make, vehicle.model].filter(Boolean).join(' ') ||
+         'Unknown Vehicle';
+}
+
+function getVehiclePlate(vehicle) {
+  if (!vehicle) return 'No plate';
+  return vehicle.registrationNumber ||
+         vehicle.plateNumber ||
+         vehicle.vin ||
+         'No plate';
+}
+
 export class AIContextBuilder {
   constructor(userId, message, userVehicles = []) {
     this.userId = userId;
@@ -22,9 +32,6 @@ export class AIContextBuilder {
     logger.info('AI_INTENT_DETECTED', { intent: this.intent, entities: this.entities });
   }
   
-  /**
-   * Build context based on intent
-   */
   async build() {
     let context;
     
@@ -34,25 +41,36 @@ export class AIContextBuilder {
           context = await this.buildFleetSummaryContext();
           break;
         case INTENTS.VEHICLE_DETAILS:
+        case INTENTS.VEHICLE_SEARCH:
           context = await this.buildVehicleDetailsContext();
+          break;
+        case INTENTS.LIST_VEHICLES:
+          context = await this.buildListVehiclesContext();
           break;
         case INTENTS.VEHICLE_COMPARISON:
           context = await this.buildVehicleComparisonContext();
           break;
         case INTENTS.DTC:
+        case INTENTS.DTC_CODES:
           context = await this.buildDTCContext();
           break;
         case INTENTS.MAINTENANCE:
+        case INTENTS.MAINTENANCE_DUE:
           context = await this.buildMaintenanceContext();
           break;
         case INTENTS.GPS:
+        case INTENTS.GPS_TRACKING:
           context = await this.buildGPSContext();
           break;
         case INTENTS.ALERTS:
+        case INTENTS.CRITICAL_ALERTS:
           context = await this.buildAlertsContext();
           break;
         case INTENTS.OFFLINE_VEHICLES:
           context = await this.buildOfflineVehiclesContext();
+          break;
+        case INTENTS.ONLINE_VEHICLES:
+          context = await this.buildOnlineVehiclesContext();
           break;
         case INTENTS.STANDBY_VEHICLES:
           context = await this.buildStandbyVehiclesContext();
@@ -63,20 +81,24 @@ export class AIContextBuilder {
         case INTENTS.FUEL:
           context = await this.buildFuelContext();
           break;
+        case INTENTS.LIVE_DATA:
+        case INTENTS.LIVE_DIAGNOSTICS:
+          context = await this.buildLiveDiagnosticsContext();
+          break;
         case INTENTS.PREDICTIVE_MAINTENANCE:
           context = await this.buildPredictiveMaintenanceContext();
+          break;
+        case INTENTS.WORK_ORDER:
+          context = await this.buildWorkOrderContext();
           break;
         default:
           context = await this.buildMinimalContext();
       }
     } catch (error) {
       logger.error('AI_CONTEXT_BUILD_FAILED', { intent: this.intent, error: error.message, stack: error.stack });
-      
-      // Use deterministic fallback context on error
       context = await this.buildFallbackContext();
     }
     
-    // Truncate if exceeds limit
     const contextString = JSON.stringify(context, null, 2);
     const contextSize = contextString.length;
     
@@ -357,6 +379,7 @@ export class AIContextBuilder {
       intent: this.intent,
       dataSource: 'database',
       vehicle: {
+        id: vehicle.id,
         name: vehicle.vehicleName,
         plate: vehicle.registrationNumber,
         vin: vehicle.vin,
@@ -522,6 +545,97 @@ export class AIContextBuilder {
   }
   
   /**
+   * Live diagnostics context - current telemetry data
+   */
+  async buildLiveDiagnosticsContext() {
+    try {
+      let vehicle = this.entities.vehicles[0];
+
+      if (!vehicle) {
+        const vehicleName = this.extractVehicleName();
+        if (vehicleName) {
+          vehicle = await prisma.vehicle.findFirst({
+            where: {
+              userId: this.userId,
+              deletedAt: null,
+              vehicleName: { contains: vehicleName, mode: 'insensitive' }
+            },
+            select: { id: true, vehicleName: true, registrationNumber: true },
+          });
+        }
+      }
+
+      if (!vehicle) {
+        const latestTelemetry = await prisma.telemetry.findFirst({
+          where: { vehicle: { userId: this.userId, deletedAt: null } },
+          orderBy: { timestamp: 'desc' },
+          select: {
+            timestamp: true,
+            batteryVoltage: true,
+            coolantTemp: true,
+            fuelLevel: true,
+            engineRPM: true,
+            speed: true,
+            odometer: true,
+            vehicle: {
+              select: { vehicleName: true, registrationNumber: true, make: true, model: true },
+            },
+          },
+        });
+
+        return {
+          intent: this.intent,
+          dataSource: 'database',
+          diagnostics: latestTelemetry ? {
+            vehicle: getVehicleDisplayName(latestTelemetry.vehicle),
+            plate: getVehiclePlate(latestTelemetry.vehicle),
+            timestamp: latestTelemetry.timestamp,
+            batteryVoltage: latestTelemetry.batteryVoltage,
+            coolantTemp: latestTelemetry.coolantTemp,
+            fuelLevel: latestTelemetry.fuelLevel,
+            engineRPM: latestTelemetry.engineRPM,
+            speed: latestTelemetry.speed,
+            odometer: latestTelemetry.odometer,
+          } : null,
+          note: !latestTelemetry ? 'No telemetry data available' : undefined,
+        };
+      }
+
+      const latestTelemetry = await prisma.telemetry.findFirst({
+        where: { vehicleId: vehicle.id },
+        orderBy: { timestamp: 'desc' },
+        select: {
+          timestamp: true,
+          batteryVoltage: true,
+          coolantTemp: true,
+          fuelLevel: true,
+          engineRPM: true,
+          speed: true,
+          odometer: true,
+        },
+      });
+
+      return {
+        intent: this.intent,
+        dataSource: 'database',
+        vehicle: {
+          id: vehicle.id,
+          name: vehicle.vehicleName,
+          plate: vehicle.registrationNumber,
+        },
+        diagnostics: latestTelemetry || { note: 'No telemetry data available' },
+      };
+    } catch (error) {
+      logger.error('LIVE_DIAGNOSTICS_CONTEXT_ERROR', { error: error.message });
+      return {
+        intent: this.intent,
+        dataSource: 'database_fallback',
+        error: 'Unable to fetch diagnostic data',
+      };
+    }
+  }
+
+  /**
    * Maintenance context - only vehicles needing maintenance
    */
   async buildMaintenanceContext() {
@@ -607,6 +721,7 @@ export class AIContextBuilder {
         intent: this.intent,
         dataSource: 'database',
         vehicle: {
+          id: vehicle.id,
           name: vehicle.vehicleName,
           plate: vehicle.registrationNumber,
         },
@@ -717,6 +832,94 @@ export class AIContextBuilder {
   }
   
   /**
+   * List all vehicles context
+   */
+  async buildListVehiclesContext() {
+    try {
+      const vehicles = await prisma.vehicle.findMany({
+        where: { userId: this.userId, deletedAt: null },
+        select: {
+          id: true,
+          vehicleName: true,
+          registrationNumber: true,
+          make: true,
+          model: true,
+          year: true,
+          status: true,
+          telemetryOnline: true,
+          lastTelemetryAt: true,
+        },
+        take: 50,
+      });
+
+      return {
+        intent: this.intent,
+        dataSource: 'database',
+        vehicles: vehicles.map(v => ({
+          name: getVehicleDisplayName(v),
+          plate: getVehiclePlate(v),
+          make: v.make,
+          model: v.model,
+          year: v.year,
+          status: v.status || 'unknown',
+          telemetryOnline: v.telemetryOnline,
+          lastSeen: v.lastTelemetryAt,
+        })),
+      };
+    } catch (error) {
+      logger.error('LIST_VEHICLES_CONTEXT_ERROR', { error: error.message });
+      return {
+        intent: this.intent,
+        dataSource: 'database_fallback',
+        error: 'Unable to fetch vehicle list',
+      };
+    }
+  }
+
+  /**
+   * Online vehicles context
+   */
+  async buildOnlineVehiclesContext() {
+    try {
+      const onlineVehicles = await prisma.vehicle.findMany({
+        where: {
+          userId: this.userId,
+          deletedAt: null,
+          telemetryOnline: true,
+          status: { notIn: ['OFFLINE', 'STANDBY'] },
+        },
+        select: {
+          vehicleName: true,
+          registrationNumber: true,
+          make: true,
+          model: true,
+          lastTelemetryAt: true,
+        },
+        take: 20,
+      });
+
+      return {
+        intent: this.intent,
+        dataSource: 'database',
+        vehicles: onlineVehicles.map(v => ({
+          name: getVehicleDisplayName(v),
+          plate: getVehiclePlate(v),
+          make: v.make,
+          model: v.model,
+          lastSeen: v.lastTelemetryAt,
+        })),
+      };
+    } catch (error) {
+      logger.error('ONLINE_VEHICLES_CONTEXT_ERROR', { error: error.message });
+      return {
+        intent: this.intent,
+        dataSource: 'database_fallback',
+        error: 'Unable to fetch online vehicles data',
+      };
+    }
+  }
+
+  /**
    * Standby vehicles context
    */
   async buildStandbyVehiclesContext() {
@@ -821,6 +1024,7 @@ export class AIContextBuilder {
         intent: this.intent,
         dataSource: 'database',
         vehicle: {
+          id: vehicle.id,
           name: vehicle.vehicleName,
           plate: vehicle.registrationNumber,
         },
@@ -902,6 +1106,7 @@ export class AIContextBuilder {
         intent: this.intent,
         dataSource: 'database',
         vehicle: {
+          id: vehicle.id,
           name: vehicle.vehicleName,
           plate: vehicle.registrationNumber,
         },
@@ -996,6 +1201,66 @@ export class AIContextBuilder {
   }
   
   /**
+   * Work order context
+   */
+  async buildWorkOrderContext() {
+    try {
+      let vehicle = this.entities.vehicles[0];
+
+      if (!vehicle) {
+        const vehicleName = this.extractVehicleName();
+        if (vehicleName) {
+          vehicle = await prisma.vehicle.findFirst({
+            where: {
+              userId: this.userId,
+              deletedAt: null,
+              vehicleName: { contains: vehicleName, mode: 'insensitive' }
+            },
+            select: { id: true, vehicleName: true, registrationNumber: true },
+          });
+        }
+      }
+
+      const where = vehicle
+        ? { vehicleId: vehicle.id, completed: false }
+        : { vehicle: { userId: this.userId, deletedAt: null }, completed: false };
+
+      const workOrders = await prisma.maintenanceLog.findMany({
+        where,
+        include: {
+          vehicle: {
+            select: { vehicleName: true, registrationNumber: true },
+          },
+        },
+        orderBy: { dueDate: 'asc' },
+        take: 15,
+      });
+
+      return {
+        intent: this.intent,
+        dataSource: 'database',
+        workOrders: workOrders.map(w => ({
+          id: w.id,
+          vehicle: getVehicleDisplayName(w.vehicle),
+          plate: getVehiclePlate(w.vehicle),
+          type: w.type,
+          description: w.description,
+          dueDate: w.dueDate,
+          priority: w.priority || 'normal',
+          notes: w.notes,
+        })),
+      };
+    } catch (error) {
+      logger.error('WORK_ORDER_CONTEXT_ERROR', { error: error.message });
+      return {
+        intent: this.intent,
+        dataSource: 'database_fallback',
+        error: 'Unable to fetch work order data',
+      };
+    }
+  }
+
+  /**
    * Minimal context for general queries
    */
   async buildMinimalContext() {
@@ -1076,7 +1341,6 @@ export class AIContextBuilder {
    * Truncate context to fit within token limit
    */
   truncateContext(context) {
-    // Remove detailed arrays, keep only summaries
     if (context.fleet) {
       context.fleet.topRiskyVehicles = context.fleet.topRiskyVehicles?.slice(0, 1) || [];
       context.fleet.maintenanceDue = context.fleet.maintenanceDue?.slice(0, 1) || [];
@@ -1094,6 +1358,14 @@ export class AIContextBuilder {
     
     if (context.alerts) {
       context.alerts = context.alerts?.slice(0, 5) || [];
+    }
+    
+    if (context.vehicles) {
+      context.vehicles = context.vehicles?.slice(0, 10) || [];
+    }
+    
+    if (context.workOrders) {
+      context.workOrders = context.workOrders?.slice(0, 5) || [];
     }
     
     return context;

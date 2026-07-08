@@ -203,12 +203,19 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
 
       // Step 8.5: Save conversation context for follow-up
       try {
+        const vehicleForContext = context?.vehicle ? {
+          vehicleId: context.vehicle.id,
+          vehicleName: context.vehicle.name,
+          plate: context.vehicle.plate,
+          make: context.vehicle.make,
+          model: context.vehicle.model,
+        } : null;
         await saveConversationContext(
           userId,
           resolvedMessage,
           { response: aiResult.response, success: true },
           intentResult.entities,
-          context?.vehicleContext
+          vehicleForContext
         );
       } catch (contextSaveError) {
         logger.error('AI_CONTEXT_SAVE_FAILED', { userId, error: contextSaveError.message });

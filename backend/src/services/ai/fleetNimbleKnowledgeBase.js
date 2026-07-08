@@ -754,5 +754,184 @@ Actions:
 - Create work order directly`;
   }
 
+  if (lowerQuestion.includes('work order') || lowerQuestion.includes('repair order')) {
+    return `To view Work Orders:
+
+1. Open FleetNimble Dashboard
+2. Go to Work Orders page
+3. You can see:
+   - Active work orders
+   - Work order history
+   - Status tracking
+
+To create a new work order:
+1. Click "Create Work Order"
+2. Select vehicle
+3. Enter issue description
+4. Set priority
+5. Save
+
+**Navigation:** Dashboard > Work Orders`;
+  }
+
+  if (lowerQuestion.includes('fuel') || lowerQuestion.includes('fuel consumption') || lowerQuestion.includes('fuel efficiency')) {
+    return `To view Fuel Analytics:
+
+1. Open FleetNimble Dashboard
+2. Go to Vehicles
+3. Select the vehicle
+4. Click "Fuel" tab
+
+You can see:
+- Current fuel level
+- Fuel consumption rate (L/100km)
+- Refueling history
+- Total fuel cost
+- Efficiency trends
+
+**Navigation:** Vehicles > Select Vehicle > Fuel`;
+  }
+
+  if (lowerQuestion.includes('battery') && (lowerQuestion.includes('health') || lowerQuestion.includes('status') || lowerQuestion.includes('protection') || lowerQuestion.includes('voltage'))) {
+    return `To view Battery Status:
+
+1. Open FleetNimble Dashboard
+2. Go to Vehicles
+3. Select the vehicle
+4. Click "Battery" tab
+
+You can see:
+- Current battery voltage
+- Battery health status
+- Low voltage alerts
+- Charging status
+
+**Navigation:** Vehicles > Select Vehicle > Battery`;
+  }
+
+  if (lowerQuestion.includes('maintenance') || lowerQuestion.includes('service') || lowerQuestion.includes('repair')) {
+    return `To view Maintenance:
+
+1. Open FleetNimble Dashboard
+2. Go to Vehicles
+3. Select the vehicle
+4. Click "Maintenance" tab
+
+You can see:
+- Upcoming maintenance
+- Past maintenance history
+- Service due dates
+- Cost tracking
+
+**Navigation:** Vehicles > Select Vehicle > Maintenance`;
+  }
+
+  if (lowerQuestion.includes('report') && (lowerQuestion.includes('generate') || lowerQuestion.includes('create') || lowerQuestion.includes('how'))) {
+    return `To generate reports:
+
+1. Go to Reports page (Dashboard > Reports)
+2. Select report type:
+   - Fleet Health Report
+   - Fuel Consumption Report
+   - Maintenance Report
+   - GPS/Route Report
+3. Choose date range
+4. Select vehicles
+5. Click "Generate Report"
+
+**Features:**
+- Export to PDF or Excel
+- Schedule recurring reports
+- Email reports automatically`;
+  }
+
+  if (lowerQuestion.includes('driver') || lowerQuestion.includes('driver management')) {
+    return `To manage Drivers:
+
+1. Go to Drivers page (Dashboard > Drivers)
+2. You can see all drivers and their assigned vehicles
+3. Click "Add Driver" to add a new driver
+
+**Features:**
+- Assign vehicles to drivers
+- Track driver trips
+- View driver performance
+- Manage driver documents`;
+  }
+
+  if (lowerQuestion.includes('settings') && (lowerQuestion.includes('change') || lowerQuestion.includes('configure') || lowerQuestion.includes('where') || lowerQuestion.includes('find'))) {
+    return `To access Settings:
+
+1. Click the gear icon in the top navigation
+2. You can configure:
+   - Account Settings (profile, password)
+   - Alert Preferences
+   - Notification Settings (email, SMS, push)
+   - OBD Device Management
+   - Vehicle Groups
+   - User Management (team)
+   - Subscription/Billing
+
+**Navigation:** Dashboard > Settings (gear icon)`;
+  }
+
+  if (lowerQuestion.includes('mobile app') || lowerQuestion.includes('app') && (lowerQuestion.includes('download') || lowerQuestion.includes('connect'))) {
+    return `**FleetNimble Mobile App**
+
+To connect the mobile app:
+1. Download from App Store (iOS) or Play Store (Android)
+2. Login with your account
+3. Enable Bluetooth
+4. Pair OBD device
+5. Start vehicle ignition
+6. App automatically uploads telemetry data
+
+**Requirements:**
+- Mobile data or WiFi connection
+- Bluetooth enabled
+- Location permissions for GPS tracking`;
+  }
+
+  if (lowerQuestion.includes('telemetry') || lowerQuestion.includes('data upload') || lowerQuestion.includes('no data')) {
+    return `**Telemetry Data Upload**
+
+If telemetry data is not updating:
+
+Check these:
+1. OBD device connected to vehicle
+2. Vehicle ignition ON
+3. Mobile app paired with OBD device
+4. Mobile data or WiFi connection active
+5. Vehicle status shows ONLINE
+
+Common fixes:
+- Restart mobile app
+- Turn ignition OFF then ON
+- Re-pair OBD device
+- Check mobile data connection`;
+  }
+
+  if (lowerQuestion.includes('where') || lowerQuestion.includes('how to find') || lowerQuestion.includes('navigate') || lowerQuestion.includes('go to')) {
+    return `**FleetNimble Navigation Guide**
+
+Here's how to find key pages:
+
+- **Dashboard:** First page after login — shows fleet health overview
+- **Vehicles:** Dashboard > Vehicles — manage all fleet vehicles
+- **Alerts:** Dashboard > Alerts — view all alerts
+- **Work Orders:** Dashboard > Work Orders — manage repairs
+- **Reports:** Dashboard > Reports — generate reports
+- **Drivers:** Dashboard > Drivers — manage drivers
+- **Settings:** Click the gear icon — configure preferences
+- **Live Diagnostics:** Vehicles > Select Vehicle > Live Diagnostics
+- **GPS Tracking:** Vehicles > Select Vehicle > GPS
+- **Maintenance:** Vehicles > Select Vehicle > Maintenance
+- **DTC Codes:** Vehicles > Select Vehicle > DTC
+- **Fuel:** Vehicles > Select Vehicle > Fuel
+- **Battery:** Vehicles > Select Vehicle > Battery
+
+Type a specific feature name for more details!`;
+  }
+
   return null;
 }
