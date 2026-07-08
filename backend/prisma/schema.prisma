@@ -63,6 +63,9 @@ model User {
   receptionistAuditLogs      AiReceptionistAuditLog[]
   receptionistCustomers      ReceptionistCustomer[]
   receptionistCustomerNotes  ReceptionistCustomerNote[]
+  aiConversationContexts     AiConversationContext[]
+  aiConversationSummaries    AiConversationSummary[]
+  aiUserPreferences          AiUserPreference[]
 
   @@index([email])
   @@index([roleId])
@@ -900,6 +903,57 @@ model AiReceptionistConfig {
 
   @@index([companyId])
   @@map("ai_receptionist_configs")
+}
+
+// ── AI Conversation Context (for AI Assistant pronoun resolution & memory) ──
+model AiConversationContext {
+  id               String    @id @default(uuid())
+  userId           String    @map("user_id")
+  vehicleId        String?   @map("vehicle_id")
+  lastMessage      String?   @map("last_message")
+  lastResponse     String?   @map("last_response")
+  lastEntities     String?   @map("last_entities")
+  lastVehicleContext String? @map("last_vehicle_context")
+  batteryVoltage   Float?    @map("battery_voltage")
+  coolantTemp      Float?    @map("coolant_temp")
+  fuelLevel        Float?    @map("fuel_level")
+  odometer         Float?
+  rpm              Float?
+  speed            Float?
+  timestamp        DateTime  @default(now())
+  createdAt        DateTime  @default(now()) @map("created_at")
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([vehicleId])
+  @@index([timestamp])
+  @@map("ai_conversation_contexts")
+}
+
+model AiConversationSummary {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  chatId    String?  @map("chat_id")
+  summary   String
+  keyTopics Json     @default("[]") @map("key_topics")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("ai_conversation_summaries")
+}
+
+model AiUserPreference {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  key       String   @map("key")
+  value     Json
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@map("ai_user_preferences")
 }
 
 enum RoleName {

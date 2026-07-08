@@ -1,6 +1,17 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import api from '../services/api';
 
+function normalizeText(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(normalizeText).join("\n");
+  if (typeof value === "object") {
+    return value.text || value.message || value.reply || value.content || JSON.stringify(value, null, 2);
+  }
+  return String(value);
+}
+
 export default function VoiceReceptionistAgent({ showToast }) {
   const [sessionId, setSessionId] = useState(null);
   const [stage, setStage] = useState('idle');
@@ -41,7 +52,9 @@ export default function VoiceReceptionistAgent({ showToast }) {
     if (!synthRef.current || !text) return;
     setIsSpeaking(true);
     synthRef.current.cancel();
-    const clean = text.replace(/[*_`#\[\]]/g, '');
+    const safeText = typeof text === 'string' ? text : String(text || '');
+    if (!safeText.trim()) { setIsSpeaking(false); return; }
+    const clean = safeText.replace(/[*_`#\[\]]/g, '');
     const utterance = new SpeechSynthesisUtterance(clean);
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
@@ -78,17 +91,28 @@ export default function VoiceReceptionistAgent({ showToast }) {
 
       setSessionId(data.sessionId);
       setStage(data.conversationStage || 'greeting');
-      setReply(data.greeting || '');
+      const greeting = normalizeText(data.reply || data.greeting || '');
+      setReply(greeting);
       setSuggestedReplies(data.suggestedReplies || []);
       setIsThinking(false);
 
-      addMessage('assistant', data.greeting);
-      setTimeout(() => speakResponse(data.greeting), 300);
+      if (greeting) {
+        addMessage('assistant', greeting);
+        setTimeout(() => speakResponse(greeting), 300);
+      }
     } catch (err) {
       console.error('Session start error:', err);
       setIsThinking(false);
+      const status = err.response?.status;
+      let errMsg;
+      if (status === 503) {
+        errMsg = err.response?.data?.message || 'AI Receptionist is currently disabled.';
+      } else if (status === 429) {
+        errMsg = 'Too many AI messages. Please wait a moment and try again.';
+      } else {
+        errMsg = err.response?.data?.message || err.response?.data?.error || 'Failed to start conversation. Please try again.';
+      }
       setStage('error');
-      const errMsg = err.response?.data?.error || err.response?.data?.message || 'Failed to start conversation. Please try again.';
       setReply(errMsg);
       showToast?.(errMsg, 'error');
     }
@@ -98,6 +122,7 @@ export default function VoiceReceptionistAgent({ showToast }) {
     const trimmed = (text || '').trim();
     if (!trimmed) {
       showToast?.("I couldn't hear anything. Please try again.", 'error');
+      setReply("I couldn't hear anything. Please try again.");
       return;
     }
 
@@ -129,7 +154,8 @@ export default function VoiceReceptionistAgent({ showToast }) {
       console.log('VOICE_AGENT_RESPONSE', data);
 
       setStage(data.conversationStage || '');
-      setReply(data.reply || '');
+      const replyText = normalizeText(data.reply || '');
+      setReply(replyText);
       setExtractedData(data.extractedData || {});
       setSuggestedReplies(data.suggestedReplies || []);
       setRequiresConfirmation(!!data.requiresConfirmation);
@@ -137,14 +163,26 @@ export default function VoiceReceptionistAgent({ showToast }) {
       setIsComplete(!!data.isComplete);
       setIsThinking(false);
 
-      if (data.reply) {
-        addMessage('assistant', data.reply);
-        setTimeout(() => speakResponse(data.reply), 300);
+      if (replyText) {
+        addMessage('assistant', replyText);
+        setTimeout(() => speakResponse(replyText), 300);
       }
     } catch (err) {
       console.error('Message error:', err);
       setIsThinking(false);
-      const errMsg = err.response?.data?.message || err.response?.data?.error || 'I encountered an error. Please try again.';
+      const status = err.response?.status;
+      const errData = err.response?.data || {};
+      let errMsg;
+      if (status === 503) {
+        errMsg = errData.message || 'AI Receptionist is currently disabled.';
+      } else if (status === 429) {
+        errMsg = 'Too many AI messages. Please wait a moment and try again.';
+      } else if (errData.code === 'SESSION_EXPIRED') {
+        errMsg = errData.message || 'This session expired. Please start a new conversation.';
+        setSessionId(null);
+      } else {
+        errMsg = errData.message || errData.error || 'I encountered an error. Please try again.';
+      }
       setReply(errMsg);
       addMessage('assistant', errMsg);
     }
@@ -168,7 +206,8 @@ export default function VoiceReceptionistAgent({ showToast }) {
       console.log('Agent confirm response:', data);
 
       setStage(data.conversationStage || '');
-      setReply(data.reply || '');
+      const replyText = normalizeText(data.reply || '');
+      setReply(replyText);
       setExtractedData(data.extractedData || {});
       setSuggestedReplies(data.suggestedReplies || []);
       setRequiresConfirmation(!!data.requiresConfirmation);
@@ -176,15 +215,27 @@ export default function VoiceReceptionistAgent({ showToast }) {
       setIsComplete(!!data.isComplete);
       setIsThinking(false);
 
-      if (data.reply) {
-        addMessage('assistant', data.reply);
+      if (replyText) {
+        addMessage('assistant', replyText);
         if (data.isComplete) showToast?.('Action completed successfully!', 'success');
-        setTimeout(() => speakResponse(data.reply), 300);
+        setTimeout(() => speakResponse(replyText), 300);
       }
     } catch (err) {
       console.error('Confirmation error:', err);
       setIsThinking(false);
-      const errMsg = err.response?.data?.message || 'I encountered an error processing your confirmation. Please try again.';
+      const status = err.response?.status;
+      const errData = err.response?.data || {};
+      let errMsg;
+      if (status === 503) {
+        errMsg = errData.message || 'AI Receptionist is currently disabled.';
+      } else if (status === 429) {
+        errMsg = 'Too many AI messages. Please wait a moment and try again.';
+      } else if (errData.code === 'SESSION_EXPIRED') {
+        errMsg = errData.message || 'This session expired. Please start a new conversation.';
+        setSessionId(null);
+      } else {
+        errMsg = errData.message || 'I encountered an error processing your confirmation. Please try again.';
+      }
       setReply(errMsg);
       addMessage('assistant', errMsg);
     }
@@ -349,7 +400,7 @@ export default function VoiceReceptionistAgent({ showToast }) {
               <div className={`max-w-[85%] rounded-xl px-3 py-2 text-xs ${
                 msg.role === 'user' ? 'bg-cyan-600/30 text-cyan-200' : 'bg-slate-700/50 text-slate-300'
               }`}>
-                {msg.content?.substring(0, 200)}
+                {normalizeText(msg.content).substring(0, 200)}
               </div>
             </div>
           ))}

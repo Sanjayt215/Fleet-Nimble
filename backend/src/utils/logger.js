@@ -22,7 +22,7 @@ const aiLogFormat = winston.format.printf(({ level, message, timestamp, userId, 
 });
 
 const logger = winston.createLogger({
-  level: config.env === 'production' ? 'info' : 'debug',
+  level: config.logLevel || (config.env === 'production' ? 'info' : 'debug'),
   format: winston.format.combine(
     winston.format.timestamp({ format: 'isoDateTime' }),
     winston.format.errors({ stack: true }),

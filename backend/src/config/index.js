@@ -1,9 +1,24 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+function parseBool(value, defaultValue = false) {
+  if (value === undefined || value === null || value === '') return defaultValue;
+  return String(value).toLowerCase() === 'true';
+}
+
+function parseIntEnv(value, defaultValue) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : defaultValue;
+}
+
+function parseFloatEnv(value, defaultValue) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : defaultValue;
+}
+
 export const config = {
   env: process.env.NODE_ENV || 'development',
-  port: parseInt(process.env.PORT || '5000', 10),
+  port: parseIntEnv(process.env.PORT, 5000),
   databaseUrl: process.env.DATABASE_URL,
   redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',
   jwt: {
@@ -14,22 +29,22 @@ export const config = {
   },
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:3000',
   rateLimit: {
-    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
-    max: parseInt(process.env.RATE_LIMIT_MAX || '1000', 10),
+    windowMs: parseIntEnv(process.env.RATE_LIMIT_WINDOW_MS, 900000),
+    max: parseIntEnv(process.env.RATE_LIMIT_MAX, 1000),
   },
   mqtt: {
-    enabled: process.env.MQTT_ENABLED === 'true',
+    enabled: parseBool(process.env.MQTT_ENABLED, false),
     url: process.env.MQTT_URL || 'mqtt://localhost:1883',
     clientId: process.env.MQTT_CLIENT_ID || `fleet-ingest-${process.pid}`,
     username: process.env.MQTT_USERNAME || 'backend-ingest',
     password: process.env.MQTT_PASSWORD || '',
     rejectUnauthorized: process.env.MQTT_REJECT_UNAUTHORIZED !== 'false',
     caPath: process.env.MQTT_CA_PATH || null,
-    reconnectPeriodMs: parseInt(process.env.MQTT_RECONNECT_MS || '5000', 10),
-    connectTimeoutMs: parseInt(process.env.MQTT_CONNECT_TIMEOUT_MS || '30000', 10),
-    concurrency: parseInt(process.env.MQTT_CONCURRENCY || '10', 10),
-    maxRetries: parseInt(process.env.MQTT_MAX_RETRIES || '5', 10),
-    deadLetterBatchSize: parseInt(process.env.MQTT_DLQ_BATCH_SIZE || '25', 10),
+    reconnectPeriodMs: parseIntEnv(process.env.MQTT_RECONNECT_MS, 5000),
+    connectTimeoutMs: parseIntEnv(process.env.MQTT_CONNECT_TIMEOUT_MS, 30000),
+    concurrency: parseIntEnv(process.env.MQTT_CONCURRENCY, 10),
+    maxRetries: parseIntEnv(process.env.MQTT_MAX_RETRIES, 5),
+    deadLetterBatchSize: parseIntEnv(process.env.MQTT_DLQ_BATCH_SIZE, 25),
   },
   twilio: {
     accountSid: process.env.TWILIO_ACCOUNT_SID || '',
@@ -41,5 +56,23 @@ export const config = {
     voice: process.env.AI_RECEPTIONIST_VOICE || 'alloy',
     model: process.env.AI_RECEPTIONIST_MODEL || 'gpt-4o-realtime-preview',
   },
+  ai: {
+    provider: process.env.AI_PROVIDER || 'openrouter',
+    model: process.env.AI_MODEL || 'openai/gpt-4.1-mini',
+    providerMode: process.env.AI_PROVIDER_MODE || 'deterministic_first',
+    maxTokens: parseIntEnv(process.env.AI_MAX_TOKENS, 300),
+    temperature: parseFloatEnv(process.env.AI_TEMPERATURE, 0.2),
+    timeoutMs: parseIntEnv(process.env.AI_TIMEOUT_MS, 15000),
+    maxRetries: parseIntEnv(process.env.AI_MAX_RETRIES, 2),
+    orchestratorEnabled: parseBool(process.env.AI_ORCHESTRATOR_ENABLED, true),
+    memoryEnabled: parseBool(process.env.AI_MEMORY_ENABLED, true),
+    cacheEnabled: parseBool(process.env.AI_CACHE_ENABLED, true),
+    receptionistEnabled: parseBool(process.env.AI_RECEPTIONIST_ENABLED, true),
+    voiceAgentMode: process.env.VOICE_AGENT_MODE || 'browser',
+    sessionTimeoutMinutes: parseIntEnv(process.env.AI_SESSION_TIMEOUT_MINUTES, 30),
+    maxMessagesPerMinute: parseIntEnv(process.env.AI_MAX_MESSAGES_PER_MINUTE, 30),
+    healthCheckEnabled: parseBool(process.env.ENABLE_AI_HEALTH_CHECK, true),
+  },
+  logLevel: process.env.LOG_LEVEL || 'info',
   publicUrl: process.env.PUBLIC_BACKEND_URL || 'http://localhost:5000',
 };

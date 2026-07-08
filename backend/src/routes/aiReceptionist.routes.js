@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import * as ctrl from '../controllers/aiReceptionist.controller.js';
 import { authenticate } from '../middleware/auth.js';
+import { aiReceptionistLimiter } from '../middleware/rateLimiter.js';
 import { validate } from '../middleware/validate.js';
+import { config } from '../config/index.js';
 import {
   createCallSchema,
   updateCallStatusSchema,
@@ -16,20 +18,35 @@ const router = Router();
 
 // Public health check (no auth required)
 router.get('/health', (_req, res) => {
-  res.json({ status: 'ok', module: 'ai-receptionist', timestamp: new Date().toISOString() });
+  if (!config.ai.healthCheckEnabled) {
+    return res.json({ status: 'ok', module: 'ai-receptionist', healthCheck: 'disabled' });
+  }
+  res.json({
+    status: 'ok',
+    module: 'ai-receptionist',
+    providerMode: config.ai.providerMode,
+    memoryEnabled: config.ai.memoryEnabled,
+    receptionistEnabled: config.ai.receptionistEnabled,
+    voiceAgentMode: config.ai.voiceAgentMode,
+    sessionTimeoutMinutes: config.ai.sessionTimeoutMinutes,
+    timestamp: new Date().toISOString(),
+  });
 });
 
 router.get('/status', (_req, res) => {
-  const { config } = res.app?.locals || {};
   res.json({
     success: true,
     data: {
-      browserVoice: 'available',
+      enabled: config.ai.receptionistEnabled,
+      browserVoice: config.ai.voiceAgentMode === 'browser' || config.ai.voiceAgentMode === 'hybrid' ? 'available' : 'not_configured',
       twilioPhone: process.env.TWILIO_ACCOUNT_SID ? 'configured' : 'not_configured',
       openaiRealtime: process.env.OPENAI_API_KEY ? 'configured' : 'not_configured',
-      message: !process.env.TWILIO_ACCOUNT_SID
-        ? 'Phone calling is not configured yet. Browser voice agent is available.'
-        : 'All channels available.',
+      voiceAgentMode: config.ai.voiceAgentMode,
+      message: config.ai.voiceAgentMode === 'twilio' && !process.env.TWILIO_ACCOUNT_SID
+        ? 'Phone calling requires TWILIO_ACCOUNT_SID. Browser voice agent is not available in twilio mode.'
+        : config.ai.voiceAgentMode === 'browser'
+          ? 'Browser voice agent is available. Phone calling requires Twilio configuration.'
+          : 'All channels available.',
     },
   });
 });
@@ -57,8 +74,8 @@ router.post('/simulate-call', validate(simulateCallSchema), ctrl.simulateCall);
 
 // ── Voice Agent ──
 router.post('/agent/start', ctrl.startAgent);
-router.post('/agent/message', ctrl.processAgentMessage);
-router.post('/agent/confirm', ctrl.confirmAgentAction);
+router.post('/agent/message', aiReceptionistLimiter, ctrl.processAgentMessage);
+router.post('/agent/confirm', aiReceptionistLimiter, ctrl.confirmAgentAction);
 router.post('/agent/end', ctrl.endAgent);
 
 // ── CRM ──

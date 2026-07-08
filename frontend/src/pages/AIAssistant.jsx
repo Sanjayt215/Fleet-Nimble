@@ -2,6 +2,17 @@ import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
 import ReactMarkdown from 'react-markdown';
 
+function normalizeText(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(normalizeText).join("\n");
+  if (typeof value === "object") {
+    return value.text || value.message || value.reply || value.content || JSON.stringify(value, null, 2);
+  }
+  return String(value);
+}
+
 const SUGGESTED_PROMPTS = [
   'Summarize my fleet health',
   'Which vehicle should I repair first?',
@@ -139,11 +150,12 @@ export default function AIAssistant() {
 
       const responseData = res.data?.data || res.data || {};
 
-      const aiResponse =
+      const aiResponse = normalizeText(
         responseData.reply ||
         responseData.response ||
         responseData.message ||
-        'I could not generate a response right now. Please try again.';
+        responseData
+      ) || 'I could not generate a response right now. Please try again.';
 
       const metadata = responseData.metadata || {};
 
@@ -186,25 +198,34 @@ export default function AIAssistant() {
         return;
       }
 
+      const status = error.response?.status;
+      const errData = error.response?.data || {};
       const rawError =
-        error.response?.data?.error ||
-        error.response?.data?.message ||
-        error.response?.data ||
+        errData.error?.message ||
+        errData.error ||
+        errData.message ||
+        errData.reply ||
         error.message ||
         'Unknown error';
 
-      const backendMessage =
-        typeof rawError === 'string'
-          ? rawError
-          : JSON.stringify(rawError, null, 2);
+      let userMessage;
+      if (status === 429) {
+        userMessage = 'Too many AI messages. Please wait a moment and try again.';
+      } else if (status === 503) {
+        userMessage = errData.message || 'AI Receptionist is currently disabled.';
+      } else if (errData.code === 'SESSION_EXPIRED') {
+        userMessage = errData.message || 'This session expired. Please start a new conversation.';
+      } else {
+        userMessage = typeof rawError === 'string' ? rawError : JSON.stringify(rawError, null, 2);
+      }
 
-      setError(backendMessage);
+      setError(userMessage);
 
       setMessages((prev) => [
         ...prev,
         {
           role: 'assistant',
-          content: `I encountered an error: ${backendMessage}\n\nPlease try again after a few seconds.`,
+          content: `I encountered an error: ${userMessage}\n\nPlease try again after a few seconds.`,
           confidence: 'LOW',
           dataFreshness: 'UNKNOWN',
         },
@@ -424,7 +445,7 @@ export default function AIAssistant() {
                   >
                     {message.role === 'assistant' ? (
                       <div className="prose prose-invert prose-sm max-w-none">
-                        <ReactMarkdown>{message.content || ''}</ReactMarkdown>
+                        <ReactMarkdown>{normalizeText(message.content)}</ReactMarkdown>
 
                         {message.simulatedNote && (
                           <div className="mt-3 rounded-lg bg-yellow-900/30 border border-yellow-700/50 px-3 py-2 text-xs text-yellow-300">
@@ -515,7 +536,7 @@ export default function AIAssistant() {
                         )}
                       </div>
                     ) : (
-                      <p className="whitespace-pre-wrap">{message.content}</p>
+                      <p className="whitespace-pre-wrap">{normalizeText(message.content)}</p>
                     )}
                   </div>
                 </div>

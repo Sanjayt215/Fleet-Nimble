@@ -3,6 +3,7 @@
  * Coordinates AI intent detection, context building, provider calls, and fallbacks
  */
 
+import { config } from '../config/index.js';
 import prisma from '../utils/prisma.js';
 import logger from '../utils/logger.js';
 import { detectIntent, extractEntities } from './ai/aiIntentDetector.js';
@@ -14,7 +15,9 @@ import { limitChatHistory, resolvePronouns, saveConversationContext, buildEnhanc
 import { searchKnowledgeBase } from './aiKnowledgeBase.js';
 import { getNavigationAnswer, searchProductKnowledge } from './ai/fleetNimbleKnowledgeBase.js';
 
-const AI_ORCHESTRATOR_ENABLED = process.env.AI_ORCHESTRATOR_ENABLED === 'true';
+const AI_ORCHESTRATOR_ENABLED = config.ai.orchestratorEnabled;
+const AI_PROVIDER_MODE = config.ai.providerMode;
+const AI_MEMORY_ENABLED = config.ai.memoryEnabled;
 const MAX_PROMPT_CHARS = 6000;
 
 /**
@@ -71,14 +74,16 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
 
     // Step 0.5: Resolve pronouns using conversation context
     let resolvedMessage = message;
-    try {
-      resolvedMessage = await resolvePronouns(userId, message);
-      if (resolvedMessage !== message) {
-        logger.info('AI_PRONOUN_RESOLUTION', { userId, original: message, resolved: resolvedMessage });
+    if (AI_MEMORY_ENABLED) {
+      try {
+        resolvedMessage = await resolvePronouns(userId, message);
+        if (resolvedMessage !== message) {
+          logger.info('AI_PRONOUN_RESOLUTION', { userId, original: message, resolved: resolvedMessage });
+        }
+      } catch (pronounError) {
+        logger.error('AI_PRONOUN_RESOLUTION_FAILED', { userId, error: pronounError.message });
+        resolvedMessage = message; // Use original on error
       }
-    } catch (pronounError) {
-      logger.error('AI_PRONOUN_RESOLUTION_FAILED', { userId, error: pronounError.message });
-      resolvedMessage = message; // Use original on error
     }
 
     // Step 1: Detect intent
@@ -193,8 +198,27 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
     }
     
     // Step 7: Call AI provider with retry
+    if (!AI_ORCHESTRATOR_ENABLED) {
+      logger.info('AI_ORCHESTRATOR_DISABLED', { userId, reason: 'AI_ORCHESTRATOR_ENABLED=false' });
+      const fallbackResult = await getDeterministicFallback(userId, message, vehicleId);
+      const reply = fallbackResult?.data?.reply || 'AI orchestrator is disabled.';
+      return {
+        response: reply,
+        context,
+        knowledgeResults,
+        metadata: fallbackResult?.data?.metadata || {
+          title: "FleetNimble AI Assistant",
+          confidence: "LOW",
+          dataFreshness: "UNKNOWN",
+          simulatedNote: null,
+          suggestedActions: ["Summarize my fleet health", "Show critical alerts"],
+          entities: {},
+        },
+      };
+    }
+
     logger.info('AI_PROVIDER_CALL_START', { userId });
-    const aiResult = await callAIWithRetry(messages, context, 1);
+    const aiResult = await callAIWithRetry(messages, context);
     
     if (aiResult?.success && aiResult?.response) {
       // Step 8: Format successful response
@@ -202,24 +226,26 @@ export async function processChatMessage(userId, message, vehicleId = null, chat
       logger.info('AI_RESPONSE_SUCCESS', { userId, provider: aiResult.provider, length: aiResult.response.length });
 
       // Step 8.5: Save conversation context for follow-up
-      try {
-        const vehicleForContext = context?.vehicle ? {
-          vehicleId: context.vehicle.id,
-          vehicleName: context.vehicle.name,
-          plate: context.vehicle.plate,
-          make: context.vehicle.make,
-          model: context.vehicle.model,
-        } : null;
-        await saveConversationContext(
-          userId,
-          resolvedMessage,
-          { response: aiResult.response, success: true },
-          intentResult.entities,
-          vehicleForContext
-        );
-      } catch (contextSaveError) {
-        logger.error('AI_CONTEXT_SAVE_FAILED', { userId, error: contextSaveError.message });
-        // Don't fail the request if context save fails
+      if (AI_MEMORY_ENABLED) {
+        try {
+          const vehicleForContext = context?.vehicle ? {
+            vehicleId: context.vehicle.id,
+            vehicleName: context.vehicle.name,
+            plate: context.vehicle.plate,
+            make: context.vehicle.make,
+            model: context.vehicle.model,
+          } : null;
+          await saveConversationContext(
+            userId,
+            resolvedMessage,
+            { response: aiResult.response, success: true },
+            intentResult.entities,
+            vehicleForContext
+          );
+        } catch (contextSaveError) {
+          logger.error('AI_CONTEXT_SAVE_FAILED', { userId, error: contextSaveError.message });
+          // Don't fail the request if context save fails
+        }
       }
 
       return {
@@ -511,7 +537,23 @@ export function verifyAIServiceStartup() {
   logger.info('✓ Deterministic Fallback Loaded');
   logger.info('✓ AI Response Formatter Loaded');
   logger.info('✓ FleetNimble AI Ready');
-  
+  logger.info('AI_CONFIG', {
+    provider: config.ai.provider,
+    model: config.ai.model,
+    providerMode: config.ai.providerMode,
+    maxTokens: config.ai.maxTokens,
+    temperature: config.ai.temperature,
+    timeoutMs: config.ai.timeoutMs,
+    maxRetries: config.ai.maxRetries,
+    orchestratorEnabled: config.ai.orchestratorEnabled,
+    memoryEnabled: config.ai.memoryEnabled,
+    cacheEnabled: config.ai.cacheEnabled,
+    receptionistEnabled: config.ai.receptionistEnabled,
+    voiceAgentMode: config.ai.voiceAgentMode,
+    sessionTimeoutMinutes: config.ai.sessionTimeoutMinutes,
+    healthCheckEnabled: config.ai.healthCheckEnabled,
+  });
+
   const providerInfo = getProviderInfo();
   logger.info('AI_PROVIDER_INFO', providerInfo);
   

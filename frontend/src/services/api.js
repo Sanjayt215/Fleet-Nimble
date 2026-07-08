@@ -22,11 +22,15 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+function clearAllTokens() {
+  ['accessToken', 'refreshToken', 'token', 'authToken'].forEach(k => localStorage.removeItem(k));
+}
+
 api.interceptors.response.use(
   (res) => res,
   async (error) => {
     const original = error.config;
-    if (error.response?.status === 401 && !original._retry && !original.url?.includes('/auth/login')) {
+    if (error.response?.status === 401 && !original._retry && !original.url?.includes('/auth/login') && !original.url?.includes('/auth/refresh')) {
       original._retry = true;
       const refreshToken = localStorage.getItem('refreshToken');
       if (refreshToken) {
@@ -36,16 +40,17 @@ api.interceptors.response.use(
           const newRefresh = data.refreshToken || data.data?.refreshToken;
           if (newAccess) {
             localStorage.setItem('accessToken', newAccess);
+            localStorage.setItem('token', newAccess);
             if (newRefresh) localStorage.setItem('refreshToken', newRefresh);
             original.headers.Authorization = `Bearer ${newAccess}`;
             return api(original);
           }
         } catch {
-          ['accessToken', 'refreshToken', 'token', 'authToken'].forEach(k => localStorage.removeItem(k));
+          clearAllTokens();
           window.location.href = '/login?expired=1';
         }
       } else {
-        ['accessToken', 'refreshToken', 'token', 'authToken'].forEach(k => localStorage.removeItem(k));
+        clearAllTokens();
         window.location.href = '/login?expired=1';
       }
     }

@@ -3,14 +3,19 @@
  * Handles calls to OpenAI, OpenRouter, and Gemini APIs
  */
 
+import { config } from '../../config/index.js';
 import logger from '../../utils/logger.js';
 
-const AI_PROVIDER = process.env.AI_PROVIDER || 'openai';
-const AI_MODEL = process.env.AI_MODEL || 'gpt-4o-mini';
+const AI_PROVIDER = config.ai.provider;
+const AI_PROVIDER_MODE = config.ai.providerMode;
+const AI_MODEL = config.ai.model;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const REQUEST_TIMEOUT = Number(process.env.AI_REQUEST_TIMEOUT || 30000); // 30 seconds default
+const REQUEST_TIMEOUT = config.ai.timeoutMs;
+const AI_MAX_TOKENS_DEFAULT = config.ai.maxTokens;
+const AI_TEMPERATURE = config.ai.temperature;
+const AI_MAX_RETRIES = config.ai.maxRetries;
 
 const SYSTEM_PROMPT = `You are FleetNimble AI Assistant. Answer using only provided fleet context. Be concise, professional, and actionable. If data is unavailable, say so. Do not invent data.`;
 
@@ -106,13 +111,19 @@ export async function callOpenAI(messages) {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${OPENAI_API_KEY}`,
     },
-    body: JSON.stringify({
-      model: AI_MODEL,
-      messages,
-      temperature: 0.7,
-      max_tokens: Number(process.env.AI_MAX_TOKENS || 700),
-    }),
+      body: JSON.stringify({
+        model: AI_MODEL,
+        messages,
+        temperature: AI_TEMPERATURE,
+        max_tokens: AI_MAX_TOKENS_DEFAULT,
+      }),
   });
+
+  if (response.status === 402) {
+    const error = await response.text();
+    logger.warn('AI_PROVIDER_INSUFFICIENT_CREDITS', { provider: 'openai', status: 402, error });
+    throw new Error('AI provider has insufficient credits');
+  }
 
   if (!response.ok) {
     const error = await response.text();
@@ -131,7 +142,7 @@ export async function callOpenRouter(messages, maxTokensOverride = null) {
     throw new Error('OpenRouter API key not configured');
   }
 
-  const maxTokens = maxTokensOverride || Number(process.env.AI_MAX_TOKENS || 700);
+  const maxTokens = maxTokensOverride || AI_MAX_TOKENS_DEFAULT;
 
   const response = await fetchWithTimeout('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -142,10 +153,16 @@ export async function callOpenRouter(messages, maxTokensOverride = null) {
     body: JSON.stringify({
       model: AI_MODEL,
       messages,
-      temperature: 0.7,
+      temperature: AI_TEMPERATURE,
       max_tokens: maxTokens,
     }),
   });
+
+  if (response.status === 402) {
+    const error = await response.text();
+    logger.warn('AI_PROVIDER_INSUFFICIENT_CREDITS', { provider: 'openrouter', status: 402, error });
+    throw new Error('AI provider has insufficient credits');
+  }
 
   if (!response.ok) {
     const error = await response.text();
@@ -178,8 +195,8 @@ export async function callGemini(messages) {
     body: JSON.stringify({
       contents: geminiMessages,
       generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 700,
+        temperature: AI_TEMPERATURE,
+        maxOutputTokens: AI_MAX_TOKENS_DEFAULT,
       },
     }),
   });
@@ -196,17 +213,29 @@ export async function callGemini(messages) {
 /**
  * Call AI provider with retry logic and provider switching
  */
-export async function callAIWithRetry(messages, context, maxRetries = 1) {
-  logger.info('AI_PROVIDER_SELECTED', { provider: AI_PROVIDER, model: AI_MODEL });
+export async function callAIWithRetry(messages, context) {
+  const maxRetries = AI_MAX_RETRIES;
+  logger.info('AI_PROVIDER_SELECTED', { provider: AI_PROVIDER, mode: AI_PROVIDER_MODE, model: AI_MODEL });
   logger.info('AI_PROVIDER_REQUEST_START', { provider: AI_PROVIDER });
+
+  if (AI_PROVIDER_MODE === 'deterministic_first') {
+    logger.info('AI_DETERMINISTIC_MODE_ACTIVE', { reason: 'AI_PROVIDER_MODE=deterministic_first' });
+    return {
+      success: false,
+      error: 'Deterministic mode active - use fallback',
+      isRetryable: false,
+      deterministicOnly: true,
+    };
+  }
 
   const providers = [AI_PROVIDER];
 
-  // Add fallback providers (skip if circuit breaker is open)
   if (AI_PROVIDER === 'openai' && OPENROUTER_API_KEY && !isCircuitBreakerOpen('openrouter')) {
     providers.push('openrouter');
   } else if (AI_PROVIDER === 'openrouter' && OPENAI_API_KEY && !isCircuitBreakerOpen('openai')) {
     providers.push('openai');
+  } else if (AI_PROVIDER === 'openrouter' && !OPENAI_API_KEY) {
+    providers.push('openrouter');
   }
 
   if (GEMINI_API_KEY && !providers.includes('gemini') && !isCircuitBreakerOpen('gemini')) {
@@ -214,7 +243,6 @@ export async function callAIWithRetry(messages, context, maxRetries = 1) {
   }
 
   for (const provider of providers) {
-    // Skip if circuit breaker is open
     if (isCircuitBreakerOpen(provider)) {
       logger.warn('AI_PROVIDER_CIRCUIT_BREAKER_OPEN', { provider });
       continue;
@@ -223,7 +251,7 @@ export async function callAIWithRetry(messages, context, maxRetries = 1) {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         let response;
-        const maxTokensOverride = attempt > 0 ? 400 : null; // Reduce tokens on retry
+        const maxTokensOverride = attempt > 0 ? Math.max(150, Math.floor(AI_MAX_TOKENS_DEFAULT / 2)) : null;
 
         if (provider === 'openrouter') {
           response = await callOpenRouter(messages, maxTokensOverride);
@@ -236,13 +264,11 @@ export async function callAIWithRetry(messages, context, maxRetries = 1) {
         logger.info('AI_PROVIDER_RESPONSE_RECEIVED', { provider, attempt });
         logger.info('AI_PROVIDER_REPLY_LENGTH', { length: response?.length || 0 });
 
-        // Validate response
         if (!response || response.trim() === '') {
           logger.warn('AI_PROVIDER_RESPONSE_NULL', { provider });
           throw new Error('Empty response from provider');
         }
 
-        // Record success for circuit breaker
         recordProviderSuccess(provider);
 
         return {
@@ -253,39 +279,47 @@ export async function callAIWithRetry(messages, context, maxRetries = 1) {
       } catch (aiError) {
         logger.error('AI_PROVIDER_ERROR', { provider, attempt, error: aiError.message });
 
-        // Record failure for circuit breaker
         recordProviderFailure(provider);
 
-        // Check if error is retryable (402, 429, timeout, 5xx)
         const errorMessage = aiError.message?.toLowerCase() || '';
-        const isRetryable = errorMessage.includes('timeout') ||
-                           errorMessage.includes('429') ||
-                           errorMessage.includes('402') ||
-                           errorMessage.includes('rate limit') ||
-                           errorMessage.includes('5xx') ||
-                           errorMessage.includes('502') ||
-                           errorMessage.includes('503') ||
-                           errorMessage.includes('504');
 
-        // If not retryable or last attempt failed, try next provider
+        const is402 = errorMessage.includes('402') || errorMessage.includes('insufficient credits');
+        const isTimeout = errorMessage.includes('timeout') || errorMessage.includes('abort');
+        const isRetryable = !is402 && (
+          isTimeout ||
+          errorMessage.includes('429') ||
+          errorMessage.includes('rate limit') ||
+          errorMessage.includes('5xx') ||
+          errorMessage.includes('502') ||
+          errorMessage.includes('503') ||
+          errorMessage.includes('504')
+        );
+
+        if (is402) {
+          logger.warn('AI_PROVIDER_INSUFFICIENT_CREDITS', { provider, attempt });
+          return {
+            success: false,
+            error: 'AI provider has insufficient credits - use deterministic fallback',
+            isRetryable: false,
+          };
+        }
+
         if (!isRetryable || attempt === maxRetries) {
           logger.warn('AI_PROVIDER_SWITCH_PROVIDER', {
             currentProvider: provider,
             reason: isRetryable ? 'max_retries_exceeded' : 'non_retryable_error',
             error: errorMessage
           });
-          break; // Try next provider
+          break;
         }
 
-        // Wait before retry (exponential backoff)
         const delay = Math.pow(2, attempt) * 1000;
-        logger.info('AI_PROVIDER_RETRY', { provider, attempt, delay, maxTokensOverride: 400 });
+        logger.info('AI_PROVIDER_RETRY', { provider, attempt, delay });
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
   }
 
-  // All providers failed
   logger.warn('AI_ALL_PROVIDERS_FAILED', { reason: 'all_providers_failed' });
   return {
     success: false,

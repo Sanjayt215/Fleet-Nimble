@@ -3,8 +3,11 @@
  * Enhanced conversation memory with historical data comparison and user preferences
  */
 
+import { config } from '../config/index.js';
 import prisma from '../utils/prisma.js';
 import logger from '../utils/logger.js';
+
+const MEMORY_ENABLED = config.ai.memoryEnabled;
 
 /**
  * Limit conversation history to prevent token overflow
@@ -411,15 +414,16 @@ setInterval(() => {
  * Save conversation context for follow-up support
  */
 export async function saveConversationContext(userId, message, response, entities, vehicleContext) {
+  if (!MEMORY_ENABLED) return null;
   try {
     const context = await prisma.aiConversationContext.create({
       data: {
         userId,
         vehicleId: vehicleContext?.vehicleId || null,
         lastMessage: message,
-        lastResponse: JSON.stringify(response),
-        lastEntities: JSON.stringify(entities),
-        lastVehicleContext: JSON.stringify(vehicleContext),
+        lastResponse: typeof response === 'string' ? response : JSON.stringify(response),
+        lastEntities: JSON.stringify(entities || {}),
+        lastVehicleContext: JSON.stringify(vehicleContext || {}),
         timestamp: new Date(),
       },
     });
@@ -428,9 +432,7 @@ export async function saveConversationContext(userId, message, response, entitie
 
     return context;
   } catch (error) {
-    console.error('AI FAILED AT SAVE CONVERSATION CONTEXT', error);
-    console.error(error.stack);
-    // Don't throw - context save is not critical
+    logger.warn('AI_MEMORY_CONTEXT_FAILED', { error: error.message });
     return null;
   }
 }
@@ -439,6 +441,9 @@ export async function saveConversationContext(userId, message, response, entitie
  * Get conversation context for pronoun resolution
  */
 export async function getConversationContext(userId, conversationId = null) {
+  if (!MEMORY_ENABLED) {
+    return { userId, lastEntities: null, lastVehicleContext: null, timestamp: null };
+  }
   try {
     const where = conversationId 
       ? { userId, id: conversationId }
@@ -450,7 +455,12 @@ export async function getConversationContext(userId, conversationId = null) {
     });
 
     if (!context) {
-      return null; // No history exists - start new conversation
+      return {
+        userId,
+        lastEntities: null,
+        lastVehicleContext: null,
+        timestamp: null,
+      };
     }
 
     return {
@@ -464,10 +474,14 @@ export async function getConversationContext(userId, conversationId = null) {
       timestamp: context.timestamp,
     };
   } catch (error) {
-    console.error('AI FAILED AT GET CONVERSATION CONTEXT', error);
-    console.error(error.stack);
-    // Return null to start new conversation
-    return null;
+    logger.warn('AI_MEMORY_CONTEXT_FAILED', { error: error.message, userId });
+    return {
+      userId,
+      lastIntent: null,
+      lastVehicle: null,
+      lastTopic: null,
+      lastVehicleCandidates: [],
+    };
   }
 }
 

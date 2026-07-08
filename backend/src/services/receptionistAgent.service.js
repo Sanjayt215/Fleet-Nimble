@@ -1,3 +1,4 @@
+import { config } from '../config/index.js';
 import { v4 as uuidv4 } from 'uuid';
 import logger from '../utils/logger.js';
 import { queryKnowledgeBase } from './receptionistKnowledgeBase.service.js';
@@ -282,7 +283,19 @@ export async function processMessage(sessionId, message, mode = 'text') {
   if (!session) {
     return {
       error: true,
-      reply: 'Session expired or not found. Please start a new conversation.',
+      code: 'SESSION_EXPIRED',
+      reply: 'This receptionist session expired. Please start a new conversation.',
+    };
+  }
+
+  // Check session timeout
+  const sessionTimeoutMs = config.ai.sessionTimeoutMinutes * 60 * 1000;
+  if (Date.now() - session.lastActivityAt > sessionTimeoutMs) {
+    endSession(sessionId);
+    return {
+      error: true,
+      code: 'SESSION_EXPIRED',
+      reply: 'This receptionist session expired. Please start a new conversation.',
     };
   }
 
@@ -774,7 +787,7 @@ export function endSession(sessionId) {
   return { transcript, summary };
 }
 
-export function cleanupStaleSessions(maxAgeMs = 1800000) {
+export function cleanupStaleSessions(maxAgeMs = config.ai.sessionTimeoutMinutes * 60 * 1000) {
   const now = Date.now();
   let count = 0;
   SESSIONS.forEach((session, sessionId) => {

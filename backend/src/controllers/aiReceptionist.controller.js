@@ -1,3 +1,4 @@
+import { config } from '../config/index.js';
 import * as callService from '../services/receptionistCall.service.js';
 import * as appointmentService from '../services/receptionistAppointment.service.js';
 import * as supportService from '../services/receptionistSupport.service.js';
@@ -11,6 +12,8 @@ import * as notificationService from '../services/receptionistNotification.servi
 import * as calendarService from '../services/receptionistCalendar.service.js';
 import { AppError } from '../middleware/errorHandler.js';
 import logger from '../utils/logger.js';
+
+const RECEPTIONIST_ENABLED = config.ai.receptionistEnabled;
 
 // ── Summary ──
 export async function getSummary(req, res, next) {
@@ -204,6 +207,9 @@ export async function getAuditLogs(req, res, next) {
 
 // ── Simulated Call ──
 export async function simulateCall(req, res, next) {
+  if (!config.ai.receptionistEnabled) {
+    return res.status(503).json({ success: false, message: 'AI Receptionist is currently disabled.' });
+  }
   try {
     const { message, callId } = req.body;
 
@@ -328,20 +334,39 @@ export async function simulateCall(req, res, next) {
 }
 
 // ── Voice Agent ──
+function checkReceptionistEnabled(req, res, next) {
+  if (!config.ai.receptionistEnabled) {
+    return res.status(503).json({ success: false, message: 'AI Receptionist is currently disabled.' });
+  }
+  next();
+}
+
 export async function startAgent(req, res, next) {
+  if (!config.ai.receptionistEnabled) {
+    return res.status(503).json({ success: false, message: 'AI Receptionist is currently disabled.' });
+  }
   try {
     const result = await agentService.startSession(req.userId);
     res.json({
+      success: true,
       sessionId: result.sessionId,
-      greeting: result.reply,
-      status: 'started',
+      reply: typeof result.reply === 'string' ? result.reply : String(result.reply || ''),
+      currentIntent: result.intent || null,
       conversationStage: result.conversationStage,
+      extractedData: result.extractedData || {},
+      missingFields: result.missingFields || [],
+      requiresConfirmation: !!result.requiresConfirmation,
+      pendingAction: result.pendingAction || null,
+      isComplete: !!result.isComplete,
       suggestedReplies: result.suggestedReplies || [],
     });
   } catch (err) { next(err); }
 }
 
 export async function processAgentMessage(req, res, next) {
+  if (!config.ai.receptionistEnabled) {
+    return res.status(503).json({ success: false, message: 'AI Receptionist is currently disabled.' });
+  }
   try {
     const { sessionId, message, mode } = req.body;
     if (!sessionId || !message) {
@@ -356,12 +381,17 @@ export async function processAgentMessage(req, res, next) {
     }
     const result = await agentService.processMessage(sessionId, message, mode || 'text');
     if (result.error) {
-      return res.status(400).json({ error: 'Session error', message: result.reply });
+      const statusCode = result.code === 'SESSION_EXPIRED' ? 410 : 400;
+      return res.status(statusCode).json({
+        success: false,
+        code: result.code || 'SESSION_ERROR',
+        message: result.reply,
+      });
     }
     const response = {
       success: true,
       sessionId: result.sessionId,
-      reply: result.reply,
+      reply: typeof result.reply === 'string' ? result.reply : String(result.reply || ''),
       currentIntent: result.intent || null,
       conversationStage: result.conversationStage,
       extractedData: result.extractedData || {},
@@ -376,6 +406,9 @@ export async function processAgentMessage(req, res, next) {
 }
 
 export async function confirmAgentAction(req, res, next) {
+  if (!config.ai.receptionistEnabled) {
+    return res.status(503).json({ success: false, message: 'AI Receptionist is currently disabled.' });
+  }
   try {
     const { sessionId, action } = req.body;
     if (!sessionId) {
@@ -383,12 +416,17 @@ export async function confirmAgentAction(req, res, next) {
     }
     const result = await agentService.confirmAction(sessionId, action);
     if (result.error) {
-      return res.status(400).json({ error: 'Session error', message: result.message });
+      const statusCode = result.code === 'SESSION_EXPIRED' ? 410 : 400;
+      return res.status(statusCode).json({
+        success: false,
+        code: result.code || 'SESSION_ERROR',
+        message: result.message,
+      });
     }
     const response = {
       success: true,
       sessionId: result.sessionId,
-      reply: result.reply,
+      reply: typeof result.reply === 'string' ? result.reply : String(result.reply || ''),
       currentIntent: result.intent || null,
       conversationStage: result.conversationStage,
       extractedData: result.extractedData || {},
@@ -403,13 +441,16 @@ export async function confirmAgentAction(req, res, next) {
 }
 
 export async function endAgent(req, res, next) {
+  if (!config.ai.receptionistEnabled) {
+    return res.status(503).json({ success: false, message: 'AI Receptionist is currently disabled.' });
+  }
   try {
     const { sessionId } = req.body;
     if (!sessionId) {
       return res.status(400).json({ error: 'Validation failed', message: 'sessionId is required' });
     }
     const result = agentService.endSession(sessionId);
-    res.json({ ended: true, ...result });
+    res.json({ success: true, ended: true, ...result });
   } catch (err) { next(err); }
 }
 

@@ -1,7 +1,7 @@
 import rateLimit from 'express-rate-limit';
 import { config } from '../config/index.js';
 
-const isDev = process.env.NODE_ENV !== 'production';
+const isDev = config.env !== 'production';
 
 export const apiLimiter = isDev
   ? (req, res, next) => next()
@@ -74,7 +74,7 @@ export const aiChatLimiter = isDev
   ? (req, res, next) => next()
   : rateLimit({
       windowMs: 60 * 1000,
-      max: 20,
+      max: config.ai.maxMessagesPerMinute,
       standardHeaders: true,
       legacyHeaders: false,
       keyGenerator: (req) => `${req.userId || 'anon'}:ai-chat`,
@@ -82,7 +82,24 @@ export const aiChatLimiter = isDev
         success: false,
         error: {
           code: 'RATE_LIMIT',
-          message: 'AI chat rate limit exceeded. Please wait before sending another message.',
+          message: 'Too many AI messages. Please wait a moment and try again.',
+        },
+      },
+    });
+
+export const aiReceptionistLimiter = isDev
+  ? (req, res, next) => next()
+  : rateLimit({
+      windowMs: 60 * 1000,
+      max: config.ai.maxMessagesPerMinute,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req) => `${req.userId || 'anon'}:ai-receptionist`,
+      message: {
+        success: false,
+        error: {
+          code: 'RATE_LIMIT',
+          message: 'Too many AI messages. Please wait a moment and try again.',
         },
       },
     });

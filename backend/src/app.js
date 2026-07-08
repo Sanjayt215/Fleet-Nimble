@@ -11,18 +11,6 @@ const app = express();
 // Fix Render X-Forwarded-For express-rate-limit warnings
 app.set('trust proxy', 1);
 
-// Global unhandled rejection handler
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('UNHANDLED REJECTION', reason);
-  console.error('Promise:', promise);
-});
-
-// Global uncaught exception handler
-process.on('uncaughtException', (err) => {
-  console.error('UNCAUGHT EXCEPTION', err);
-  console.error(err.stack);
-});
-
 // Early request logger to ensure all incoming requests are observed during debugging
 app.use((req, _res, next) => {
   try {
