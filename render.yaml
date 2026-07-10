@@ -7,7 +7,7 @@ services:
     branch: main
     rootDir: backend
     buildCommand: "npm ci && npx prisma generate"
-    startCommand: "sh -lc 'npx prisma migrate deploy || true && npm start'"
+    startCommand: "npm start"
     envVars:
       - key: PORT
         value: "5000"
