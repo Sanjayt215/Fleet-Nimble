@@ -57,6 +57,7 @@ function setRealtimeReady(ready) {
   config.openai.apiKey = ready ? 'sk-test-key' : '';
   config.realtime.configured = ready;
   config.realtime.mediaStreamEnabled = ready;
+  config.realtime.model = 'gpt-4o-realtime-preview';
 }
 
 beforeEach(() => {
@@ -123,11 +124,21 @@ describe('Twilio media events', () => {
     openai.emit('open');
 
     const sessionUpdate = openai.sent.find((m) => m.includes('session.update'));
-    const responseCreate = openai.sent.find((m) => m.includes('response.create'));
     expect(sessionUpdate).toBeDefined();
     expect(sessionUpdate).toContain('g711_ulaw');
     expect(sessionUpdate).toContain('server_vad');
-    expect(responseCreate).toContain('FleetNimble AI Receptionist');
+
+    // Greeting is deferred until session.created (Phase 6).
+    expect(openai.sent.find((m) => m.includes('response.create'))).toBeUndefined();
+
+    openai.emit('message', JSON.stringify({
+      type: 'session.created',
+      session: { id: 'sess_123', model: 'gpt-4o-realtime-preview' },
+    }));
+
+    const greeting = openai.sent.find((m) => m.includes('response.create'));
+    expect(greeting).toBeDefined();
+    expect(greeting).toContain('FleetNimble AI Receptionist');
     expect(getSession('CA123')).toBeDefined();
   });
 

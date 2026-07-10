@@ -50,9 +50,22 @@ export function buildMediaStreamUrl(baseUrl = config.publicUrl) {
   try {
     const u = new URL(baseUrl);
     const wsProtocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${wsProtocol}//${u.host}/api/ai-receptionist/twilio/media-stream`;
-  } catch {
-    return 'wss://localhost:5000/api/ai-receptionist/twilio/media-stream';
+    const streamUrl = `${wsProtocol}//${u.host}/api/ai-receptionist/twilio/media-stream`;
+    logger.info('DIAG_MEDIA_STREAM_URL_BUILT', {
+      baseUrl,
+      wsProtocol,
+      host: u.host,
+      streamUrl,
+    });
+    return streamUrl;
+  } catch (err) {
+    const fallback = 'wss://localhost:5000/api/ai-receptionist/twilio/media-stream';
+    logger.warn('DIAG_MEDIA_STREAM_URL_FALLBACK', {
+      baseUrl,
+      error: err.message,
+      fallback,
+    });
+    return fallback;
   }
 }
 

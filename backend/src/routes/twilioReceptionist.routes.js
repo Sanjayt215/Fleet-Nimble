@@ -3,19 +3,30 @@ import * as ctrl from '../controllers/twilioReceptionist.controller.js';
 import { authenticate } from '../middleware/auth.js';
 import { twilioWebhookLimiter } from '../middleware/rateLimiter.js';
 import { config } from '../config/index.js';
+import { RealtimeSessionManager } from '../services/realtimeSessionManager.js';
+import { RealtimeModelValidator } from '../services/realtimeModelValidator.js';
 
 const router = Router();
 
 // ── Public health check (no auth, no secrets exposed) ──
 router.get('/health', (_req, res) => {
+  const modelValid = RealtimeModelValidator.validate(config.realtime.model);
   res.json({
     status: 'ok',
     module: 'ai-receptionist',
     twilioConfigured: config.twilio.configured,
     phoneConfigured: config.twilio.phoneConfigured,
-    voiceMode: config.aiReceptionist.voiceAgentMode,
-    realtimeConfigured: config.realtime.configured,
     mediaStreamEnabled: config.realtime.mediaStreamEnabled,
+    modelConfigured: Boolean(config.realtime.model),
+    modelValidated: modelValid.valid,
+    modelValidationReason: modelValid.valid ? null : modelValid.reason,
+    realtimeConfigured: config.realtime.configured,
+    realtimeReady: config.realtime.configured && config.realtime.mediaStreamEnabled,
+    voiceAgentMode: config.aiReceptionist.voiceAgentMode,
+    activeCalls: RealtimeSessionManager.getCount(),
+    sessionManagerVersion: '2.0',
+    backendVersion: '1.0.0',
+    metrics: RealtimeSessionManager.getMetrics(),
   });
 });
 

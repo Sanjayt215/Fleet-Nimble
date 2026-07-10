@@ -77,9 +77,14 @@ describe('AI Receptionist health endpoint', () => {
     expect(data.module).toBe('ai-receptionist');
     expect(data.twilioConfigured).toBeTypeOf('boolean');
     expect(data.phoneConfigured).toBeTypeOf('boolean');
-    expect(data.voiceMode).toBeDefined();
+    expect(data.voiceAgentMode).toBeDefined();
     expect(data.realtimeConfigured).toBeTypeOf('boolean');
     expect(data.mediaStreamEnabled).toBeTypeOf('boolean');
+    expect(data.modelConfigured).toBeTypeOf('boolean');
+    expect(data.modelValidated).toBeTypeOf('boolean');
+    expect(data.realtimeReady).toBeTypeOf('boolean');
+    expect(data.activeCalls).toBeTypeOf('number');
+    expect(data.metrics).toBeDefined();
     const body = JSON.stringify(data);
     expect(body).not.toContain(config.twilio.accountSid);
     expect(body).not.toContain(config.twilio.authToken);

@@ -32,20 +32,55 @@ export async function handleIncomingCall(req, res) {
 
     const { CallSid, From, To } = req.body || {};
 
+    // ── DIAG: Voice webhook received ──
+    logger.info('DIAG_VOICE_WEBHOOK_RECEIVED', {
+      CallSid,
+      fromTail: From ? From.slice(-4) : 'unknown',
+      toTail: To ? To.slice(-4) : 'unknown',
+    });
+
     // Realtime readiness gate: only open the media stream when both the
     // feature flag and a valid OpenAI Realtime configuration are present.
     const realtimeReady = config.realtime.configured && config.realtime.mediaStreamEnabled;
+
+    // ── DIAG: Realtime readiness check ──
+    logger.info('DIAG_REALTIME_READINESS', {
+      CallSid,
+      realtimeConfigured: config.realtime.configured,
+      mediaStreamEnabled: config.realtime.mediaStreamEnabled,
+      model: config.realtime.model || '(not set)',
+      apiKeyPresent: Boolean(config.openai.apiKey),
+      apiKeyPrefix: config.openai.apiKey ? config.openai.apiKey.substring(0, 8) + '...' : 'NONE',
+      aiReceptionistEnabled: config.aiReceptionist.enabled,
+      voiceAgentMode: config.aiReceptionist.voiceAgentMode,
+      realtimeReady,
+      action: realtimeReady ? 'BUILD_MEDIA_STREAM_TWIML' : 'FALLBACK_TO_GREETING',
+    });
+
     if (!realtimeReady) {
       logger.warn('REALTIME_NOT_READY_FALLBACK_TO_GREETING', {
         CallSid,
         configured: config.realtime.configured,
         mediaStreamEnabled: config.realtime.mediaStreamEnabled,
       });
-      return res.type('text/xml').send(twilioWebhook.buildGreetingTwiML());
+      const greetingTwiml = twilioWebhook.buildGreetingTwiML();
+      logger.info('DIAG_TWIML_SENT', {
+        CallSid,
+        type: 'GREETING_TWIML',
+        containsHangup: greetingTwiml.includes('Hangup'),
+        first200Chars: greetingTwiml.substring(0, 200),
+      });
+      return res.type('text/xml').send(greetingTwiml);
     }
 
     // Milestone 2: connect the live Twilio <-> OpenAI Realtime media stream.
     const twiml = twilioWebhook.buildIncomingTwiML(CallSid, From, To, { publicUrl: config.publicUrl });
+    logger.info('DIAG_TWIML_SENT', {
+      CallSid,
+      type: 'MEDIA_STREAM_TWIML',
+      containsStream: twiml.includes('<Stream'),
+      first200Chars: twiml.substring(0, 200),
+    });
     res.type('text/xml').send(twiml);
     logger.info('TWILIO_INCOMING_CALL', { CallSid, From, To });
   } catch (err) {

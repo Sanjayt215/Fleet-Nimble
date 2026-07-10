@@ -1,10 +1,12 @@
 import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
+import { RealtimeSessionManager } from './realtimeSessionManager.js';
 
 const ACTIVE_SESSIONS = new Map();
 
 export function registerSession(callSid, ws, metadata = {}) {
-  const session = {
+  const mgr = RealtimeSessionManager.create(callSid, ws, metadata);
+  const legacy = {
     callSid,
     ws,
     metadata,
@@ -16,11 +18,12 @@ export function registerSession(callSid, ws, metadata = {}) {
     streamSid: null,
     functionCalls: [],
     confirmedActions: [],
+    get stopReconnect() { return mgr.stopReconnect; },
+    set stopReconnect(v) { mgr.stopReconnect = v; },
   };
-
-  ACTIVE_SESSIONS.set(callSid, session);
+  ACTIVE_SESSIONS.set(callSid, legacy);
   logger.info('REALTIME_SESSION_REGISTERED', { callSid });
-  return session;
+  return legacy;
 }
 
 export function getSession(callSid) {
@@ -37,6 +40,7 @@ export function removeSession(callSid) {
     ACTIVE_SESSIONS.delete(callSid);
     logger.info('REALTIME_SESSION_REMOVED', { callSid });
   }
+  RealtimeSessionManager.remove(callSid);
 }
 
 export function updateSessionActivity(callSid) {
@@ -44,6 +48,8 @@ export function updateSessionActivity(callSid) {
   if (session) {
     session.lastActivityAt = Date.now();
   }
+  const mgr = RealtimeSessionManager.get(callSid);
+  if (mgr) mgr.updateActivity();
 }
 
 export function getActiveSessions() {
@@ -85,6 +91,8 @@ export function setStreamSid(callSid, streamSid) {
   if (session) {
     session.streamSid = streamSid;
   }
+  const mgr = RealtimeSessionManager.get(callSid);
+  if (mgr) mgr.streamSid = streamSid;
 }
 
 export function setOpenaiWs(callSid, ws) {
@@ -92,6 +100,8 @@ export function setOpenaiWs(callSid, ws) {
   if (session) {
     session.openaiWs = ws;
   }
+  const mgr = RealtimeSessionManager.get(callSid);
+  if (mgr) mgr.openAiSocket = ws;
 }
 
 export function cleanupStaleSessions(maxAgeMs = 600000) {
@@ -106,6 +116,7 @@ export function cleanupStaleSessions(maxAgeMs = 600000) {
   if (cleaned > 0) {
     logger.info('STALE_SESSIONS_CLEANED', { count: cleaned });
   }
+  RealtimeSessionManager.cleanup(maxAgeMs);
   return cleaned;
 }
 

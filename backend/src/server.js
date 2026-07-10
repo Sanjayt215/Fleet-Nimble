@@ -81,6 +81,11 @@ setInterval(async () => {
   cleanupOld(600000);
 }, 600000);
 
+setInterval(async () => {
+  const { RealtimeSessionManager: RSM } = await import('./services/realtimeSessionManager.js');
+  RSM.cleanup(600000);
+}, 600000);
+
 server.listen(config.port, host, async () => {
   logger.info(`FleetNimble API running on http://${host}:${config.port}`);
   logger.info(`Environment: ${config.env}`);
@@ -104,6 +109,26 @@ server.listen(config.port, host, async () => {
     validateSignature: config.twilio.validateSignature,
     aiReceptionistEnabled: config.aiReceptionist.enabled,
     voiceAgentMode: config.aiReceptionist.voiceAgentMode,
+  });
+
+  // ── DIAG: Full voice pipeline startup diagnostics ──
+  const { RealtimeModelValidator: RMV } = await import('./services/realtimeModelValidator.js');
+  const modelCheck = RMV.validate(config.realtime.model);
+  logger.info('DIAG_PIPELINE_CONFIG', {
+    publicUrl: config.publicUrl,
+    realtimeModel: config.realtime.model,
+    realtimeVoice: config.realtime.voice,
+    realtimeConfigured: config.realtime.configured,
+    mediaStreamEnabled: config.realtime.mediaStreamEnabled,
+    modelValid: modelCheck.valid,
+    modelValidationReason: modelCheck.valid ? null : modelCheck.reason,
+    maxCallSeconds: config.realtime.maxCallSeconds,
+    silenceTimeoutSeconds: config.realtime.silenceTimeoutSeconds,
+    openaiApiKeyPresent: Boolean(config.openai.apiKey),
+    openaiApiKeyPrefix: config.openai.apiKey ? config.openai.apiKey.substring(0, 8) + '...' : 'NONE',
+    aiReceptionistEnabled: config.aiReceptionist.enabled,
+    voiceAgentMode: config.aiReceptionist.voiceAgentMode,
+    sessionManagerVersion: '2.0',
   });
 });
 

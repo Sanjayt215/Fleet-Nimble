@@ -19,19 +19,6 @@ function parseFloatEnv(value, defaultValue) {
 const env = process.env.NODE_ENV || 'development';
 const publicUrl = process.env.PUBLIC_BACKEND_URL || 'http://localhost:5000';
 
-// Realtime models known to be compatible with the OpenAI Realtime WebSocket API.
-// Validated so we never send an unverified model name to the realtime endpoint.
-const REALTIME_MODEL_ALLOWLIST = [
-  'gpt-4o-realtime-preview',
-  'gpt-4o-mini-realtime-preview',
-  'gpt-realtime-preview',
-];
-
-function isRealtimeModelSupported(model) {
-  if (!model || typeof model !== 'string') return false;
-  return REALTIME_MODEL_ALLOWLIST.some((m) => model === m || model.startsWith(`${m}-`));
-}
-
 export const config = {
   env,
   port: parseIntEnv(process.env.PORT, 5000),
@@ -82,7 +69,7 @@ export const config = {
     maxCallSeconds: parseIntEnv(process.env.AI_RECEPTIONIST_MAX_CALL_SECONDS, 600),
     silenceTimeoutSeconds: parseIntEnv(process.env.AI_RECEPTIONIST_SILENCE_TIMEOUT_SECONDS, 30),
     mediaStreamEnabled: parseBool(process.env.AI_RECEPTIONIST_MEDIA_STREAM_ENABLED, true),
-    configured: isRealtimeModelSupported(process.env.AI_RECEPTIONIST_MODEL || 'gpt-4o-realtime-preview') && Boolean(process.env.OPENAI_API_KEY),
+    configured: Boolean(process.env.AI_RECEPTIONIST_MODEL) && Boolean(process.env.OPENAI_API_KEY),
   },
   ai: {
     provider: process.env.AI_PROVIDER || 'openrouter',
@@ -105,6 +92,7 @@ export const config = {
     enabled: parseBool(process.env.AI_RECEPTIONIST_ENABLED, true),
     voiceAgentMode: process.env.VOICE_AGENT_MODE || 'hybrid',
     mediaStreamEnabled: parseBool(process.env.AI_RECEPTIONIST_MEDIA_STREAM_ENABLED, true),
+    diagnostics: parseBool(process.env.AI_RECEPTIONIST_DIAGNOSTICS, true),
   },
   logLevel: process.env.LOG_LEVEL || 'info',
   publicUrl,
