@@ -11,6 +11,8 @@ import { startMqttConsumer, stopMqttConsumer } from './mqtt/consumer.js';
 import { verifyAIServiceStartup } from './services/aiService.js';
 import { handleMediaStream } from './services/mediaStreamHandler.js';
 
+logger.info('BOOT_START');
+
 const server = http.createServer(app);
 
 const io = new Server(server, {
@@ -70,27 +72,17 @@ server.on('error', (err) => {
   process.exit(1);
 });
 
-setInterval(async () => {
-  const { cleanupStaleSessions } = await import('./services/receptionistAgent.service.js');
-  const count = cleanupStaleSessions(1800000);
-  if (count > 0) logger.info('STALE_AGENT_SESSIONS_CLEANED', { count });
-}, 600000);
-
-setInterval(async () => {
-  const { cleanupStaleSessions: cleanupOld } = await import('./services/receptionistRealtime.service.js');
-  cleanupOld(600000);
-}, 600000);
-
-setInterval(async () => {
-  const { RealtimeSessionManager: RSM } = await import('./services/realtimeSessionManager.js');
-  RSM.cleanup(600000);
-}, 600000);
-
 server.listen(config.port, host, async () => {
-  logger.info(`FleetNimble API running on http://${host}:${config.port}`);
-  logger.info(`Environment: ${config.env}`);
+  logger.info('HTTP_SERVER_LISTENING', {
+    port: config.port,
+    host: '0.0.0.0',
+    environment: config.env,
+  });
 
-  // Verify AI service startup
+  // ── Start database connection (non-blocking, retries with backoff) ──
+  const { start: startDb } = await import('./utils/databaseStatusManager.js');
+  startDb();
+
   verifyAIServiceStartup();
 
   if (config.mqtt.enabled) {
@@ -102,7 +94,7 @@ server.listen(config.port, host, async () => {
   logger.info('AI Receptionist routes at /api/ai-receptionist');
   logger.info('AI Receptionist agent endpoints at /api/ai-receptionist/agent/*');
   logger.info('Twilio media stream WebSocket at /api/ai-receptionist/twilio/media-stream');
-  logger.info('Public health endpoints: GET /api/health, GET /api/ai-receptionist/health');
+  logger.info('Public health endpoints: GET /api/health/live, GET /api/health/ready, GET /api/health, GET /api/ai-receptionist/health');
   logger.info('TWILIO_CONFIG', {
     twilioConfigured: config.twilio.configured,
     phoneConfigured: config.twilio.phoneConfigured,
@@ -130,7 +122,26 @@ server.listen(config.port, host, async () => {
     voiceAgentMode: config.aiReceptionist.voiceAgentMode,
     sessionManagerVersion: '2.0',
   });
+
+  logger.info('BOOT_COMPLETE');
 });
+
+// ── Server-side DB connectivity timer for cleanup ──
+setInterval(async () => {
+  const { cleanupStaleSessions } = await import('./services/receptionistAgent.service.js');
+  const count = cleanupStaleSessions(1800000);
+  if (count > 0) logger.info('STALE_AGENT_SESSIONS_CLEANED', { count });
+}, 600000);
+
+setInterval(async () => {
+  const { cleanupStaleSessions: cleanupOld } = await import('./services/receptionistRealtime.service.js');
+  cleanupOld(600000);
+}, 600000);
+
+setInterval(async () => {
+  const { RealtimeSessionManager: RSM } = await import('./services/realtimeSessionManager.js');
+  RSM.cleanup(600000);
+}, 600000);
 
 // ── Global error handlers for 24/7 reliability ──
 process.on('unhandledRejection', (reason, promise) => {
@@ -155,6 +166,9 @@ process.on('SIGTERM', async () => {
     const { cleanupStaleSessions: cleanAgent } = await import('./services/receptionistAgent.service.js');
     cleanAgent(0);
   } catch { }
+
+  const { stop: stopDb } = await import('./utils/databaseStatusManager.js');
+  stopDb();
 
   wss.close(() => {
     logger.info('WEBSOCKET_SERVER_CLOSED');

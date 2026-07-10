@@ -11,16 +11,6 @@ const app = express();
 // Fix Render X-Forwarded-For express-rate-limit warnings
 app.set('trust proxy', 1);
 
-// Early request logger to ensure all incoming requests are observed during debugging
-app.use((req, _res, next) => {
-  try {
-    console.log('[REQ-EARLY]', req.method, req.originalUrl);
-  } catch (e) {
-    // ignore
-  }
-  next();
-});
-
 const corsOptions = {
   origin: true,
   credentials: true,
@@ -41,6 +31,40 @@ app.use(
 
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// ── Liveness: always returns 200 when the process is alive ──
+app.get('/api/health/live', (_req, res) => {
+  res.json({
+    status: 'alive',
+    uptimeSeconds: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// ── Readiness: reflects critical dependency status ──
+app.get('/api/health/ready', async (_req, res) => {
+  const { getStatus } = await import('./utils/databaseStatusManager.js');
+  const db = getStatus();
+  if (db.state === 'connected') {
+    return res.json({
+      status: 'healthy',
+      database: 'connected',
+      twilio: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) ? 'configured' : 'not_configured',
+      realtime: Boolean(process.env.AI_RECEPTIONIST_MODEL && process.env.OPENAI_API_KEY) ? 'configured' : 'not_configured',
+      mediaStream: process.env.AI_RECEPTIONIST_MEDIA_STREAM_ENABLED === 'true' ? 'enabled' : 'disabled',
+      timestamp: new Date().toISOString(),
+    });
+  }
+  return res.status(503).json({
+    status: 'degraded',
+    database: db.state,
+    lastError: db.lastError,
+    twilio: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) ? 'configured' : 'not_configured',
+    realtime: Boolean(process.env.AI_RECEPTIONIST_MODEL && process.env.OPENAI_API_KEY) ? 'configured' : 'not_configured',
+    mediaStream: process.env.AI_RECEPTIONIST_MEDIA_STREAM_ENABLED === 'true' ? 'enabled' : 'disabled',
+    timestamp: new Date().toISOString(),
+  });
+});
 
 app.use('/api', apiLimiter);
 app.use('/api/v1', v1Routes);
@@ -63,36 +87,6 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
   });
-});
-
-// Temporary request-logging middleware to aid routing/debugging.
-// Logs request details and a short list of router layers that regex-match the incoming URL.
-app.use((req, _res, next) => {
-  try {
-    const candidates = (app._router && app._router.stack) || [];
-    const matches = candidates
-      .filter((l) => l && l.regexp)
-      .map((l) => ({ name: l.name || '<anon>', regexp: l.regexp.source }))
-      .filter((m) => {
-        try {
-          return new RegExp(m.regexp).test(req.originalUrl);
-        } catch (e) {
-          return false;
-        }
-      })
-      .slice(0, 6);
-
-    console.log('[REQ-TRACE]', req.method, req.originalUrl, {
-      baseUrl: req.baseUrl,
-      path: req.path,
-      url: req.url,
-      originalUrl: req.originalUrl,
-      matchedLayers: matches,
-    });
-  } catch (err) {
-    console.log('[REQ-TRACE] error', err && err.message);
-  }
-  next();
 });
 
 app.use(notFoundHandler);
