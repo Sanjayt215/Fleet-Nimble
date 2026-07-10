@@ -93,10 +93,18 @@ server.listen(config.port, host, async () => {
   }
 
   logger.info('Digital twin auto-creation disabled');
+  logger.info('AI Receptionist Twilio routes mounted at /api/ai-receptionist/twilio');
   logger.info('AI Receptionist routes at /api/ai-receptionist');
   logger.info('AI Receptionist agent endpoints at /api/ai-receptionist/agent/*');
   logger.info('Twilio media stream WebSocket at /api/ai-receptionist/twilio/media-stream');
   logger.info('Public health endpoints: GET /api/health, GET /api/ai-receptionist/health');
+  logger.info('TWILIO_CONFIG', {
+    twilioConfigured: config.twilio.configured,
+    phoneConfigured: config.twilio.phoneConfigured,
+    validateSignature: config.twilio.validateSignature,
+    aiReceptionistEnabled: config.aiReceptionist.enabled,
+    voiceAgentMode: config.aiReceptionist.voiceAgentMode,
+  });
 });
 
 // ── Global error handlers for 24/7 reliability ──

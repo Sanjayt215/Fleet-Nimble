@@ -19,7 +19,9 @@
     "db:studio": "prisma studio --schema=./prisma/schema.prisma",
     "backup": "node scripts/pg-backup.js",
     "mqtt:test": "node scripts/mqtt-e2e-test.js",
-    "backup:schedule": "node -e \"setInterval(() => import('./scripts/pg-backup.js'), 3600000)\""
+    "backup:schedule": "node -e \"setInterval(() => import('./scripts/pg-backup.js'), 3600000)\"",
+    "build": "prisma generate --schema=./prisma/schema.prisma",
+    "test": "vitest run"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

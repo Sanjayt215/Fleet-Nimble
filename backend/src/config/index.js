@@ -16,8 +16,11 @@ function parseFloatEnv(value, defaultValue) {
   return Number.isFinite(parsed) ? parsed : defaultValue;
 }
 
+const env = process.env.NODE_ENV || 'development';
+const publicUrl = process.env.PUBLIC_BACKEND_URL || 'http://localhost:5000';
+
 export const config = {
-  env: process.env.NODE_ENV || 'development',
+  env,
   port: parseIntEnv(process.env.PORT, 5000),
   databaseUrl: process.env.DATABASE_URL,
   redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',
@@ -50,6 +53,10 @@ export const config = {
     accountSid: process.env.TWILIO_ACCOUNT_SID || '',
     authToken: process.env.TWILIO_AUTH_TOKEN || '',
     phoneNumber: process.env.TWILIO_PHONE_NUMBER || '',
+    validateSignature: parseBool(process.env.TWILIO_VALIDATE_SIGNATURE, env === 'production'),
+    configured: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN),
+    phoneConfigured: Boolean(process.env.TWILIO_PHONE_NUMBER),
+    publicUrl,
   },
   openai: {
     apiKey: process.env.OPENAI_API_KEY || '',
@@ -73,6 +80,10 @@ export const config = {
     maxMessagesPerMinute: parseIntEnv(process.env.AI_MAX_MESSAGES_PER_MINUTE, 30),
     healthCheckEnabled: parseBool(process.env.ENABLE_AI_HEALTH_CHECK, true),
   },
+  aiReceptionist: {
+    enabled: parseBool(process.env.AI_RECEPTIONIST_ENABLED, true),
+    voiceAgentMode: process.env.VOICE_AGENT_MODE || 'hybrid',
+  },
   logLevel: process.env.LOG_LEVEL || 'info',
-  publicUrl: process.env.PUBLIC_BACKEND_URL || 'http://localhost:5000',
+  publicUrl,
 };

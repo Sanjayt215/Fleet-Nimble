@@ -16,23 +16,6 @@ import {
 
 const router = Router();
 
-// Public health check (no auth required)
-router.get('/health', (_req, res) => {
-  if (!config.ai.healthCheckEnabled) {
-    return res.json({ status: 'ok', module: 'ai-receptionist', healthCheck: 'disabled' });
-  }
-  res.json({
-    status: 'ok',
-    module: 'ai-receptionist',
-    providerMode: config.ai.providerMode,
-    memoryEnabled: config.ai.memoryEnabled,
-    receptionistEnabled: config.ai.receptionistEnabled,
-    voiceAgentMode: config.ai.voiceAgentMode,
-    sessionTimeoutMinutes: config.ai.sessionTimeoutMinutes,
-    timestamp: new Date().toISOString(),
-  });
-});
-
 router.get('/status', (_req, res) => {
   res.json({
     success: true,

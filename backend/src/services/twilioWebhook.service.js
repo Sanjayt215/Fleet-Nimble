@@ -14,7 +14,24 @@ function getClient() {
 }
 
 export function validateTwilioRequest(req) {
-  if (config.env === 'development') return true;
+  // Bypass signature validation outside of production (development / test).
+  if (config.env !== 'production') {
+    if (config.env === 'development') {
+      logger.warn('TWILIO_SIGNATURE_VALIDATION_BYPASS', {
+        reason: 'NODE_ENV is not production',
+      });
+    }
+    return true;
+  }
+
+  // Explicit disable (e.g. proxy misconfiguration workaround).
+  if (config.twilio.validateSignature === false) {
+    logger.warn('TWILIO_SIGNATURE_VALIDATION_BYPASS', {
+      reason: 'TWILIO_VALIDATE_SIGNATURE disabled',
+    });
+    return true;
+  }
+
   if (!config.twilio.authToken) return false;
 
   const twilioSignature = req.headers['x-twilio-signature'];
@@ -47,6 +64,30 @@ export function buildIncomingTwiML(callSid, from, cfg = {}) {
   });
 
   logger.info('TWILIO_TWIML_GENERATED', { callSid, from });
+  return twiml.toString();
+}
+
+export function buildGreetingTwiML() {
+  const twiml = new VoiceResponse();
+  twiml.say(
+    { voice: 'alice', language: 'en-US' },
+    'Hello. Thank you for calling FleetNimble. You have reached the FleetNimble AI Receptionist. ' +
+      'Your call has successfully reached our production server. ' +
+      'This confirms the phone system is configured correctly. ' +
+      'Our intelligent voice assistant will be connected in the next deployment. ' +
+      'Thank you for calling FleetNimble. Goodbye.'
+  );
+  twiml.hangup();
+  return twiml.toString();
+}
+
+export function buildUnavailableTwiML() {
+  const twiml = new VoiceResponse();
+  twiml.say(
+    { voice: 'alice', language: 'en-US' },
+    'Thank you for calling FleetNimble. Our AI Receptionist is currently unavailable. Please try again later.'
+  );
+  twiml.hangup();
   return twiml.toString();
 }
 

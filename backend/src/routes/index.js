@@ -49,8 +49,8 @@ router.use('/admin', adminRoutes);
 router.use('/backup', backupRoutes);
 router.use('/twin', twinRoutes);
 router.use('/mobile', mobileRoutes);
-router.use('/ai-receptionist', aiReceptionistRoutes);
 router.use('/ai-receptionist', twilioReceptionistRoutes);
+router.use('/ai-receptionist', aiReceptionistRoutes);
 router.get('/dashboard/stats', authenticate, reportController.dashboardStats);
 
 export default router;

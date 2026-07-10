@@ -20,112 +20,53 @@ import { config } from '../config/index.js';
 export async function handleIncomingCall(req, res) {
   try {
     const valid = twilioWebhook.validateTwilioRequest(req);
-    if (!valid && config.env !== 'development') {
-      logger.warn('TWILIO_INVALID_SIGNATURE', { from: req.body.From });
-      return res.type('text/xml').send(twilioWebhook.buildFallbackTwiML());
+    if (!valid) {
+      logger.warn('TWILIO_INVALID_SIGNATURE', { path: req.originalUrl });
+      return res.status(403).type('text/xml').send(twilioWebhook.buildFallbackTwiML());
     }
 
-    const { CallSid, From, To, AccountSid } = req.body;
-
-    const configRecord = await prisma.aiReceptionistConfig.findFirst();
-    const userId = configRecord?.userId || 'system';
-
-    const call = await callService.createCall(userId, {
-      callerName: 'Incoming Call',
-      callerPhone: From || null,
-      twilioCallSid: CallSid,
-      twilioAccountSid: AccountSid,
-      twilioFrom: From,
-      twilioTo: To,
-      callType: 'GENERAL',
-      callStatus: 'IN_PROGRESS',
-    });
-
-    registerSession(CallSid, null, {
-      callLogId: call.id,
-      userId,
-      from: From,
-      to: To,
-    });
-
-    const io = req.app.get('io');
-    if (io) {
-      io.to(`user:${userId}`).emit('call.started', {
-        callId: call.id,
-        callSid: CallSid,
-        callerNumber: From,
-        callerName: 'Incoming Call',
-        status: 'IN_PROGRESS',
-        timestamp: new Date().toISOString(),
-      });
+    // Milestone 1: no media stream / no OpenAI / no AI conversation yet.
+    if (!config.aiReceptionist.enabled) {
+      return res.type('text/xml').send(twilioWebhook.buildUnavailableTwiML());
     }
 
-    const twiml = twilioWebhook.buildIncomingTwiML(CallSid, From, configRecord || {});
-    res.type('text/xml').send(twiml);
-
-    logger.info('TWILIO_INCOMING_CALL', { CallSid, From, To });
+    const { CallSid } = req.body || {};
+    res.type('text/xml').send(twilioWebhook.buildGreetingTwiML());
+    logger.info('TWILIO_INCOMING_CALL', { CallSid });
   } catch (err) {
     logger.error('TWILIO_INCOMING_CALL_ERROR', { error: err.message });
     res.type('text/xml').send(twilioWebhook.buildFallbackTwiML());
   }
 }
 
+export async function handleFallbackCall(req, res) {
+  try {
+    res.type('text/xml').send(twilioWebhook.buildFallbackTwiML());
+  } catch (err) {
+    logger.error('TWILIO_FALLBACK_ERROR', { error: err.message });
+    res.type('text/xml').send(twilioWebhook.buildFallbackTwiML());
+  }
+}
+
 export async function handleStatusCallback(req, res) {
   try {
-    const { CallSid, CallStatus, CallDuration, From, To } = req.body;
+    const { CallSid, CallStatus, CallDuration, From, To } = req.body || {};
 
-    logger.info('TWILIO_STATUS_CALLBACK', { CallSid, CallStatus, CallDuration });
-
-    const call = await prisma.aiReceptionistCall.findFirst({
-      where: { twilioCallSid: CallSid },
+    // Log safely — never expose full phone numbers.
+    const fromTail = From ? From.slice(-4) : 'unknown';
+    const toTail = To ? To.slice(-4) : 'unknown';
+    logger.info('TWILIO_STATUS_CALLBACK', {
+      CallSid,
+      CallStatus,
+      CallDuration,
+      fromTail,
+      toTail,
     });
 
-    if (call) {
-      const statusMap = {
-        'completed': 'COMPLETED',
-        'busy': 'FAILED',
-        'failed': 'FAILED',
-        'no-answer': 'FAILED',
-        'canceled': 'FAILED',
-        'ringing': 'IN_PROGRESS',
-        'in-progress': 'IN_PROGRESS',
-        'initiated': 'NEW',
-      };
-
-      const mappedStatus = statusMap[CallStatus] || call.callStatus;
-      const duration = CallDuration ? parseInt(CallDuration, 10) : call.durationSeconds;
-
-      await prisma.aiReceptionistCall.update({
-        where: { id: call.id },
-        data: {
-          callStatus: mappedStatus,
-          callEndedAt: ['completed', 'failed', 'busy', 'no-answer', 'canceled'].includes(CallStatus)
-            ? new Date() : call.callEndedAt,
-          durationSeconds: duration || call.durationSeconds,
-        },
-      });
-
-      if (['completed', 'failed', 'busy', 'no-answer', 'canceled'].includes(CallStatus)) {
-        removeSession(CallSid);
-        transcriptService.flushPendingTranscripts();
-
-        const io = req.app.get('io');
-        if (io) {
-          io.to(`user:${call.userId}`).emit('call.ended', {
-            callId: call.id,
-            callSid: CallSid,
-            status: mappedStatus,
-            duration,
-            timestamp: new Date().toISOString(),
-          });
-        }
-      }
-    }
-
-    res.status(200).send('');
+    res.status(204).send('');
   } catch (err) {
     logger.error('TWILIO_STATUS_ERROR', { error: err.message });
-    res.status(200).send('');
+    res.status(204).send('');
   }
 }
 
