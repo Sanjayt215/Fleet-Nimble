@@ -32,15 +32,20 @@ export async function handleIncomingCall(req, res) {
 
     const { CallSid, From, To } = req.body || {};
 
-    // Graceful degradation: if OpenAI Realtime is not configured in production,
-    // play the static greeting instead of opening a silent media stream.
-    if (!config.openai.apiKey && config.env === 'production') {
-      logger.warn('OPENAI_NOT_CONFIGURED_FALLBACK_TO_GREETING', { CallSid });
+    // Realtime readiness gate: only open the media stream when both the
+    // feature flag and a valid OpenAI Realtime configuration are present.
+    const realtimeReady = config.realtime.configured && config.realtime.mediaStreamEnabled;
+    if (!realtimeReady) {
+      logger.warn('REALTIME_NOT_READY_FALLBACK_TO_GREETING', {
+        CallSid,
+        configured: config.realtime.configured,
+        mediaStreamEnabled: config.realtime.mediaStreamEnabled,
+      });
       return res.type('text/xml').send(twilioWebhook.buildGreetingTwiML());
     }
 
     // Milestone 2: connect the live Twilio <-> OpenAI Realtime media stream.
-    const twiml = twilioWebhook.buildIncomingTwiML(CallSid, From, { publicUrl: config.publicUrl });
+    const twiml = twilioWebhook.buildIncomingTwiML(CallSid, From, To, { publicUrl: config.publicUrl });
     res.type('text/xml').send(twiml);
     logger.info('TWILIO_INCOMING_CALL', { CallSid, From, To });
   } catch (err) {

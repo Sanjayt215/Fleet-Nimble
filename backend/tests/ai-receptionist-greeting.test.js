@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import app from '../src/app.js';
@@ -40,12 +40,21 @@ const saved = {
   env: config.env,
   twilio: { ...config.twilio },
   aiReceptionist: { ...config.aiReceptionist },
+  realtime: { ...config.realtime },
 };
+
+beforeEach(() => {
+  // Ensure the voice route opens the media stream (realtime ready) for these tests.
+  config.openai.apiKey = 'test-key';
+  config.realtime.configured = true;
+  config.realtime.mediaStreamEnabled = true;
+});
 
 afterEach(() => {
   config.env = saved.env;
   config.twilio = { ...saved.twilio };
   config.aiReceptionist = { ...saved.aiReceptionist };
+  config.realtime = { ...saved.realtime };
 });
 
 async function postForm(path, body = {}, headers = {}) {
@@ -69,8 +78,8 @@ describe('AI Receptionist health endpoint', () => {
     expect(data.twilioConfigured).toBeTypeOf('boolean');
     expect(data.phoneConfigured).toBeTypeOf('boolean');
     expect(data.voiceMode).toBeDefined();
-    expect(data.realtimeConnected).toBe(false);
-    expect(data.mediaStreamEnabled).toBe(false);
+    expect(data.realtimeConfigured).toBeTypeOf('boolean');
+    expect(data.mediaStreamEnabled).toBeTypeOf('boolean');
     const body = JSON.stringify(data);
     expect(body).not.toContain(config.twilio.accountSid);
     expect(body).not.toContain(config.twilio.authToken);
@@ -102,7 +111,8 @@ describe('Incoming call voice webhook (milestone 1)', () => {
     expect(text).toContain('<Stream');
     expect(text).toContain('wss://');
     expect(text).toContain('/api/ai-receptionist/twilio/media-stream');
-    expect(text).toContain('callSid=CA123');
+    expect(text).toContain('<Parameter name="callSid" value="CA123"');
+    expect(text).toContain('<Parameter name="from" value="+919876543210"');
     expect(text).not.toContain('<Say');
     expect(text).not.toContain('<Hangup');
   });

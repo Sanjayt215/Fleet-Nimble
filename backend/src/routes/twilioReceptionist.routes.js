@@ -14,8 +14,8 @@ router.get('/health', (_req, res) => {
     twilioConfigured: config.twilio.configured,
     phoneConfigured: config.twilio.phoneConfigured,
     voiceMode: config.aiReceptionist.voiceAgentMode,
-    realtimeConnected: false,
-    mediaStreamEnabled: false,
+    realtimeConfigured: config.realtime.configured,
+    mediaStreamEnabled: config.realtime.mediaStreamEnabled,
   });
 });
 

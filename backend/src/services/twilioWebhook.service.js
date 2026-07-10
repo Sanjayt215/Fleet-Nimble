@@ -46,26 +46,27 @@ export function validateTwilioRequest(req) {
   }
 }
 
-export function buildIncomingTwiML(callSid, from, cfg = {}) {
-  const twiml = new VoiceResponse();
-  const baseUrl = cfg.publicUrl || config.publicUrl;
-
-  let host;
+export function buildMediaStreamUrl(baseUrl = config.publicUrl) {
   try {
-    host = new URL(baseUrl).host;
+    const u = new URL(baseUrl);
+    const wsProtocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${wsProtocol}//${u.host}/api/ai-receptionist/twilio/media-stream`;
   } catch {
-    host = 'localhost:5000';
+    return 'wss://localhost:5000/api/ai-receptionist/twilio/media-stream';
   }
+}
 
-  // Generate the secure WebSocket URL from PUBLIC_BACKEND_URL and pass the
-  // callSid so the media-stream handler can register the session.
-  const streamUrl = `wss://${host}/api/ai-receptionist/twilio/media-stream?callSid=${callSid || ''}`;
+export function buildIncomingTwiML(callSid, from, to, cfg = {}) {
+  const twiml = new VoiceResponse();
+  const streamUrl = buildMediaStreamUrl(cfg.publicUrl || config.publicUrl);
 
   const connect = twiml.connect();
-  connect.stream({
-    url: streamUrl,
-    track: 'both_tracks',
-  });
+  const stream = connect.stream({ url: streamUrl, track: 'both_tracks' });
+
+  // Pass call context as Twilio <Parameter> children (available in the `start` event).
+  if (callSid) stream.parameter({ name: 'callSid', value: callSid });
+  if (from) stream.parameter({ name: 'from', value: from });
+  if (to) stream.parameter({ name: 'to', value: to });
 
   logger.info('TWILIO_TWIML_GENERATED', { callSid, from });
   return twiml.toString();
@@ -140,4 +141,4 @@ export async function makeCall(to, from, statusCallbackUrl) {
   }
 }
 
-export default { validateTwilioRequest, buildIncomingTwiML, buildFallbackTwiML, buildForwardCallTwiML, makeCall };
+export default { validateTwilioRequest, buildMediaStreamUrl, buildIncomingTwiML, buildGreetingTwiML, buildUnavailableTwiML, buildFallbackTwiML, buildForwardCallTwiML, makeCall };

@@ -45,14 +45,14 @@ wss.on('connection', (ws, request) => {
 });
 
 server.on('upgrade', (request, socket, head) => {
-  const pathname = new URL(request.url, `http://localhost`).pathname;
+  const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
 
+  // Only intercept the Twilio media-stream path. Socket.IO upgrade requests
+  // (/socket.io/*) are left for Socket.IO's own listener to handle — never destroy them.
   if (pathname === '/api/ai-receptionist/twilio/media-stream') {
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit('connection', ws, request);
     });
-  } else {
-    socket.destroy();
   }
 });
 

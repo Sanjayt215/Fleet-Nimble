@@ -14,215 +14,290 @@ import {
   appendToTranscript,
   saveTranscriptChunk,
 } from './receptionistTranscript.service.js';
-import { mapToOpenAIVoice, buildSystemPrompt } from './receptionistVoice.service.js';
+import { mapToOpenAIVoice, buildSystemPrompt, AI_RECEPTIONIST_GREETING } from './receptionistVoice.service.js';
 
 const OPENAI_REALTIME_URL = 'wss://api.openai.com/v1/realtime';
 const MAX_RECONNECT_ATTEMPTS = 3;
 
+function buildOpenAiUrl() {
+  return `${OPENAI_REALTIME_URL}?model=${encodeURIComponent(config.realtime.model)}`;
+}
+
 function handleMediaStream(ws, req) {
   const urlParams = new URL(req.url, config.publicUrl).searchParams;
-  const callSid = urlParams.get('callSid');
+  const urlCallSid = urlParams.get('callSid') || null;
 
-  if (!callSid) {
-    ws.close(4000, 'Missing callSid');
-    return;
-  }
-
-  const session = registerSession(callSid, ws, {
-    ...(getSession(callSid)?.metadata || {}),
-  });
-
+  let callSid = urlCallSid;
+  let session = null;
   let openaiWs = null;
   let reconnectAttempts = 0;
-  const maxReconnectAttempts = MAX_RECONNECT_ATTEMPTS;
-  let responseTimeout = null;
   let isClosing = false;
-  let audioStreamingStarted = false;
+  let audioBridgeActive = false;
+  const timers = [];
 
-  async function connectToOpenAI() {
-    if (isClosing) return;
+  function scheduleTimer(fn, ms) {
+    const handle = setTimeout(() => {
+      try {
+        fn();
+      } catch (e) {
+        logger.error('TIMER_ERROR', { callSid, error: e.message });
+      }
+    }, ms);
+    timers.push(handle);
+    return handle;
+  }
 
-    const voice = mapToOpenAIVoice(config.openai.voice);
-    const openaiUrl = `${OPENAI_REALTIME_URL}?model=${config.openai.model}`;
-
-    try {
-      openaiWs = new WebSocket(openaiUrl, {
-        headers: {
-          'Authorization': `Bearer ${config.openai.apiKey}`,
-          'OpenAI-Beta': 'realtime=v1',
-        },
-      });
-
-      setOpenaiWs(callSid, openaiWs);
-
-      openaiWs.on('open', () => {
-        logger.info('OPENAI_REALTIME_CONNECTED', { callSid });
-        reconnectAttempts = 0;
-
-        const sessionUpdate = {
-          type: 'session.update',
-          session: {
-            modalities: ['text', 'audio'],
-            instructions: buildSystemPrompt({ businessName: 'FleetNimble' }),
-            voice,
-            input_audio_transcription: {
-              enabled: true,
-              model: 'whisper-1',
-            },
-            turn_detection: {
-              type: 'server_vad',
-              threshold: 0.5,
-              prefix_padding_ms: 300,
-              silence_duration_ms: 600,
-            },
-            temperature: 0.7,
-          },
-        };
-
-        openaiWs.send(JSON.stringify(sessionUpdate));
-
-        openaiWs.send(JSON.stringify({
-          type: 'response.create',
-          response: {
-            modalities: ['text', 'audio'],
-            instructions: buildSystemPrompt({ businessName: 'FleetNimble' }),
-          },
-        }));
-      });
-
-      openaiWs.on('message', async (data) => {
-        try {
-          const msg = JSON.parse(data.toString());
-          await handleOpenAIMessage(msg, session, openaiWs);
-        } catch (err) {
-          logger.error('OPENAI_MESSAGE_PARSE_ERROR', { error: err.message });
-        }
-      });
-
-      openaiWs.on('close', (code, reason) => {
-        logger.warn('OPENAI_REALTIME_DISCONNECTED', { callSid, code, reason: reason?.toString() });
-        setOpenaiWs(callSid, null);
-
-        if (!isClosing && reconnectAttempts < maxReconnectAttempts) {
-          reconnectAttempts++;
-          logger.info('OPENAI_RECONNECT_ATTEMPT', { callSid, attempt: reconnectAttempts });
-          setTimeout(connectToOpenAI, 2000 * reconnectAttempts);
-        }
-      });
-
-      openaiWs.on('error', (err) => {
-        logger.error('OPENAI_REALTIME_ERROR', { callSid, error: err.message });
-      });
-    } catch (err) {
-      logger.error('OPENAI_CONNECT_ERROR', { callSid, error: err.message });
+  function clearTimers() {
+    while (timers.length) {
+      const handle = timers.pop();
+      try {
+        clearTimeout(handle);
+        clearInterval(handle);
+      } catch { }
     }
   }
 
-  ws.on('message', async (raw) => {
+  function connectToOpenAI() {
+    if (isClosing || !callSid) return;
+
+    if (!config.realtime.configured) {
+      logger.error('REALTIME_CALL_FAILED', { callSid, reason: 'realtime_not_configured' });
+      gracefulClose();
+      return;
+    }
+
+    logger.info('OPENAI_REALTIME_CONNECTING', { callSid });
+    const voice = mapToOpenAIVoice(config.realtime.voice);
+
     try {
-      const msg = JSON.parse(raw.toString());
-      updateSessionActivity(callSid);
+      openaiWs = new WebSocket(buildOpenAiUrl(), {
+        headers: {
+          Authorization: `Bearer ${config.openai.apiKey}`,
+          'OpenAI-Beta': 'realtime=v1',
+        },
+      });
+      setOpenaiWs(callSid, openaiWs);
+    } catch (err) {
+      logger.error('REALTIME_CALL_FAILED', { callSid, reason: 'openai_connect_error', error: err.message });
+      gracefulClose();
+      return;
+    }
 
-      switch (msg.event) {
-        case 'connected':
-          logger.info('TWILIO_MEDIA_CONNECTED', { callSid });
-          if (session.metadata.callLogId) {
-            const io = req?.app?.get('io');
-            if (io) {
-              io.to(`user:${session.metadata.userId}`).emit('call.started', {
-                callSid,
-                callId: session.metadata.callLogId,
-                callerNumber: session.metadata.from,
-                status: 'IN_PROGRESS',
-                timestamp: new Date().toISOString(),
-              });
-            }
-          }
-          break;
+    openaiWs.on('open', () => {
+      if (isClosing) return;
+      logger.info('OPENAI_REALTIME_CONNECTED', { callSid });
+      reconnectAttempts = 0;
 
-        case 'start': {
-          setStreamSid(callSid, msg.streamSid);
-          const start = msg.start || {};
-          const session = getSession(callSid);
-          if (session) {
-            session.metadata = {
-              ...session.metadata,
-              caller: start.from || null,
-              calledNumber: start.to || null,
-              from: start.from || null,
-              to: start.to || null,
-              sessionId: start.callSid || callSid,
-            };
-          }
-          logger.info('TWILIO_MEDIA_STREAM_STARTED', {
-            callSid,
-            streamSid: msg.streamSid,
-            fromTail: start.from ? start.from.slice(-4) : 'unknown',
-            toTail: start.to ? start.to.slice(-4) : 'unknown',
-          });
-          connectToOpenAI();
-          break;
+      openaiWs.send(JSON.stringify({
+        type: 'session.update',
+        session: {
+          modalities: ['text', 'audio'],
+          instructions: buildSystemPrompt({ businessName: 'FleetNimble' }),
+          voice,
+          input_audio_format: 'g711_ulaw',
+          output_audio_format: 'g711_ulaw',
+          input_audio_transcription: { enabled: true, model: 'whisper-1' },
+          turn_detection: {
+            type: 'server_vad',
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 600,
+            interrupt_response: true,
+          },
+          temperature: 0.7,
+        },
+      }));
+
+      // Speak the opening greeting exactly once.
+      openaiWs.send(JSON.stringify({
+        type: 'response.create',
+        response: {
+          modalities: ['text', 'audio'],
+          instructions: `Say exactly: "${AI_RECEPTIONIST_GREETING}"`,
+        },
+      }));
+      logger.info('AI_GREETING_REQUESTED', { callSid });
+    });
+
+    openaiWs.on('message', async (data) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        await handleOpenAIMessage(msg, session, openaiWs);
+      } catch (err) {
+        logger.error('OPENAI_MESSAGE_PARSE_ERROR', { callSid, error: err.message });
+      }
+    });
+
+    openaiWs.on('close', (code, reason) => {
+      logger.warn('OPENAI_REALTIME_CLOSED', { callSid, code, reason: reason?.toString() });
+      setOpenaiWs(callSid, null);
+
+      if (isClosing) return;
+      if (session?.stopReconnect) {
+        gracefulClose();
+        return;
+      }
+      if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+        reconnectAttempts++;
+        logger.info('OPENAI_RECONNECT_ATTEMPT', { callSid, attempt: reconnectAttempts });
+        scheduleTimer(connectToOpenAI, 2000 * reconnectAttempts);
+      } else {
+        gracefulClose();
+      }
+    });
+
+    openaiWs.on('error', (err) => {
+      logger.error('OPENAI_REALTIME_ERROR', { callSid, error: err.message });
+      if (!isClosing && (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS || session?.stopReconnect)) {
+        gracefulClose();
+      }
+    });
+  }
+
+  function gracefulClose() {
+    if (isClosing) return;
+    isClosing = true;
+    clearTimers();
+
+    try {
+      if (openaiWs && openaiWs.readyState !== WebSocket.CLOSED) openaiWs.close();
+    } catch { }
+    setOpenaiWs(callSid, null);
+
+    try {
+      if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
+    } catch { }
+
+    if (callSid) removeSession(callSid);
+    logger.info('CALL_SESSION_CLEANED', { callSid });
+  }
+
+  function endCallGracefully(message) {
+    if (isClosing) return;
+    if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) {
+      gracefulClose();
+      return;
+    }
+    try {
+      openaiWs.send(JSON.stringify({
+        type: 'response.create',
+        response: { modalities: ['text', 'audio'], instructions: `Say exactly: "${message}"` },
+      }));
+    } catch { }
+    scheduleTimer(gracefulClose, 4000);
+  }
+
+  ws.on('message', (raw) => {
+    let msg;
+    try {
+      msg = JSON.parse(raw.toString());
+    } catch {
+      logger.warn('TWILIO_MEDIA_MESSAGE_ERROR', { callSid, error: 'malformed_json' });
+      return;
+    }
+    if (!msg || typeof msg.event !== 'string') {
+      logger.warn('TWILIO_MEDIA_MESSAGE_ERROR', { callSid, error: 'missing_event' });
+      return;
+    }
+    updateSessionActivity(callSid);
+
+    switch (msg.event) {
+      case 'connected':
+        logger.info('TWILIO_MEDIA_CONNECTED', { callSid });
+        break;
+
+      case 'start': {
+        const start = msg.start || {};
+        const params = start.customParameters || {};
+        callSid = callSid || params.callSid || start.callSid || null;
+
+        if (!callSid) {
+          logger.error('REALTIME_CALL_FAILED', { reason: 'missing_callSid' });
+          try { ws.close(4000, 'Missing callSid'); } catch { }
+          return;
         }
 
-        case 'media':
-          if (!audioStreamingStarted) {
-            audioStreamingStarted = true;
-            logger.info('TWILIO_AUDIO_STREAMING_STARTED', { callSid, streamSid: msg.streamSid });
-          }
-          if (openaiWs?.readyState === WebSocket.OPEN) {
-            openaiWs.send(JSON.stringify({
-              type: 'input_audio_buffer.append',
-              audio: msg.media.payload,
-            }));
-          }
-          break;
+        const streamSid = start.streamSid || null;
+        if (!streamSid) {
+          logger.warn('TWILIO_MEDIA_STARTED', { callSid, warning: 'missing_streamSid' });
+        }
 
-        case 'stop':
-          logger.info('TWILIO_MEDIA_STREAM_STOPPED', { callSid });
-          cleanup();
-          break;
+        setStreamSid(callSid, streamSid);
+        session = registerSession(callSid, ws, {
+          from: params.from || start.from || null,
+          to: params.to || start.to || null,
+          caller: params.from || start.from || null,
+          calledNumber: params.to || start.to || null,
+          sessionId: start.callSid || callSid,
+        });
+        session.streamSid = streamSid;
+        session.timers = timers;
 
-        case 'mark':
-          break;
+        logger.info('TWILIO_MEDIA_STARTED', {
+          callSid,
+          streamSid,
+          fromTail: (params.from || start.from || '').slice(-4) || 'unknown',
+        });
+
+        // Max call duration hard limit.
+        scheduleTimer(() => {
+          endCallGracefully('Thank you for calling FleetNimble. Please contact us again if you need further help. Goodbye.');
+        }, config.realtime.maxCallSeconds * 1000);
+
+        // Idle / silence watchdog (re-armed continuously).
+        const silenceMs = Math.max(5000, config.realtime.silenceTimeoutSeconds * 1000);
+        const silenceInterval = setInterval(() => {
+          if (isClosing || !session) return;
+          if (Date.now() - session.lastActivityAt > config.realtime.silenceTimeoutSeconds * 1000) {
+            endCallGracefully('Thank you for calling FleetNimble. Please contact us again if you need further help. Goodbye.');
+          }
+        }, silenceMs);
+        timers.push(silenceInterval);
+
+        connectToOpenAI();
+        break;
       }
-    } catch (err) {
-      logger.error('TWILIO_MEDIA_MESSAGE_ERROR', { error: err.message });
+
+      case 'media': {
+        const payload = msg?.media?.payload;
+        if (typeof payload !== 'string') {
+          logger.warn('TWILIO_MEDIA_MESSAGE_ERROR', { callSid, error: 'missing_audio_payload' });
+          break;
+        }
+        if (!audioBridgeActive) {
+          audioBridgeActive = true;
+          logger.info('AUDIO_BRIDGE_ACTIVE', { callSid, streamSid: msg.streamSid });
+        }
+        if (openaiWs?.readyState === WebSocket.OPEN) {
+          openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: payload }));
+        }
+        break;
+      }
+
+      case 'mark':
+        // Playback acknowledgement — no action required.
+        break;
+
+      case 'stop':
+        logger.info('TWILIO_MEDIA_STOPPED', { callSid });
+        gracefulClose();
+        break;
     }
   });
 
   ws.on('close', () => {
     logger.info('TWILIO_MEDIA_WS_CLOSED', { callSid });
-    cleanup();
+    gracefulClose();
   });
 
   ws.on('error', (err) => {
     logger.error('TWILIO_MEDIA_WS_ERROR', { callSid, error: err.message });
-    cleanup();
+    gracefulClose();
   });
-
-  function cleanup() {
-    if (isClosing) return;
-    isClosing = true;
-
-    if (responseTimeout) clearTimeout(responseTimeout);
-
-    if (openaiWs) {
-      try {
-        openaiWs.close();
-      } catch { }
-      setOpenaiWs(callSid, null);
-    }
-
-    const s = getSession(callSid);
-    if (s?.metadata?.callLogId) {
-      saveTranscriptChunk(s.metadata.callLogId, s.transcript);
-    }
-
-    removeSession(callSid);
-  }
 }
 
 async function handleOpenAIMessage(msg, session, openaiWs) {
+  if (!session) return;
   const { callSid } = session;
   const io = session.ws?.app?.get('io');
 
@@ -236,6 +311,12 @@ async function handleOpenAIMessage(msg, session, openaiWs) {
       break;
 
     case 'input_audio_buffer.speech_started':
+      // Barge-in: cancel any in-progress assistant response.
+      if (openaiWs?.readyState === WebSocket.OPEN) {
+        try {
+          openaiWs.send(JSON.stringify({ type: 'response.cancel' }));
+        } catch { }
+      }
       if (io) {
         io.to(`user:${session.metadata.userId}`).emit('transcript.partial', {
           callSid,
@@ -254,14 +335,12 @@ async function handleOpenAIMessage(msg, session, openaiWs) {
           if (content.type === 'text') {
             const role = msg.item.role === 'user' ? 'caller' : 'assistant';
             addTranscriptEntry(callSid, { role, content: content.text });
-
             if (session.metadata.callLogId) {
               appendToTranscript(session.metadata.callLogId, role, content.text);
             }
           } else if (content.type === 'transcript') {
             const role = msg.item.role === 'user' ? 'caller' : 'assistant';
             addTranscriptEntry(callSid, { role, content: content.transcript });
-
             if (io) {
               io.to(`user:${session.metadata.userId}`).emit('transcript.final', {
                 callSid,
@@ -270,11 +349,9 @@ async function handleOpenAIMessage(msg, session, openaiWs) {
                 timestamp: new Date().toISOString(),
               });
             }
-
             if (session.metadata.callLogId) {
               appendToTranscript(session.metadata.callLogId, role, content.transcript);
             }
-          } else if (content.type === 'audio') {
           }
         }
       }
@@ -314,13 +391,10 @@ async function handleOpenAIMessage(msg, session, openaiWs) {
         callSid,
         error: msg.error?.message || JSON.stringify(msg.error),
       });
-
-      if (session.ws && session.ws.readyState === WebSocket.OPEN) {
-        session.ws.send(JSON.stringify({
-          event: 'media',
-          streamSid: session.streamSid,
-          media: { payload: '' },
-        }));
+      // Authentication / invalid-model failures cannot be retried successfully.
+      if (['invalid_api_key', 'authentication', 'model_not_found', 'unsupported_model'].includes(msg.error?.code) ||
+          (msg.error?.message || '').toLowerCase().includes('authentication')) {
+        session.stopReconnect = true;
       }
       break;
 
