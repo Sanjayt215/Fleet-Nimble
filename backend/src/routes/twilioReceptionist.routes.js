@@ -24,7 +24,6 @@ router.post('/twilio/voice', twilioWebhookLimiter, ctrl.handleIncomingCall);
 router.post('/twilio/fallback', twilioWebhookLimiter, ctrl.handleFallbackCall);
 router.post('/twilio/status', twilioWebhookLimiter, ctrl.handleStatusCallback);
 router.post('/twilio/recording', twilioWebhookLimiter, ctrl.handleRecordingCallback);
-router.get('/twilio/media-stream', ctrl.handleMediaStream);
 
 // ── Admin / Dashboard (JWT auth required) ──
 router.get('/live-calls', authenticate, ctrl.getLiveCalls);

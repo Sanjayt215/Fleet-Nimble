@@ -109,8 +109,4 @@ export function cleanupStaleSessions(maxAgeMs = 600000) {
   return cleaned;
 }
 
-export function buildOpenaiUrl() {
-  return `wss://api.openai.com/v1/realtime?model=${config.openai.model}`;
-}
-
 export { ACTIVE_SESSIONS };

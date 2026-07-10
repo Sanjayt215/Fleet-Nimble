@@ -25,14 +25,24 @@ export async function handleIncomingCall(req, res) {
       return res.status(403).type('text/xml').send(twilioWebhook.buildFallbackTwiML());
     }
 
-    // Milestone 1: no media stream / no OpenAI / no AI conversation yet.
+    // Milestone 1 safety net: AI Receptionist disabled -> polite unavailable message.
     if (!config.aiReceptionist.enabled) {
       return res.type('text/xml').send(twilioWebhook.buildUnavailableTwiML());
     }
 
-    const { CallSid } = req.body || {};
-    res.type('text/xml').send(twilioWebhook.buildGreetingTwiML());
-    logger.info('TWILIO_INCOMING_CALL', { CallSid });
+    const { CallSid, From, To } = req.body || {};
+
+    // Graceful degradation: if OpenAI Realtime is not configured in production,
+    // play the static greeting instead of opening a silent media stream.
+    if (!config.openai.apiKey && config.env === 'production') {
+      logger.warn('OPENAI_NOT_CONFIGURED_FALLBACK_TO_GREETING', { CallSid });
+      return res.type('text/xml').send(twilioWebhook.buildGreetingTwiML());
+    }
+
+    // Milestone 2: connect the live Twilio <-> OpenAI Realtime media stream.
+    const twiml = twilioWebhook.buildIncomingTwiML(CallSid, From, { publicUrl: config.publicUrl });
+    res.type('text/xml').send(twiml);
+    logger.info('TWILIO_INCOMING_CALL', { CallSid, From, To });
   } catch (err) {
     logger.error('TWILIO_INCOMING_CALL_ERROR', { error: err.message });
     res.type('text/xml').send(twilioWebhook.buildFallbackTwiML());
@@ -104,10 +114,6 @@ export async function handleRecordingCallback(req, res) {
     logger.error('TWILIO_RECORDING_ERROR', { error: err.message });
     res.status(200).send('');
   }
-}
-
-export async function handleMediaStream(req, res) {
-  res.status(426).json({ error: 'Upgrade Required', message: 'Use WebSocket protocol' });
 }
 
 export async function getLiveCalls(req, res, next) {

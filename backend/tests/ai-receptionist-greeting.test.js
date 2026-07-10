@@ -89,7 +89,7 @@ describe('Incoming call voice webhook (milestone 1)', () => {
     expect(contentType).toContain('text/xml');
   });
 
-  it('returns valid TwiML containing greeting and Hangup (no JSON)', async () => {
+  it('returns valid TwiML connecting the live media stream (no greeting Say/Hangup)', async () => {
     const { status, contentType, text } = await postForm('/api/ai-receptionist/twilio/voice', {
       CallSid: 'CA123',
       From: '+919876543210',
@@ -98,11 +98,13 @@ describe('Incoming call voice webhook (milestone 1)', () => {
     expect(status).toBe(200);
     expect(contentType).toContain('text/xml');
     expect(text).toContain('<?xml');
-    expect(text).toContain('<Say');
-    expect(text).toContain('FleetNimble');
-    expect(text).toContain('<Hangup');
-    expect(text).not.toContain('<Connect');
-    expect(text).not.toContain('<Stream');
+    expect(text).toContain('<Connect');
+    expect(text).toContain('<Stream');
+    expect(text).toContain('wss://');
+    expect(text).toContain('/api/ai-receptionist/twilio/media-stream');
+    expect(text).toContain('callSid=CA123');
+    expect(text).not.toContain('<Say');
+    expect(text).not.toContain('<Hangup');
   });
 });
 
@@ -170,8 +172,9 @@ describe('Twilio signature validation (production)', () => {
     );
     expect(status).toBe(200);
     expect(contentType).toContain('text/xml');
-    expect(text).toContain('FleetNimble');
-    expect(text).toContain('<Hangup');
+    expect(text).toContain('<Connect');
+    expect(text).toContain('<Stream');
+    expect(text).toContain('/api/ai-receptionist/twilio/media-stream');
   });
 });
 

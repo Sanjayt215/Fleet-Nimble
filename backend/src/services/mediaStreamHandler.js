@@ -14,143 +14,10 @@ import {
   appendToTranscript,
   saveTranscriptChunk,
 } from './receptionistTranscript.service.js';
-import { mapToOpenAIVoice, buildSystemPrompt, buildToolDefinitions } from './receptionistVoice.service.js';
+import { mapToOpenAIVoice, buildSystemPrompt } from './receptionistVoice.service.js';
 
 const OPENAI_REALTIME_URL = 'wss://api.openai.com/v1/realtime';
-const SESSION_TIMEOUT = 30000;
-
-const TOOL_HANDLERS = {
-  schedule_appointment: async (args, session, io) => {
-    const { getCallAnalytics } = await import('./receptionistAnalytics.service.js');
-    const { default: prisma } = await import('../utils/prisma.js');
-    const appointmentService = await import('./receptionistAppointment.service.js');
-
-    try {
-      const appointment = await appointmentService.createAppointment(
-        session.metadata.userId,
-        {
-          callerName: args.callerName || 'Caller',
-          callerPhone: args.callerPhone || null,
-          callerEmail: args.callerEmail || null,
-          companyName: args.companyName || null,
-          fleetSize: args.fleetSize || null,
-          meetingPurpose: args.meetingPurpose || 'General inquiry',
-          scheduledDate: args.preferredDate || new Date(Date.now() + 86400000).toISOString(),
-          durationMinutes: 30,
-        }
-      );
-
-      if (session.metadata.callLogId) {
-        await prisma.aiReceptionistCall.update({
-          where: { id: session.metadata.callLogId },
-          data: { appointmentId: appointment.id },
-        });
-      }
-
-      if (io) {
-        io.to(`user:${session.metadata.userId}`).emit('tool.called', {
-          callSid: session.callSid,
-          tool: 'schedule_appointment',
-          result: { appointmentId: appointment.id },
-        });
-      }
-
-      return { success: true, appointmentId: appointment.id };
-    } catch (err) {
-      logger.error('TOOL_SCHEDULE_APPOINTMENT_ERROR', { error: err.message });
-      return { success: false, error: err.message };
-    }
-  },
-
-  create_support_ticket: async (args, session, io) => {
-    const supportService = await import('./receptionistSupport.service.js');
-    const { default: prisma } = await import('../utils/prisma.js');
-
-    try {
-      const ticket = await supportService.createSupportTicket(
-        session.metadata.userId,
-        {
-          callerName: args.callerName || 'Caller',
-          callerPhone: args.callerPhone || null,
-          callerEmail: args.callerEmail || null,
-          companyName: args.companyName || null,
-          issueTitle: args.issueTitle || 'Support request',
-          issueDescription: args.issueDescription || null,
-          urgency: args.urgency || 'MEDIUM',
-        }
-      );
-
-      if (session.metadata.callLogId) {
-        await prisma.aiReceptionistCall.update({
-          where: { id: session.metadata.callLogId },
-          data: { supportTicketId: ticket.id },
-        });
-      }
-
-      if (io) {
-        io.to(`user:${session.metadata.userId}`).emit('tool.called', {
-          callSid: session.callSid,
-          tool: 'create_support_ticket',
-          result: { ticketId: ticket.id },
-        });
-      }
-
-      return { success: true, ticketId: ticket.id };
-    } catch (err) {
-      logger.error('TOOL_CREATE_TICKET_ERROR', { error: err.message });
-      return { success: false, error: err.message };
-    }
-  },
-
-  lookup_customer: async (args, session) => {
-    const memoryService = await import('./receptionistMemory.service.js');
-    try {
-      const customer = await memoryService.findOrCreateCustomer(
-        session.metadata.userId,
-        {
-          phone: args.phone || null,
-          email: args.email || null,
-          callerName: null,
-          company: null,
-          fleetSize: null,
-        }
-      );
-      if (customer) {
-        const memory = await memoryService.getCustomerMemory(customer.id);
-        return { success: true, customer: memory };
-      }
-      return { success: false, message: 'Customer not found' };
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
-  },
-
-  escalate_to_human: async (args, session, io) => {
-    const handoffService = await import('./receptionistHandoff.service.js');
-    const { default: prisma } = await import('../utils/prisma.js');
-
-    try {
-      const result = await handoffService.escalateCall(
-        session.metadata.callLogId,
-        args.reason,
-        args.department || 'support'
-      );
-
-      if (io) {
-        io.to(`user:${session.metadata.userId}`).emit('call.escalated', {
-          callSid: session.callSid,
-          callId: session.metadata.callLogId,
-          reason: args.reason,
-          department: args.department,
-        });
-      }
-
-      return { success: true, escalated: true, handoffNumber: result?.handoffNumber };
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
-  },
-};
+const MAX_RECONNECT_ATTEMPTS = 3;
 
 function handleMediaStream(ws, req) {
   const urlParams = new URL(req.url, config.publicUrl).searchParams;
@@ -167,9 +34,10 @@ function handleMediaStream(ws, req) {
 
   let openaiWs = null;
   let reconnectAttempts = 0;
-  const maxReconnectAttempts = 3;
+  const maxReconnectAttempts = MAX_RECONNECT_ATTEMPTS;
   let responseTimeout = null;
   let isClosing = false;
+  let audioStreamingStarted = false;
 
   async function connectToOpenAI() {
     if (isClosing) return;
@@ -207,8 +75,6 @@ function handleMediaStream(ws, req) {
               prefix_padding_ms: 300,
               silence_duration_ms: 600,
             },
-            tools: buildToolDefinitions(),
-            tool_choice: 'auto',
             temperature: 0.7,
           },
         };
@@ -274,16 +140,35 @@ function handleMediaStream(ws, req) {
           }
           break;
 
-        case 'start':
+        case 'start': {
           setStreamSid(callSid, msg.streamSid);
+          const start = msg.start || {};
+          const session = getSession(callSid);
+          if (session) {
+            session.metadata = {
+              ...session.metadata,
+              caller: start.from || null,
+              calledNumber: start.to || null,
+              from: start.from || null,
+              to: start.to || null,
+              sessionId: start.callSid || callSid,
+            };
+          }
           logger.info('TWILIO_MEDIA_STREAM_STARTED', {
             callSid,
             streamSid: msg.streamSid,
+            fromTail: start.from ? start.from.slice(-4) : 'unknown',
+            toTail: start.to ? start.to.slice(-4) : 'unknown',
           });
           connectToOpenAI();
           break;
+        }
 
         case 'media':
+          if (!audioStreamingStarted) {
+            audioStreamingStarted = true;
+            logger.info('TWILIO_AUDIO_STREAMING_STARTED', { callSid, streamSid: msg.streamSid });
+          }
           if (openaiWs?.readyState === WebSocket.OPEN) {
             openaiWs.send(JSON.stringify({
               type: 'input_audio_buffer.append',
@@ -424,10 +309,6 @@ async function handleOpenAIMessage(msg, session, openaiWs) {
     case 'response.done':
       break;
 
-    case 'response.function_call_arguments.done':
-      await handleToolCall(msg, session, openaiWs, io);
-      break;
-
     case 'error':
       logger.error('OPENAI_REALTIME_ERROR', {
         callSid,
@@ -446,58 +327,6 @@ async function handleOpenAIMessage(msg, session, openaiWs) {
     case 'rate_limits.updated':
       break;
   }
-}
-
-async function handleToolCall(msg, session, openaiWs, io) {
-  const { name, call_id, arguments: rawArgs } = msg;
-  let args = {};
-
-  try {
-    args = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs;
-  } catch {
-    args = {};
-  }
-
-  logger.info('TOOL_CALLED', { callSid: session.callSid, tool: name, args });
-
-  if (io) {
-    io.to(`user:${session.metadata.userId}`).emit('tool.called', {
-      callSid: session.callSid,
-      tool: name,
-      args,
-      timestamp: new Date().toISOString(),
-    });
-  }
-
-  const handler = TOOL_HANDLERS[name];
-  let result;
-
-  if (handler) {
-    result = await handler(args, session, io);
-  } else {
-    result = { success: false, error: `Unknown tool: ${name}` };
-  }
-
-  if (openaiWs?.readyState === WebSocket.OPEN) {
-    openaiWs.send(JSON.stringify({
-      type: 'conversation.item.create',
-      item: {
-        type: 'function_call_output',
-        call_id,
-        output: JSON.stringify(result),
-      },
-    }));
-  }
-}
-
-function extractIntentFromResponse(text) {
-  const lower = text.toLowerCase();
-  if (lower.includes('schedule') || lower.includes('appointment') || lower.includes('demo')) return 'schedule_meeting';
-  if (lower.includes('support') || lower.includes('ticket')) return 'support_request';
-  if (lower.includes('price') || lower.includes('cost') || lower.includes('pricing')) return 'pricing_question';
-  if (lower.includes('emergency') || lower.includes('urgent')) return 'emergency_escalation';
-  if (lower.includes('transfer') || lower.includes('human') || lower.includes('person') || lower.includes('manager') || lower.includes('speak to')) return 'human_handoff';
-  return 'general_question';
 }
 
 export { handleMediaStream, handleOpenAIMessage };

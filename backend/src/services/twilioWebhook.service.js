@@ -57,9 +57,13 @@ export function buildIncomingTwiML(callSid, from, cfg = {}) {
     host = 'localhost:5000';
   }
 
+  // Generate the secure WebSocket URL from PUBLIC_BACKEND_URL and pass the
+  // callSid so the media-stream handler can register the session.
+  const streamUrl = `wss://${host}/api/ai-receptionist/twilio/media-stream?callSid=${callSid || ''}`;
+
   const connect = twiml.connect();
   connect.stream({
-    url: `wss://${host}/api/ai-receptionist/twilio/media-stream`,
+    url: streamUrl,
     track: 'both_tracks',
   });
 
