@@ -143,6 +143,11 @@ setInterval(async () => {
   RSM.cleanup(600000);
 }, 600000);
 
+setInterval(async () => {
+  const { cleanupOrchestrator } = await import('./services/receptionistOrchestrator.service.js');
+  cleanupOrchestrator();
+}, 3600000);
+
 // ── Global error handlers for 24/7 reliability ──
 process.on('unhandledRejection', (reason, promise) => {
   logger.error('UNHANDLED_REJECTION', { reason: reason?.message || reason, stack: reason?.stack });

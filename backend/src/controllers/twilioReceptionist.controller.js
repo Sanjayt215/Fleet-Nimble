@@ -6,6 +6,7 @@ import * as callService from '../services/receptionistCall.service.js';
 import * as memoryService from '../services/receptionistMemory.service.js';
 import * as transcriptService from '../services/receptionistTranscript.service.js';
 import * as handoffService from '../services/receptionistHandoff.service.js';
+import * as orchestrator from '../services/receptionistOrchestrator.service.js';
 import { AppError } from '../middleware/errorHandler.js';
 import {
   registerSession,
@@ -25,62 +26,48 @@ export async function handleIncomingCall(req, res) {
       return res.status(403).type('text/xml').send(twilioWebhook.buildFallbackTwiML());
     }
 
-    // Milestone 1 safety net: AI Receptionist disabled -> polite unavailable message.
     if (!config.aiReceptionist.enabled) {
       return res.type('text/xml').send(twilioWebhook.buildUnavailableTwiML());
     }
 
-    const { CallSid, From, To } = req.body || {};
+    const { CallSid, From, To, AccountSid } = req.body || {};
 
-    // ── DIAG: Voice webhook received ──
     logger.info('DIAG_VOICE_WEBHOOK_RECEIVED', {
       CallSid,
       fromTail: From ? From.slice(-4) : 'unknown',
       toTail: To ? To.slice(-4) : 'unknown',
     });
 
-    // Realtime readiness gate: only open the media stream when both the
-    // feature flag and a valid OpenAI Realtime configuration are present.
     const realtimeReady = config.realtime.configured && config.realtime.mediaStreamEnabled;
 
-    // ── DIAG: Realtime readiness check ──
     logger.info('DIAG_REALTIME_READINESS', {
       CallSid,
       realtimeConfigured: config.realtime.configured,
       mediaStreamEnabled: config.realtime.mediaStreamEnabled,
       model: config.realtime.model || '(not set)',
       apiKeyPresent: Boolean(config.openai.apiKey),
-      apiKeyPrefix: config.openai.apiKey ? config.openai.apiKey.substring(0, 8) + '...' : 'NONE',
       aiReceptionistEnabled: config.aiReceptionist.enabled,
-      voiceAgentMode: config.aiReceptionist.voiceAgentMode,
       realtimeReady,
       action: realtimeReady ? 'BUILD_MEDIA_STREAM_TWIML' : 'FALLBACK_TO_GREETING',
     });
 
     if (!realtimeReady) {
-      logger.warn('REALTIME_NOT_READY_FALLBACK_TO_GREETING', {
-        CallSid,
-        configured: config.realtime.configured,
-        mediaStreamEnabled: config.realtime.mediaStreamEnabled,
-      });
+      logger.warn('REALTIME_NOT_READY_FALLBACK_TO_GREETING', { CallSid });
       const greetingTwiml = twilioWebhook.buildGreetingTwiML();
-      logger.info('DIAG_TWIML_SENT', {
-        CallSid,
-        type: 'GREETING_TWIML',
-        containsHangup: greetingTwiml.includes('Hangup'),
-        first200Chars: greetingTwiml.substring(0, 200),
-      });
       return res.type('text/xml').send(greetingTwiml);
     }
 
-    // Milestone 2: connect the live Twilio <-> OpenAI Realtime media stream.
-    const twiml = twilioWebhook.buildIncomingTwiML(CallSid, From, To, { publicUrl: config.publicUrl });
+    const twiml = twilioWebhook.buildIncomingTwiML(CallSid, From, To, {
+      publicUrl: config.publicUrl,
+      AccountSid,
+    });
+
     logger.info('DIAG_TWIML_SENT', {
       CallSid,
       type: 'MEDIA_STREAM_TWIML',
       containsStream: twiml.includes('<Stream'),
-      first200Chars: twiml.substring(0, 200),
     });
+
     res.type('text/xml').send(twiml);
     logger.info('TWILIO_INCOMING_CALL', { CallSid, From, To });
   } catch (err) {
@@ -100,22 +87,47 @@ export async function handleFallbackCall(req, res) {
 
 export async function handleStatusCallback(req, res) {
   try {
-    const { CallSid, CallStatus, CallDuration, From, To } = req.body || {};
+    const { CallSid, CallStatus, CallDuration, From, To, AccountSid } = req.body || {};
 
-    // Log safely — never expose full phone numbers.
     const fromTail = From ? From.slice(-4) : 'unknown';
     const toTail = To ? To.slice(-4) : 'unknown';
-    logger.info('TWILIO_STATUS_CALLBACK', {
-      CallSid,
-      CallStatus,
-      CallDuration,
-      fromTail,
-      toTail,
-    });
+    logger.info('TWILIO_STATUS_CALLBACK', { CallSid, CallStatus, CallDuration, fromTail, toTail });
 
+    const completedStatuses = ['completed', 'failed', 'busy', 'no-answer', 'canceled'];
+    if (completedStatuses.includes(CallStatus?.toLowerCase())) {
+      const callRecord = await prisma.aiReceptionistCall.findFirst({
+        where: { twilioCallSid: CallSid },
+      });
+
+      if (callRecord) {
+        const updates = {
+          callStatus: CallStatus === 'completed' ? 'COMPLETED' : 'FAILED',
+          callEndedAt: new Date(),
+        };
+        if (CallDuration) {
+          updates.durationSeconds = parseInt(CallDuration, 10);
+        }
+
+        await prisma.aiReceptionistCall.update({
+          where: { id: callRecord.id },
+          data: updates,
+        }).catch(e => logger.warn('STATUS_CALLBACK_UPDATE_FAILED', { CallSid, error: e.message }));
+
+        await transcriptService.flushPendingTranscripts().catch(() => {});
+
+        logger.info('CALL_STATUS_UPDATED_FROM_CALLBACK', {
+          CallSid,
+          callId: callRecord.id,
+          newStatus: updates.callStatus,
+        });
+      }
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 10));
     res.status(204).send('');
   } catch (err) {
     logger.error('TWILIO_STATUS_ERROR', { error: err.message });
+    await new Promise(resolve => setTimeout(resolve, 10));
     res.status(204).send('');
   }
 }

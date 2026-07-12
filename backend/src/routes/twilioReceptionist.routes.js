@@ -17,6 +17,7 @@ router.get('/health', (_req, res) => {
     twilioConfigured: config.twilio.configured,
     phoneConfigured: config.twilio.phoneConfigured,
     mediaStreamEnabled: config.realtime.mediaStreamEnabled,
+    businessToolsEnabled: config.aiReceptionist?.mediaStreamEnabled ?? false,
     modelConfigured: Boolean(config.realtime.model),
     modelValidated: modelValid.valid,
     modelValidationReason: modelValid.valid ? null : modelValid.reason,

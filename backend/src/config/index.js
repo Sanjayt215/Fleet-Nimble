@@ -69,6 +69,7 @@ export const config = {
     maxCallSeconds: parseIntEnv(process.env.AI_RECEPTIONIST_MAX_CALL_SECONDS, 600),
     silenceTimeoutSeconds: parseIntEnv(process.env.AI_RECEPTIONIST_SILENCE_TIMEOUT_SECONDS, 30),
     mediaStreamEnabled: parseBool(process.env.AI_RECEPTIONIST_MEDIA_STREAM_ENABLED, true),
+    businessToolsEnabled: parseBool(process.env.AI_RECEPTIONIST_BUSINESS_TOOLS_ENABLED, false),
     configured: Boolean(process.env.AI_RECEPTIONIST_MODEL) && Boolean(process.env.OPENAI_API_KEY),
   },
   ai: {

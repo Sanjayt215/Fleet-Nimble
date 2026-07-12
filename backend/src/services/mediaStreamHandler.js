@@ -13,14 +13,30 @@ import {
   addTranscriptEntry,
 } from './receptionistRealtime.service.js';
 import {
-  appendToTranscript,
-  saveTranscriptChunk,
+  bufferTranscriptEntry,
+  flushPendingTranscripts,
 } from './receptionistTranscript.service.js';
-import { mapToOpenAIVoice, buildSystemPrompt, AI_RECEPTIONIST_GREETING } from './receptionistVoice.service.js';
+import { mapToOpenAIVoice, buildSystemPrompt, buildToolDefinitions } from './receptionistVoice.service.js';
+import * as orchestrator from './receptionistOrchestrator.service.js';
+import * as transcriptService from './receptionistTranscript.service.js';
+import * as callService from './receptionistCall.service.js';
 
 const OPENAI_REALTIME_URL = 'wss://api.openai.com/v1/realtime';
 const MAX_RECONNECT_ATTEMPTS = 3;
 const SESSION_CREATED_TIMEOUT_MS = 15000;
+
+const BUSINESS_TOOLS_ENABLED = config.realtime?.businessToolsEnabled ?? true;
+
+const ALLOWED_TOOLS = new Set([
+  'lookup_customer',
+  'create_appointment',
+  'create_support_ticket',
+  'save_customer_note',
+  'request_human_handoff',
+  'end_call',
+]);
+
+const COMPLETED_TOOL_CALLS = new Set();
 
 function buildOpenAiUrl() {
   return `${OPENAI_REALTIME_URL}?model=${encodeURIComponent(config.realtime.model)}`;
@@ -53,6 +69,16 @@ function handleMediaStream(ws, req) {
   let sessionCreatedTimer = null;
   const timers = [];
 
+  let callRecordId = null;
+  let userId = null;
+  let customerMemory = null;
+  let customerId = null;
+  let collectedData = {};
+  let currentIntent = null;
+  let currentStage = 'greeting';
+  let pendingAction = null;
+  let callTranscriptBuffer = [];
+
   function scheduleTimer(fn, ms) {
     const handle = setTimeout(() => {
       try {
@@ -83,18 +109,144 @@ function handleMediaStream(ws, req) {
       rtmSession.setState(RealtimeSessionManager.STATES.GREETING);
     }
     if (openaiWs?.readyState === WebSocket.OPEN) {
+      const greetingText = customerMemory?.isReturning && customerMemory?.customer?.name
+        ? `Welcome back, ${customerMemory.customer.name}. Last time we discussed FleetNimble. How may I help you today?`
+        : "Hello. Thank you for calling FleetNimble. I'm the FleetNimble AI Receptionist. How may I help you today?";
       const greetingPayload = {
         type: 'response.create',
         response: {
           modalities: ['text', 'audio'],
-          instructions: `Say exactly: "${AI_RECEPTIONIST_GREETING}"`,
+          instructions: `Say: "${greetingText}"`,
         },
       };
       openaiWs.send(JSON.stringify(greetingPayload));
-      logger.info('AI_GREETING_REQUESTED', {
-        callSid,
-        greetingText: AI_RECEPTIONIST_GREETING,
-      });
+      logger.info('AI_GREETING_REQUESTED', { callSid, personalized: !!customerMemory });
+    }
+  }
+
+  async function handleToolCall(functionName, args, callId) {
+    const toolCallKey = `${callSid}_${functionName}_${callId}`;
+    if (COMPLETED_TOOL_CALLS.has(toolCallKey)) {
+      logger.warn('DUPLICATE_TOOL_CALL_REJECTED', { callSid, functionName });
+      return { error: 'duplicate_call', message: 'This action has already been completed' };
+    }
+
+    if (!ALLOWED_TOOLS.has(functionName)) {
+      logger.warn('UNKNOWN_TOOL_REJECTED', { callSid, functionName });
+      return { error: 'unknown_tool', message: 'Tool not available' };
+    }
+
+    logger.info('TOOL_CALL_EXECUTING', { callSid, functionName, args });
+
+    try {
+      let result;
+
+      switch (functionName) {
+        case 'lookup_customer': {
+          if (args?.phone && userId) {
+            const memory = await orchestrator.lookupCustomerByPhone(userId, args.phone);
+            if (memory) {
+              customerMemory = memory;
+              customerId = memory.customer?.id;
+              result = { found: true, name: memory.customer?.name, company: memory.customer?.companyName, isReturning: memory.isReturning, lastContact: memory.customer?.lastContactAt };
+            } else {
+              result = { found: false };
+            }
+          } else {
+            result = { found: false, reason: 'no_phone_or_user' };
+          }
+          break;
+        }
+
+        case 'create_appointment': {
+          if (!BUSINESS_TOOLS_ENABLED) {
+            return { error: 'feature_disabled', message: 'Business tools are currently disabled' };
+          }
+          const session = {
+            userId, callId: callRecordId, customerId, collectedData,
+            currentStage, pendingAction,
+          };
+          const orchestratorResult = await orchestrator.executeAppointmentCreation(session);
+          if (orchestratorResult.actionResult) {
+            COMPLETED_TOOL_CALLS.add(toolCallKey);
+            collectedData = orchestratorResult.collectedData || collectedData;
+            collectedData.appointmentCreated = true;
+            pendingAction = null;
+            currentStage = 'completed';
+            result = { success: true, appointmentId: orchestratorResult.actionResult.id, message: orchestratorResult.reply };
+          } else {
+            result = { success: false, message: orchestratorResult.reply, error: 'creation_failed' };
+          }
+          break;
+        }
+
+        case 'create_support_ticket': {
+          if (!BUSINESS_TOOLS_ENABLED) {
+            return { error: 'feature_disabled', message: 'Business tools are currently disabled' };
+          }
+          collectedData.issue = args?.issueTitle || args?.issueDescription || collectedData.issue;
+          collectedData.callerName = collectedData.callerName || args?.callerName;
+          collectedData.phone = collectedData.phone || args?.callerPhone;
+          collectedData.email = collectedData.email || args?.callerEmail;
+          collectedData.company = collectedData.company || args?.companyName;
+          collectedData.urgency = args?.urgency || collectedData.urgency || 'MEDIUM';
+          collectedData.vehicleReference = args?.relatedVehicle || collectedData.vehicleReference;
+
+          const session = {
+            userId, callId: callRecordId, customerId, collectedData,
+            currentStage, pendingAction,
+          };
+          const orchestratorResult = await orchestrator.executeSupportTicketCreation(session);
+          if (orchestratorResult.actionResult) {
+            COMPLETED_TOOL_CALLS.add(toolCallKey);
+            collectedData.supportTicketCreated = true;
+            pendingAction = null;
+            currentStage = 'completed';
+            result = { success: true, ticketId: orchestratorResult.actionResult.id, message: orchestratorResult.reply };
+          } else {
+            result = { success: false, message: orchestratorResult.reply, error: 'creation_failed' };
+          }
+          break;
+        }
+
+        case 'save_customer_note': {
+          if (customerId && args?.content) {
+            const { default: crmService } = await import('./receptionistCRM.service.js');
+            await crmService.addCustomerNote(userId, customerId, args.content, args.noteType || 'CALL');
+            result = { success: true };
+          } else {
+            result = { success: false, reason: 'missing_customer_or_content' };
+          }
+          break;
+        }
+
+        case 'request_human_handoff': {
+          const department = args?.department || 'support';
+          if (callRecordId) {
+            const { default: handoffService } = await import('./receptionistHandoff.service.js');
+            await handoffService.escalateCall(callRecordId, args?.reason || 'Caller requested human', department);
+          }
+          result = { success: true, department, message: 'Handoff initiated' };
+          break;
+        }
+
+        case 'end_call': {
+          result = { success: true, message: 'Ending call' };
+          scheduleTimer(() => {
+            endCallGracefully('Thank you for calling FleetNimble. Have a great day! Goodbye.');
+          }, 1000);
+          break;
+        }
+
+        default:
+          result = { error: 'not_implemented', message: `Tool ${functionName} not implemented` };
+      }
+
+      COMPLETED_TOOL_CALLS.add(toolCallKey);
+      return result;
+    } catch (err) {
+      logger.error('TOOL_CALL_ERROR', { callSid, functionName, error: err.message });
+      return { error: 'execution_error', message: err.message };
     }
   }
 
@@ -144,11 +296,17 @@ function handleMediaStream(ws, req) {
       logger.info('OPENAI_REALTIME_CONNECTED', { callSid });
       reconnectAttempts = 0;
 
+      const memoryContext = customerMemory
+        ? buildMemoryContext(customerMemory)
+        : '';
+
+      const tools = BUSINESS_TOOLS_ENABLED ? buildToolDefinitions(true) : [];
+
       const sessionUpdatePayload = {
         type: 'session.update',
         session: {
           modalities: ['text', 'audio'],
-          instructions: buildSystemPrompt({ businessName: 'FleetNimble' }),
+          instructions: buildSystemPrompt({ businessName: 'FleetNimble', realtime: config.realtime }, memoryContext),
           voice,
           input_audio_format: 'g711_ulaw',
           output_audio_format: 'g711_ulaw',
@@ -161,6 +319,8 @@ function handleMediaStream(ws, req) {
             interrupt_response: true,
           },
           temperature: 0.7,
+          tools,
+          tool_choice: 'auto',
         },
       };
       openaiWs.send(JSON.stringify(sessionUpdatePayload));
@@ -229,7 +389,7 @@ function handleMediaStream(ws, req) {
     });
   }
 
-  function gracefulClose() {
+  async function gracefulClose() {
     if (isClosing) return;
     isClosing = true;
     if (rtmSession) rtmSession.setState(RealtimeSessionManager.STATES.CLOSING);
@@ -237,6 +397,42 @@ function handleMediaStream(ws, req) {
     if (sessionCreatedTimer) {
       clearTimeout(sessionCreatedTimer);
       sessionCreatedTimer = null;
+    }
+
+    try {
+      if (callRecordId || callSid) {
+        await flushPendingTranscripts();
+        const summaryText = callTranscriptBuffer
+          .filter(t => t.role === 'assistant')
+          .slice(-3)
+          .map(t => t.content?.substring(0, 100))
+          .join(' | ') || 'Call completed';
+        const transcriptJson = JSON.stringify(callTranscriptBuffer.slice(-500));
+
+        await orchestrator.updateCallRecordAtEnd({
+          callId: callRecordId,
+          callSid,
+          userId,
+          intent: currentIntent,
+          summary: summaryText,
+          transcript: transcriptJson,
+          sentiment: 'neutral',
+          customerId,
+        }).catch(e => logger.warn('CALL_END_UPDATE_FAILED', { error: e.message }));
+
+        if (customerId) {
+          await orchestrator.updateCRMAfterCall({
+            userId,
+            customerId,
+            collectedData,
+            intent: currentIntent,
+            summary: summaryText,
+            sentiment: 'neutral',
+          }).catch(e => logger.warn('CRM_END_UPDATE_FAILED', { error: e.message }));
+        }
+      }
+    } catch (err) {
+      logger.warn('CALL_END_CLEANUP_ERROR', { callSid, error: err.message });
     }
 
     try {
@@ -250,19 +446,10 @@ function handleMediaStream(ws, req) {
     } catch { }
 
     if (callSid) {
-      const startedAt = rtmSession?.startedAt || legacySession?.startedAt || null;
       if (legacySession) removeSession(callSid);
       if (rtmSession) RealtimeSessionManager.remove(callSid);
       if (rtmSession) rtmSession.setState(RealtimeSessionManager.STATES.CLOSED);
       logger.info('CALL_SESSION_CLEANED', { callSid });
-      logger.info('DIAG_CALL_ENDED', {
-        callSid,
-        totalDurationMs: startedAt ? (Date.now() - startedAt) : 0,
-        audioBridgeWasActive: audioBridgeActive,
-        reconnectAttempts,
-      });
-    } else {
-      logger.info('CALL_SESSION_CLEANED', { callSid: null });
     }
   }
 
@@ -337,20 +524,52 @@ function handleMediaStream(ws, req) {
         legacySession.streamSid = streamSid;
         legacySession.timers = timers;
 
+        const callerPhone = params.from || start.from || null;
+        const calledNumber = params.to || start.to || null;
+        const twilioAccountSid = params.AccountSid || null;
+
+        if (callerPhone) {
+          const normalized = callerPhone.replace(/[^\d+]/g, '');
+          orchestrator.lookupCustomerByPhone(null, normalized).then(memory => {
+            if (memory && memory.customer) {
+              customerMemory = memory;
+              customerId = memory.customer?.id;
+              userId = memory.customer?.userId;
+              logger.info('CUSTOMER_IDENTIFIED', { callSid, name: memory.customer?.name });
+            }
+          }).catch(() => {});
+        }
+
+        if (userId || callerPhone) {
+          userId = userId || 'system';
+          orchestrator.createCallRecord({
+            userId,
+            callSid,
+            from: callerPhone,
+            to: calledNumber,
+            twilioAccountSid,
+          }).then(record => {
+            if (record) {
+              callRecordId = record.id;
+              if (legacySession) legacySession.metadata.callLogId = record.id;
+            }
+          }).catch(e => logger.warn('CALL_RECORD_START_FAILED', { error: e.message }));
+        }
+
         logger.info('TWILIO_MEDIA_STARTED', {
           callSid,
           streamSid,
-          fromTail: (params.from || start.from || '').slice(-4) || 'unknown',
+          fromTail: callerPhone ? callerPhone.slice(-4) : 'unknown',
         });
 
         scheduleTimer(() => {
           endCallGracefully('Thank you for calling FleetNimble. Please contact us again if you need further help. Goodbye.');
-        }, config.realtime.maxCallSeconds * 1000);
+        }, (config.realtime?.maxCallSeconds || 600) * 1000);
 
-        const silenceMs = Math.max(5000, config.realtime.silenceTimeoutSeconds * 1000);
+        const silenceMs = Math.max(5000, (config.realtime?.silenceTimeoutSeconds || 30) * 1000);
         const silenceInterval = setInterval(() => {
           if (isClosing || !rtmSession) return;
-          if (Date.now() - rtmSession.lastActivity > config.realtime.silenceTimeoutSeconds * 1000) {
+          if (Date.now() - rtmSession.lastActivity > (config.realtime?.silenceTimeoutSeconds || 30) * 1000) {
             endCallGracefully('Thank you for calling FleetNimble. Please contact us again if you need further help. Goodbye.');
           }
         }, silenceMs);
@@ -370,10 +589,7 @@ function handleMediaStream(ws, req) {
 
         const validation = validateAudioPayload(payload);
         if (!validation.valid) {
-          logger.warn('TWILIO_AUDIO_VALIDATION_FAILED', {
-            callSid,
-            reason: validation.reason,
-          });
+          logger.warn('TWILIO_AUDIO_VALIDATION_FAILED', { callSid, reason: validation.reason });
           if (rtmSession) rtmSession.droppedPackets++;
           break;
         }
@@ -429,10 +645,7 @@ export async function handleOpenAIMessage(msg, rtmSession, legacySession, openai
 
   switch (msg.type) {
     case 'session.created':
-      break;
-
     case 'session.updated':
-      logger.info('OPENAI_SESSION_UPDATED', { callSid });
       break;
 
     case 'input_audio_buffer.speech_started':
@@ -446,14 +659,9 @@ export async function handleOpenAIMessage(msg, rtmSession, legacySession, openai
       }
       if (io) {
         io.to(`user:${legacySession?.metadata?.userId}`).emit('transcript.partial', {
-          callSid,
-          text: '...',
-          isSpeaking: true,
+          callSid, text: '...', isSpeaking: true,
         });
       }
-      break;
-
-    case 'input_audio_buffer.speech_stopped':
       break;
 
     case 'conversation.item.created':
@@ -463,43 +671,82 @@ export async function handleOpenAIMessage(msg, rtmSession, legacySession, openai
             const role = msg.item.role === 'user' ? 'caller' : 'assistant';
             addTranscriptEntry(callSid, { role, content: content.text });
             if (legacySession?.metadata?.callLogId) {
-              appendToTranscript(legacySession.metadata.callLogId, role, content.text);
+              bufferTranscriptEntry(legacySession.metadata.callLogId, { role, content: content.text, timestamp: new Date().toISOString() });
             }
           } else if (content.type === 'transcript') {
             const role = msg.item.role === 'user' ? 'caller' : 'assistant';
             addTranscriptEntry(callSid, { role, content: content.transcript });
             if (io) {
               io.to(`user:${legacySession?.metadata?.userId}`).emit('transcript.final', {
-                callSid,
-                role,
-                text: content.transcript,
-                timestamp: new Date().toISOString(),
+                callSid, role, text: content.transcript, timestamp: new Date().toISOString(),
               });
             }
             if (legacySession?.metadata?.callLogId) {
-              appendToTranscript(legacySession.metadata.callLogId, role, content.transcript);
+              bufferTranscriptEntry(legacySession.metadata.callLogId, { role, content: content.transcript, timestamp: new Date().toISOString() });
             }
+
+            const transcript = legacySession?.transcript || [];
+            if (!transcript.some(t => t.role === role && t.content === content.transcript)) {
+              transcript.push({ role, content: content.transcript, timestamp: new Date().toISOString() });
+            }
+            if (legacySession) legacySession.transcript = transcript.slice(-500);
           }
         }
       }
+
+      if (msg.item?.type === 'function_call' && msg.item?.name) {
+        logger.info('FUNCTION_CALL_RECEIVED', { callSid, name: msg.item.name, callId: msg.item.call_id });
+      }
       break;
 
-    case 'conversation.item.truncated':
+    case 'response.function_call_arguments.done': {
+      const { name, arguments: rawArgs, call_id } = msg;
+      if (!name || !call_id) {
+        logger.warn('FUNCTION_CALL_MISSING_FIELDS', { callSid, name, call_id });
+        break;
+      }
+
+      logger.info('FUNCTION_CALL_ARGUMENTS_DONE', { callSid, name, call_id });
+
+      let args = {};
+      try {
+        args = rawArgs ? JSON.parse(rawArgs) : {};
+      } catch {
+        logger.warn('FUNCTION_CALL_PARSE_ERROR', { callSid, name, rawArgs });
+        args = {};
+      }
+
+      const result = await handleToolCall(name, args, call_id);
+
+      if (openaiWs?.readyState === WebSocket.OPEN) {
+        const functionResponse = {
+          type: 'conversation.item.create',
+          item: {
+            type: 'function_call_output',
+            call_id,
+            output: JSON.stringify(result),
+          },
+        };
+        openaiWs.send(JSON.stringify(functionResponse));
+        logger.info('FUNCTION_CALL_RESPONSE_SENT', { callSid, name, call_id });
+
+        try {
+          openaiWs.send(JSON.stringify({ type: 'response.create' }));
+        } catch { }
+      }
       break;
+    }
 
     case 'response.audio_transcript.delta':
       if (io) {
         io.to(`user:${legacySession?.metadata?.userId}`).emit('transcript.partial', {
-          callSid,
-          text: msg.delta,
-          isSpeaking: false,
+          callSid, text: msg.delta, isSpeaking: false,
         });
       }
       break;
 
     case 'response.audio.delta': {
       if (!msg.delta || typeof msg.delta !== 'string' || msg.delta.length === 0) {
-        logger.warn('OPENAI_AUDIO_DELTA_EMPTY', { callSid });
         if (rtmSession) rtmSession.droppedPackets++;
         break;
       }
@@ -508,7 +755,6 @@ export async function handleOpenAIMessage(msg, rtmSession, legacySession, openai
       const streamSid = rtmSession?.streamSid || legacySession?.streamSid;
 
       if (!streamSid) {
-        logger.warn('OPENAI_AUDIO_DELTA_NO_STREAM_SID', { callSid });
         if (rtmSession) rtmSession.droppedPackets++;
         break;
       }
@@ -530,17 +776,10 @@ export async function handleOpenAIMessage(msg, rtmSession, legacySession, openai
           media: { payload: msg.delta },
         }));
       } else {
-        logger.warn('DIAG_AUDIO_DROP_TWILIO_WS_CLOSED', {
-          callSid,
-          deltaSize,
-        });
         if (rtmSession) rtmSession.droppedPackets++;
       }
       break;
     }
-
-    case 'response.audio.done':
-      break;
 
     case 'response.done':
       if (rtmSession) {
@@ -558,24 +797,50 @@ export async function handleOpenAIMessage(msg, rtmSession, legacySession, openai
         error: msg.error?.message || JSON.stringify(msg.error),
         errorCode: msg.error?.code || null,
         errorType: msg.error?.type || null,
-        errorParam: msg.error?.param || null,
       });
       if (['invalid_api_key', 'authentication', 'model_not_found', 'unsupported_model'].includes(msg.error?.code) ||
           (msg.error?.message || '').toLowerCase().includes('authentication')) {
         RealtimeModelValidator.markFailed(config.realtime.model, msg.error?.message || 'unknown');
         if (legacySession) legacySession.stopReconnect = true;
         if (rtmSession) rtmSession.stopReconnect = true;
-        logger.warn('DIAG_OPENAI_ERROR_FATAL', {
-          callSid,
-          code: msg.error?.code,
-          stopReconnect: true,
-        });
       }
       break;
 
     case 'rate_limits.updated':
       break;
   }
+}
+
+function buildMemoryContext(memory) {
+  if (!memory || !memory.customer) return '';
+  const { customer, recentCalls, recentAppointments, recentTickets, isReturning } = memory;
+  const parts = [];
+
+  if (isReturning && customer.name) {
+    parts.push(`Returning caller: ${customer.name}`);
+    if (customer.companyName) parts.push(`Company: ${customer.companyName}`);
+    if (customer.lastSummary) parts.push(`Last conversation summary: ${customer.lastSummary}`);
+    if (customer.lastIntent) parts.push(`Last intent: ${customer.lastIntent}`);
+  }
+
+  if (customer.fleetSize != null) parts.push(`Fleet size: ${customer.fleetSize} vehicles`);
+  if (customer.status) parts.push(`Customer status: ${customer.status}`);
+  if (customer.leadScore > 0) parts.push(`Lead score: ${customer.leadScore}`);
+
+  if (recentCalls?.length > 0) {
+    const recent = recentCalls.map(c => `- ${c.callType} (${new Date(c.callStartedAt).toLocaleDateString()}): ${c.summary || 'No summary'}`).join('\n');
+    parts.push(`Recent calls:\n${recent}`);
+  }
+  if (recentAppointments?.length > 0) {
+    const appts = recentAppointments.map(a => `- ${a.meetingPurpose || 'Meeting'} on ${new Date(a.scheduledDate).toLocaleDateString()} (${a.status})`).join('\n');
+    parts.push(`Recent appointments:\n${appts}`);
+  }
+  if (recentTickets?.length > 0) {
+    const tickets = recentTickets.map(t => `- ${t.issueTitle} (${t.status}, ${t.urgency})`).join('\n');
+    parts.push(`Recent support tickets:\n${tickets}`);
+  }
+
+  return parts.join('\n');
 }
 
 export { handleMediaStream };

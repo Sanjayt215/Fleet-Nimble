@@ -7,6 +7,7 @@ import ReceptionistSettingsModal from './ReceptionistSettingsModal';
 import AnalyticsCards from './AnalyticsCards';
 import LiveCallsPanel from './LiveCallsPanel';
 import CallDetailModal from './CallDetailModal';
+import RealtimeStatusIndicators from './RealtimeStatusIndicators';
 
 const TABS = [
   { id: 'voice', label: 'Voice Agent' },
@@ -189,6 +190,9 @@ export default function AIReceptionist() {
           <button onClick={fetchData} className="ml-3 underline hover:text-red-200">Retry</button>
         </div>
       )}
+
+      {/* Phone Status Indicators */}
+      <RealtimeStatusIndicators />
 
       {/* Voice Agent Tab - Primary */}
       {activeTab === 'voice' && (
