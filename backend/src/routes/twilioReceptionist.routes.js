@@ -10,7 +10,8 @@ const router = Router();
 
 // ── Public health check (no auth, no secrets exposed) ──
 router.get('/health', (_req, res) => {
-  const modelValid = RealtimeModelValidator.validate(config.realtime.model);
+  const modelCheck = RealtimeModelValidator.validate(config.realtime.model);
+  const lastFailure = RealtimeModelValidator.getLastError(config.realtime.model);
   res.json({
     status: 'ok',
     module: 'ai-receptionist',
@@ -20,9 +21,11 @@ router.get('/health', (_req, res) => {
     mediaStreamEnabled: config.realtime.mediaStreamEnabled,
     businessToolsEnabled: config.realtime.businessToolsEnabled,
     modelConfigured: Boolean(config.realtime.model),
-    modelValidated: modelValid.valid,
-    modelValidationReason: modelValid.valid ? null : modelValid.reason,
+    modelValidated: modelCheck.valid,
+    modelValidationReason: modelCheck.valid ? null : modelCheck.reason,
     realtimeConfigured: config.realtime.configured,
+    realtimeProviderVerified: modelCheck.valid && !modelCheck.cached,
+    lastRealtimeError: lastFailure?.reason || null,
     realtimeReady: config.realtime.configured && config.realtime.mediaStreamEnabled,
     voiceAgentMode: config.aiReceptionist.voiceAgentMode,
     activeCalls: RealtimeSessionManager.getCount(),

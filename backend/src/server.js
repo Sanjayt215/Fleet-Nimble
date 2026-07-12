@@ -38,21 +38,26 @@ startMqttConsumer(io).catch((err) => {
 const wss = new WebSocketServer({ noServer: true });
 
 wss.on('connection', (ws, request) => {
+  const pathname = request.url ? new URL(request.url, `http://${request.headers.host}`).pathname : 'unknown';
+  logger.info('TWILIO_WS_CONNECTION_OPEN', { pathname });
   try {
     handleMediaStream(ws, request);
   } catch (error) {
-    logger.error('Media stream handler error', { error: error.message });
-    ws.close();
+    logger.error('MEDIA_STREAM_HANDLER_CRASH', { error: error.message, pathname });
+    ws.close(1011, 'Handler error');
   }
 });
 
 server.on('upgrade', (request, socket, head) => {
   const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
 
-  // Only intercept the Twilio media-stream path. Socket.IO upgrade requests
-  // (/socket.io/*) are left for Socket.IO's own listener to handle — never destroy them.
   if (pathname === '/api/ai-receptionist/twilio/media-stream') {
+    logger.info('TWILIO_WS_UPGRADE_RECEIVED', {
+      pathname,
+      hasCallSidParam: request.url.includes('callSid'),
+    });
     wss.handleUpgrade(request, socket, head, (ws) => {
+      logger.info('TWILIO_WS_UPGRADE_ACCEPTED', { pathname });
       wss.emit('connection', ws, request);
     });
   }

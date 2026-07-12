@@ -30,12 +30,14 @@ export async function handleIncomingCall(req, res) {
       return res.type('text/xml').send(twilioWebhook.buildUnavailableTwiML());
     }
 
-    const { CallSid, From, To, AccountSid } = req.body || {};
+    const { CallSid, From, To, AccountSid, AccountType } = req.body || {};
 
     logger.info('DIAG_VOICE_WEBHOOK_RECEIVED', {
       CallSid,
       fromTail: From ? From.slice(-4) : 'unknown',
       toTail: To ? To.slice(-4) : 'unknown',
+      accountType: AccountType || 'unknown',
+      isTrial: !From || From.startsWith('client:'),
     });
 
     const realtimeReady = config.realtime.configured && config.realtime.mediaStreamEnabled;

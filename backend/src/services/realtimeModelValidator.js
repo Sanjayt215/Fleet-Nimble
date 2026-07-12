@@ -30,6 +30,15 @@ export class RealtimeModelValidator {
     FAILURE_CACHE.delete(key);
   }
 
+  static getLastError(model) {
+    if (!model) return null;
+    const cached = FAILURE_CACHE.get(model.trim());
+    if (cached) {
+      return { reason: cached.reason, failedAt: cached.failedAt, age: Date.now() - cached.failedAt };
+    }
+    return null;
+  }
+
   static clearCache() {
     FAILURE_CACHE.clear();
   }

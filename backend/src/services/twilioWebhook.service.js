@@ -72,6 +72,8 @@ export function buildMediaStreamUrl(baseUrl = config.publicUrl) {
 export function buildIncomingTwiML(callSid, from, to, cfg = {}) {
   const twiml = new VoiceResponse();
   const streamUrl = buildMediaStreamUrl(cfg.publicUrl || config.publicUrl);
+  const wsHost = new URL(streamUrl).host;
+  const wsPath = new URL(streamUrl).pathname;
 
   const connect = twiml.connect();
   const stream = connect.stream({ url: streamUrl, track: 'both_tracks' });
@@ -81,7 +83,14 @@ export function buildIncomingTwiML(callSid, from, to, cfg = {}) {
   if (from) stream.parameter({ name: 'from', value: from });
   if (to) stream.parameter({ name: 'to', value: to });
 
-  logger.info('TWILIO_TWIML_GENERATED', { callSid, from });
+  logger.info('TWIML_MEDIA_STREAM_GENERATED', {
+    wsHost,
+    wsPath,
+    hasConnect: true,
+    hasStream: true,
+    hasTrackAttribute: true,
+    CallSidPresent: Boolean(callSid),
+  });
   return twiml.toString();
 }
 

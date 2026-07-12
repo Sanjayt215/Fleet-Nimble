@@ -70,6 +70,12 @@ function handleMediaStream(ws, req) {
   let audioBridgeActive = false;
   let greetingSent = false;
   let sessionCreatedTimer = null;
+  let sessionUpdateTimer = null;
+  let sessionUpdateAcknowledged = false;
+  let sessionCreatedReceived = false;
+  let greetingTimeoutMs = 10000;
+  let greetingTimeoutTimer = null;
+  let fullDuplexEstablished = false;
   const timers = [];
 
   let callRecordId = null;
@@ -109,6 +115,7 @@ function handleMediaStream(ws, req) {
     greetingSent = true;
     if (rtmSession) {
       rtmSession.greetingSent = true;
+      rtmSession.diagGreetingRequestTime = Date.now();
       rtmSession.setState(RealtimeSessionManager.STATES.GREETING);
     }
     if (openaiWs?.readyState === WebSocket.OPEN) {
@@ -123,7 +130,17 @@ function handleMediaStream(ws, req) {
         },
       };
       openaiWs.send(JSON.stringify(greetingPayload));
-      logger.info('AI_GREETING_REQUESTED', { callSid, personalized: !!customerMemory });
+      logger.info('GREETING_REQUEST_STARTED', { callSid, personalized: !!customerMemory });
+
+      if (greetingTimeoutTimer) clearTimeout(greetingTimeoutTimer);
+      greetingTimeoutTimer = setTimeout(() => {
+        if (isClosing || !callSid) return;
+        logger.error('GREETING_TIMEOUT', { callSid, timeoutMs: greetingTimeoutMs });
+        endCallGracefully('Thank you for calling FleetNimble. Our system is experiencing a delay. Please try again later. Goodbye.');
+      }, greetingTimeoutMs);
+      timers.push(greetingTimeoutTimer);
+    } else {
+      logger.warn('GREETING_SKIPPED_OPENAI_NOT_OPEN', { callSid, readyState: openaiWs?.readyState });
     }
   }
 
@@ -419,7 +436,7 @@ function handleMediaStream(ws, req) {
     }
 
     if (rtmSession) rtmSession.setState(RealtimeSessionManager.STATES.CONNECTING);
-    logger.info('OPENAI_REALTIME_CONNECTING', { callSid });
+    logger.info('OPENAI_REALTIME_CONNECT_ATTEMPT', { callSid });
     const voice = mapToOpenAIVoice(config.realtime.voice);
     const openaiUrl = buildOpenAiUrl();
 
@@ -440,7 +457,7 @@ function handleMediaStream(ws, req) {
 
     openaiWs.on('open', () => {
       if (isClosing) return;
-      logger.info('OPENAI_REALTIME_CONNECTED', { callSid });
+      logger.info('OPENAI_REALTIME_SOCKET_OPEN', { callSid, model: config.realtime.model });
       reconnectAttempts = 0;
 
       const memoryContext = customerMemory
@@ -487,11 +504,17 @@ function handleMediaStream(ws, req) {
       try {
         const msg = JSON.parse(data.toString());
 
+        // Log every non-audio event type for diagnostics
+        if (msg.type && msg.type !== 'response.audio.delta' && msg.type !== 'input_audio_buffer.speech_started') {
+          logger.info('OPENAI_EVENT_TYPE', { callSid, type: msg.type });
+        }
+
         if (msg.type === 'session.created') {
           if (sessionCreatedTimer) {
             clearTimeout(sessionCreatedTimer);
             sessionCreatedTimer = null;
           }
+          sessionCreatedReceived = true;
           RealtimeModelValidator.markSucceeded(config.realtime.model);
           logger.info('OPENAI_SESSION_CREATED', {
             callSid,
@@ -499,7 +522,43 @@ function handleMediaStream(ws, req) {
             model: msg.session?.model || config.realtime.model,
           });
           if (rtmSession) rtmSession.setState(RealtimeSessionManager.STATES.CONNECTED);
+
+          // Set fallback timeout for session.updated (5s)
+          sessionUpdateTimer = setTimeout(() => {
+            if (isClosing) return;
+            if (!sessionUpdateAcknowledged) {
+              logger.warn('DIAG_SESSION_UPDATE_TIMEOUT', { callSid });
+              sessionUpdateAcknowledged = true;
+              if (sessionCreatedReceived && !greetingSent) sendGreeting();
+            }
+          }, 5000);
+          timers.push(sessionUpdateTimer);
+        }
+
+        if (msg.type === 'session.updated') {
+          sessionUpdateAcknowledged = true;
+          if (sessionUpdateTimer) {
+            clearTimeout(sessionUpdateTimer);
+            sessionUpdateTimer = null;
+          }
+          logger.info('DIAG_SESSION_UPDATE_ACCEPTED', { callSid });
+        }
+
+        // Gate greeting on BOTH session.created AND session.updated
+        if (sessionCreatedReceived && sessionUpdateAcknowledged && !greetingSent) {
           sendGreeting();
+        }
+
+        // Track first greeting audio delta in closure scope (greetingTimeoutTimer is here)
+        if (msg.type === 'response.audio.delta' && rtmSession && !rtmSession.greetingAudioReceived && rtmSession.state === RealtimeSessionManager.STATES.GREETING) {
+          rtmSession.greetingAudioReceived = true;
+          rtmSession.diagGreetingFirstAudioTime = Date.now();
+          const latencyMs = rtmSession.diagGreetingRequestTime ? Date.now() - rtmSession.diagGreetingRequestTime : null;
+          logger.info('GREETING_FIRST_AUDIO_RECEIVED', { callSid, latencyMs });
+          if (greetingTimeoutTimer) {
+            clearTimeout(greetingTimeoutTimer);
+            greetingTimeoutTimer = null;
+          }
         }
 
         await handleOpenAIMessage(msg, rtmSession, legacySession, openaiWs);
@@ -509,7 +568,12 @@ function handleMediaStream(ws, req) {
     });
 
     openaiWs.on('close', (code, reason) => {
-      logger.warn('OPENAI_REALTIME_CLOSED', { callSid, code, reason: reason?.toString() });
+      logger.info('OPENAI_REALTIME_SOCKET_CLOSE', {
+        callSid,
+        code,
+        reason: reason?.toString() || null,
+        model: config.realtime.model,
+      });
       if (legacySession) setOpenaiWs(callSid, null);
       if (rtmSession) rtmSession.openAiSocket = null;
 
@@ -529,7 +593,15 @@ function handleMediaStream(ws, req) {
     });
 
     openaiWs.on('error', (err) => {
-      logger.error('OPENAI_REALTIME_ERROR', { callSid, error: err.message });
+      logger.error('OPENAI_REALTIME_ERROR', {
+        callSid,
+        error: err.message,
+        code: err.code,
+        model: config.realtime.model,
+      });
+      if (rtmSession) {
+        rtmSession.lastError = { message: err.message, code: err.code, time: Date.now() };
+      }
       if (!isClosing && (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS || legacySession?.stopReconnect || rtmSession?.stopReconnect)) {
         gracefulClose();
       }
@@ -544,6 +616,14 @@ function handleMediaStream(ws, req) {
     if (sessionCreatedTimer) {
       clearTimeout(sessionCreatedTimer);
       sessionCreatedTimer = null;
+    }
+    if (greetingTimeoutTimer) {
+      clearTimeout(greetingTimeoutTimer);
+      greetingTimeoutTimer = null;
+    }
+    if (sessionUpdateTimer) {
+      clearTimeout(sessionUpdateTimer);
+      sessionUpdateTimer = null;
     }
 
     try {
@@ -703,10 +783,11 @@ function handleMediaStream(ws, req) {
           }).catch(e => logger.warn('CALL_RECORD_START_FAILED', { error: e.message }));
         }
 
-        logger.info('TWILIO_MEDIA_STARTED', {
+        logger.info('DIAG_TWILIO_START_EVENT', {
           callSid,
           streamSid,
           fromTail: callerPhone ? callerPhone.slice(-4) : 'unknown',
+          hasCustomParams: Object.keys(params).length > 0,
         });
 
         scheduleTimer(() => {
@@ -743,7 +824,7 @@ function handleMediaStream(ws, req) {
 
         if (!audioBridgeActive) {
           audioBridgeActive = true;
-          logger.info('AUDIO_BRIDGE_ACTIVE', { callSid, streamSid: msg.streamSid });
+          logger.info('CALLER_AUDIO_RECEIVED', { callSid, streamSid: msg.streamSid });
         }
 
         if (rtmSession) {
@@ -753,10 +834,14 @@ function handleMediaStream(ws, req) {
 
         if (openaiWs?.readyState === WebSocket.OPEN) {
           openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: payload }));
+          if (!fullDuplexEstablished) {
+            fullDuplexEstablished = true;
+            logger.info('FULL_DUPLEX_ESTABLISHED', { callSid });
+          }
         } else {
-          logger.warn('DIAG_USER_AUDIO_DROP_OPENAI_NOT_OPEN', {
+          logger.warn('CALLER_AUDIO_DROPPED', {
             callSid,
-            payloadSize: payload.length,
+            reason: 'openai_socket_not_open',
             openaiWsReadyState: openaiWs?.readyState,
           });
           if (rtmSession) rtmSession.droppedPackets++;
@@ -774,13 +859,23 @@ function handleMediaStream(ws, req) {
     }
   });
 
-  ws.on('close', () => {
-    logger.info('TWILIO_MEDIA_WS_CLOSED', { callSid });
+  logger.info('TWILIO_WS_CONNECTION_OPEN', { callSid, pathname: req.url });
+
+  ws.on('close', (code, reason) => {
+    logger.info('TWILIO_WS_CONNECTION_CLOSE', {
+      callSid,
+      code,
+      reason: reason?.toString() || null,
+    });
     gracefulClose();
   });
 
   ws.on('error', (err) => {
-    logger.error('TWILIO_MEDIA_WS_ERROR', { callSid, error: err.message });
+    logger.error('TWILIO_WS_CONNECTION_ERROR', {
+      callSid,
+      error: err.message,
+      code: err.code,
+    });
     gracefulClose();
   });
 }
@@ -793,6 +888,7 @@ export async function handleOpenAIMessage(msg, rtmSession, legacySession, openai
   switch (msg.type) {
     case 'session.created':
     case 'session.updated':
+      // handled in connectToOpenAI message handler
       break;
 
     case 'input_audio_buffer.speech_started':
@@ -823,6 +919,9 @@ export async function handleOpenAIMessage(msg, rtmSession, legacySession, openai
           } else if (content.type === 'transcript') {
             const role = msg.item.role === 'user' ? 'caller' : 'assistant';
             addTranscriptEntry(callSid, { role, content: content.transcript });
+            if (role === 'caller') {
+              logger.info('TRANSCRIPTION_RECEIVED', { callSid, textPreview: content.transcript?.substring(0, 60) });
+            }
             if (io) {
               io.to(`user:${legacySession?.metadata?.userId}`).emit('transcript.final', {
                 callSid, role, text: content.transcript, timestamp: new Date().toISOString(),
@@ -884,6 +983,10 @@ export async function handleOpenAIMessage(msg, rtmSession, legacySession, openai
       break;
     }
 
+    case 'response.created':
+      logger.info('AI_RESPONSE_STARTED', { callSid });
+      break;
+
     case 'response.audio_transcript.delta':
       if (io) {
         io.to(`user:${legacySession?.metadata?.userId}`).emit('transcript.partial', {
@@ -894,14 +997,17 @@ export async function handleOpenAIMessage(msg, rtmSession, legacySession, openai
 
     case 'response.audio.delta': {
       if (!msg.delta || typeof msg.delta !== 'string' || msg.delta.length === 0) {
+        logger.warn('OPENAI_AUDIO_DELTA_REJECTED', { callSid, reason: 'empty_or_nonstring' });
         if (rtmSession) rtmSession.droppedPackets++;
         break;
       }
 
       const deltaSize = msg.delta.length;
+      logger.info('OPENAI_AUDIO_DELTA_RECEIVED', { callSid, deltaSize });
       const streamSid = rtmSession?.streamSid || legacySession?.streamSid;
 
       if (!streamSid) {
+        logger.warn('TWILIO_AUDIO_FRAME_DROPPED', { callSid, reason: 'missing_streamSid', deltaSize });
         if (rtmSession) rtmSession.droppedPackets++;
         break;
       }
@@ -922,7 +1028,13 @@ export async function handleOpenAIMessage(msg, rtmSession, legacySession, openai
           streamSid,
           media: { payload: msg.delta },
         }));
+        logger.info('TWILIO_AUDIO_FRAME_SENT', { callSid, deltaSize });
       } else {
+        logger.warn('TWILIO_AUDIO_FRAME_DROPPED', {
+          callSid,
+          reason: 'twilio_socket_not_open',
+          twilioReadyState: twilioSocket?.readyState,
+        });
         if (rtmSession) rtmSession.droppedPackets++;
       }
       break;
