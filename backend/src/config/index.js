@@ -63,6 +63,21 @@ export const config = {
     voice: process.env.AI_RECEPTIONIST_VOICE || 'alloy',
     model: process.env.AI_RECEPTIONIST_MODEL || 'gpt-4o-realtime-preview',
   },
+  gemini: {
+    apiKey: process.env.GEMINI_API_KEY || '',
+    liveModel: process.env.GEMINI_LIVE_MODEL || 'gemini-2.0-flash-exp',
+    voice: process.env.GEMINI_VOICE || 'Puck',
+    connectTimeoutMs: parseIntEnv(process.env.GEMINI_CONNECT_TIMEOUT_MS, 8000),
+    sessionTimeoutMs: parseIntEnv(process.env.GEMINI_SESSION_TIMEOUT_MS, 10000),
+  },
+  groq: {
+    apiKey: process.env.GROQ_API_KEY || '',
+    model: process.env.GROQ_MODEL || 'mixtral-8x7b-32768',
+    timeoutMs: parseIntEnv(process.env.GROQ_TIMEOUT_MS, 15000),
+    maxRetries: parseIntEnv(process.env.GROQ_MAX_RETRIES, 2),
+    maxTokens: parseIntEnv(process.env.GROQ_MAX_TOKENS, 1024),
+    temperature: parseFloatEnv(process.env.GROQ_TEMPERATURE, 0.2),
+  },
   realtime: {
     model: process.env.AI_RECEPTIONIST_MODEL || 'gpt-4o-realtime-preview',
     voice: process.env.AI_RECEPTIONIST_VOICE || 'alloy',
@@ -71,6 +86,16 @@ export const config = {
     mediaStreamEnabled: parseBool(process.env.AI_RECEPTIONIST_MEDIA_STREAM_ENABLED, true),
     businessToolsEnabled: parseBool(process.env.AI_RECEPTIONIST_BUSINESS_TOOLS_ENABLED, false),
     configured: Boolean(process.env.AI_RECEPTIONIST_MODEL) && Boolean(process.env.OPENAI_API_KEY),
+  },
+  realtimeProvider: {
+    provider: process.env.AI_RECEPTIONIST_PROVIDER || 'openai',
+    fallbackProvider: process.env.AI_RECEPTIONIST_FALLBACK_PROVIDER || 'openai',
+    enabled: parseBool(process.env.AI_RECEPTIONIST_MEDIA_STREAM_ENABLED, true),
+  },
+  assistantProvider: {
+    provider: process.env.AI_ASSISTANT_PROVIDER || 'groq',
+    fallbackProvider: process.env.AI_ASSISTANT_FALLBACK_PROVIDER || 'openrouter',
+    enabled: parseBool(process.env.GROQ_ASSISTANT_ENABLED, process.env.AI_ASSISTANT_PROVIDER === 'groq'),
   },
   ai: {
     provider: process.env.AI_PROVIDER || 'openrouter',

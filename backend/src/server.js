@@ -12,6 +12,8 @@ import { verifyAIServiceStartup } from './services/aiService.js';
 import { handleMediaStream } from './services/mediaStreamHandler.js';
 import * as providerHealth from './services/receptionistProviderHealth.service.js';
 import { validateOwnerAtStartup } from './services/receptionistTenantResolver.service.js';
+import { getRealtimeProviderHealth } from './providers/realtime/realtimeVoiceProviderFactory.js';
+import { getAssistantProviderHealth } from './providers/assistant/assistantProviderFactory.js';
 
 logger.info('BOOT_START');
 
@@ -119,8 +121,12 @@ server.listen(config.port, host, async () => {
   // ── DIAG: Full voice pipeline startup diagnostics ──
   const { RealtimeModelValidator: RMV } = await import('./services/realtimeModelValidator.js');
   const modelCheck = RMV.validate(config.realtime.model);
+  const rtHealth = getRealtimeProviderHealth();
+  const asstHealth = getAssistantProviderHealth();
   logger.info('DIAG_PIPELINE_CONFIG', {
     publicUrl: config.publicUrl,
+    realtimeProvider: config.realtimeProvider?.provider || 'openai',
+    realtimeProviderEnabled: config.realtimeProvider?.enabled !== false,
     realtimeModel: config.realtime.model,
     realtimeVoice: config.realtime.voice,
     realtimeConfigured: config.realtime.configured,
@@ -130,7 +136,10 @@ server.listen(config.port, host, async () => {
     maxCallSeconds: config.realtime.maxCallSeconds,
     silenceTimeoutSeconds: config.realtime.silenceTimeoutSeconds,
     openaiApiKeyPresent: Boolean(config.openai.apiKey),
-    openaiApiKeyConfigured: Boolean(config.openai.apiKey),
+    geminiApiKeyPresent: Boolean(config.gemini?.apiKey),
+    assistantProvider: config.assistantProvider?.provider || 'groq',
+    assistantProviderEnabled: config.assistantProvider?.enabled !== false,
+    groqApiKeyPresent: Boolean(config.groq?.apiKey),
     aiReceptionistEnabled: config.aiReceptionist.enabled,
     voiceAgentMode: config.aiReceptionist.voiceAgentMode,
     sessionManagerVersion: '2.0',

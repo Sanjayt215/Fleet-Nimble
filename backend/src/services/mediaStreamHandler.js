@@ -23,13 +23,11 @@ import * as callService from './receptionistCall.service.js';
 import { redirectToGreeting } from './twilioWebhook.service.js';
 import * as providerHealth from './receptionistProviderHealth.service.js';
 import { resolveTenant, isPersistenceAvailable, getResolvedOwner } from './receptionistTenantResolver.service.js';
+import { createRealtimeVoiceProvider, isRealtimeProviderEnabled } from '../providers/realtime/realtimeVoiceProviderFactory.js';
+import { validateTwilioPayload } from './audio/twilioAudioCodec.js';
 
-const OPENAI_REALTIME_URL = 'wss://api.openai.com/v1/realtime';
 const MAX_RECONNECT_ATTEMPTS = 2; // Phase 3 — max 2 retries, then redirect to greeting
-const SESSION_CREATED_TIMEOUT_MS = 8000;
-const SESSION_UPDATE_TIMEOUT_MS = 8000;
 const GREETING_AUDIO_TIMEOUT_MS = 10000;
-const WS_UPGRADE_TIMEOUT_MS = 8000;
 
 const BUSINESS_TOOLS_ENABLED = config.realtime?.businessToolsEnabled ?? true;
 
@@ -47,22 +45,6 @@ const MAX_TOOL_RETRIES = 2;
 const TOOL_TIMEOUT_MS = 15000;
 const ROLLBACK_ACTIONS = [];
 
-function buildOpenAiUrl() {
-  return `${OPENAI_REALTIME_URL}?model=${encodeURIComponent(config.realtime.model)}`;
-}
-
-function validateAudioPayload(payload) {
-  if (typeof payload !== 'string' || payload.length === 0) {
-    return { valid: false, reason: 'empty_or_nonstring' };
-  }
-  try {
-    const decoded = atob(payload);
-    return { valid: true, byteLength: decoded.length };
-  } catch {
-    return { valid: false, reason: 'invalid_base64' };
-  }
-}
-
 function handleMediaStream(ws, req) {
   const urlParams = new URL(req.url, config.publicUrl).searchParams;
   const urlCallSid = urlParams.get('callSid') || null;
@@ -72,15 +54,11 @@ function handleMediaStream(ws, req) {
   let callSid = urlCallSid;
   let rtmSession = null;
   let legacySession = null;
-  let openaiWs = null;
+  let provider = null;
   let reconnectAttempts = 0;
   let isClosing = false;
   let audioBridgeActive = false;
   let greetingSent = false;
-  let sessionCreatedTimer = null;
-  let sessionUpdateTimer = null;
-  let sessionUpdateAcknowledged = false;
-  let sessionCreatedReceived = false;
   let greetingTimeoutMs = GREETING_AUDIO_TIMEOUT_MS;
   let greetingTimeoutTimer = null;
   let fullDuplexEstablished = false;
@@ -152,18 +130,11 @@ function handleMediaStream(ws, req) {
       rtmSession.diagGreetingRequestTime = Date.now();
       rtmSession.setState(RealtimeSessionManager.STATES.GREETING);
     }
-    if (openaiWs?.readyState === WebSocket.OPEN) {
+    if (provider && provider.isConnected) {
       const greetingText = customerMemory?.isReturning && customerMemory?.customer?.name
         ? `Welcome back, ${customerMemory.customer.name}. Last time we discussed FleetNimble. How may I help you today?`
         : "Hello. Thank you for calling FleetNimble. I'm the FleetNimble AI Receptionist. How may I help you today?";
-      const greetingPayload = {
-        type: 'response.create',
-        response: {
-          modalities: ['text', 'audio'],
-          instructions: `Say: "${greetingText}"`,
-        },
-      };
-      openaiWs.send(JSON.stringify(greetingPayload));
+      provider.sendText(greetingText);
       logger.info('GREETING_REQUEST_STARTED', { callSid, personalized: !!customerMemory });
 
       if (greetingTimeoutTimer) clearTimeout(greetingTimeoutTimer);
@@ -174,7 +145,7 @@ function handleMediaStream(ws, req) {
       }, greetingTimeoutMs);
       timers.push(greetingTimeoutTimer);
     } else {
-      logger.warn('GREETING_SKIPPED_OPENAI_NOT_OPEN', { callSid, readyState: openaiWs?.readyState });
+      logger.warn('GREETING_SKIPPED_PROVIDER_NOT_READY', { callSid, providerReady: provider?.isConnected });
     }
   }
 
@@ -448,171 +419,65 @@ function handleMediaStream(ws, req) {
     return { success: false, message: 'Unable to complete that action after multiple attempts.', error: lastError || 'max_retries_exceeded' };
   }
 
-  function connectToOpenAI() {
+  function connectProvider() {
     if (isClosing || !callSid) return;
 
-    if (!config.realtime.configured) {
+    if (!isRealtimeProviderEnabled() || !config.realtime.configured) {
       logger.error('REALTIME_CALL_FAILED', { callSid, reason: 'realtime_not_configured' });
       logger.error('PIPELINE_FAILURE', {
-        callSid, stage: 'openai_connect', reason: 'realtime_not_configured',
-        openaiError: 'REALTIME_NOT_CONFIGURED',
-      });
-      gracefulClose();
-      return;
-    }
-
-    const modelValid = RealtimeModelValidator.validate(config.realtime.model);
-    if (!modelValid.valid) {
-      logger.error('REALTIME_CALL_FAILED', {
-        callSid,
-        reason: 'model_validation_failed',
-        model: config.realtime.model,
-        validation: modelValid,
-      });
-      logger.error('PIPELINE_FAILURE', {
-        callSid, stage: 'model_validation', reason: 'model_validation_failed',
-        openaiError: modelValid.reason || 'unsupported_model',
-        providerError: 'model_validation_failed',
+        callSid, stage: 'provider_connect', reason: 'realtime_not_configured',
       });
       gracefulClose();
       return;
     }
 
     if (rtmSession) rtmSession.setState(RealtimeSessionManager.STATES.CONNECTING);
-    logger.info('OPENAI_CONNECTING', { callSid, model: config.realtime.model });
-    const voice = mapToOpenAIVoice(config.realtime.voice);
-    const openaiUrl = buildOpenAiUrl();
+
+    const providerName = config.realtimeProvider?.provider || 'openai';
+    logger.info('PROVIDER_CONNECTING', { callSid, provider: providerName });
 
     try {
-      openaiWs = new WebSocket(openaiUrl, {
-        headers: {
-          Authorization: `Bearer ${config.openai.apiKey}`,
-        },
-      });
-      if (rtmSession) rtmSession.openAiSocket = openaiWs;
-      if (legacySession) setOpenaiWs(callSid, openaiWs);
-    } catch (err) {
-      logger.error('REALTIME_CALL_FAILED', { callSid, reason: 'openai_connect_error', error: err.message });
-      logger.error('PIPELINE_FAILURE', {
-        callSid, stage: 'openai_connect', reason: 'construct_failed',
-        openaiError: err.message, reconnectAttempt: reconnectAttempts + 1,
-      });
-      gracefulClose();
-      return;
-    }
-
-    // Open timeout
-    const openTimeout = scheduleTimer(() => {
-      if (isClosing) return;
-      logger.error('OPENAI_SOCKET_OPEN_TIMEOUT', { callSid, timeoutMs: WS_UPGRADE_TIMEOUT_MS });
-      gracefulClose();
-    }, WS_UPGRADE_TIMEOUT_MS);
-
-    openaiWs.on('open', () => {
-      if (isClosing) return;
-      clearTimeout(openTimeout);
-      logger.info('OPENAI_SOCKET_OPEN', { callSid, model: config.realtime.model });
-      reconnectAttempts = 0;
-
-      const memoryContext = customerMemory
-        ? buildMemoryContext(customerMemory)
-        : '';
-
-      const tools = BUSINESS_TOOLS_ENABLED ? buildToolDefinitions(true) : [];
-
-      // Send minimal session.update first — some models reject unknown fields
-      const basePayload = {
-        type: 'session.update',
-        session: {
-          modalities: ['text', 'audio'],
-          instructions: buildSystemPrompt({ businessName: 'FleetNimble', realtime: config.realtime }, memoryContext),
-          voice,
-          input_audio_format: 'g711_ulaw',
-          output_audio_format: 'g711_ulaw',
-          turn_detection: {
-            type: 'server_vad',
-            threshold: 0.5,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 600,
-          },
-        },
-      };
-      openaiWs.send(JSON.stringify(basePayload));
-      logger.info('SESSION_UPDATE_SENT', {
-        callSid,
-        keys: Object.keys(basePayload.session),
-        hasTools: tools.length > 0,
-      });
-      if (tools.length > 0) {
-        scheduleTimer(() => {
-          if (isClosing || openaiWs?.readyState !== WebSocket.OPEN) return;
-          const toolsPayload = { type: 'session.update', session: { tools, tool_choice: 'auto' } };
-          openaiWs.send(JSON.stringify(toolsPayload));
-        }, 2000);
+      provider = createRealtimeVoiceProvider();
+      if (!provider) {
+        logger.error('REALTIME_CALL_FAILED', { callSid, reason: 'provider_creation_failed' });
+        gracefulClose();
+        return;
       }
 
-      sessionCreatedTimer = setTimeout(() => {
-        if (isClosing) return;
-        logger.error('SESSION_CREATED_TIMEOUT', {
-          callSid,
-          timeoutMs: SESSION_CREATED_TIMEOUT_MS,
-        });
-        RealtimeModelValidator.markFailed(config.realtime.model, 'session.created timeout');
-        gracefulClose();
-      }, SESSION_CREATED_TIMEOUT_MS);
-    });
+      const memoryContext = customerMemory ? buildMemoryContext(customerMemory) : '';
+      const businessToolsEnabled = config.realtime?.businessToolsEnabled ?? true;
 
-    openaiWs.on('message', async (data) => {
-      try {
-        const msg = JSON.parse(data.toString());
+      if (rtmSession) rtmSession.openAiSocket = provider;
+      if (legacySession) setOpenaiWs(callSid, provider);
 
-        // Log every non-audio event type for diagnostics
-        if (msg.type && msg.type !== 'response.audio.delta' && msg.type !== 'input_audio_buffer.speech_started') {
-          logger.info('OPENAI_EVENT_TYPE', { callSid, type: msg.type });
+      provider.on('connected', () => {
+        logger.info('PROVIDER_SOCKET_OPEN', { callSid, provider: providerName });
+        reconnectAttempts = 0;
+      });
+
+      provider.on('ready', () => {
+        logger.info('PROVIDER_SESSION_READY', { callSid, provider: providerName });
+        if (rtmSession) rtmSession.setState(RealtimeSessionManager.STATES.CONNECTED);
+        providerHealth.markVerified();
+        if (!greetingSent) sendGreeting();
+      });
+
+      provider.on('audio', (data) => {
+        if (data.format !== 'g711_ulaw') return;
+        const audioDelta = data.audio;
+
+        if (!audioDelta || typeof audioDelta !== 'string' || audioDelta.length === 0) {
+          logger.warn('PROVIDER_AUDIO_DELTA_REJECTED', { callSid, reason: 'empty_or_nonstring', provider: providerName });
+          if (rtmSession) rtmSession.droppedPackets++;
+          return;
         }
 
-        if (msg.type === 'session.created') {
-          if (sessionCreatedTimer) {
-            clearTimeout(sessionCreatedTimer);
-            sessionCreatedTimer = null;
-          }
-          sessionCreatedReceived = true;
-          RealtimeModelValidator.markSucceeded(config.realtime.model);
-          logger.info('OPENAI_SESSION_CREATED', {
-            callSid,
-            sessionId: msg.session?.id,
-            model: msg.session?.model || config.realtime.model,
-          });
-          if (rtmSession) rtmSession.setState(RealtimeSessionManager.STATES.CONNECTED);
+        pipelineCounters.outgoingFrames++;
+        pipelineCounters.audioBytes += (audioDelta?.length || 0);
+        responseAudioSeen = true;
 
-          // Set fallback timeout for session.updated
-          sessionUpdateTimer = setTimeout(() => {
-            if (isClosing) return;
-            if (!sessionUpdateAcknowledged) {
-              logger.warn('SESSION_UPDATE_TIMEOUT', { callSid, timeoutMs: SESSION_UPDATE_TIMEOUT_MS });
-              sessionUpdateAcknowledged = true;
-              if (sessionCreatedReceived && !greetingSent) sendGreeting();
-            }
-          }, SESSION_UPDATE_TIMEOUT_MS);
-          timers.push(sessionUpdateTimer);
-        }
-
-        if (msg.type === 'session.updated') {
-          sessionUpdateAcknowledged = true;
-          if (sessionUpdateTimer) {
-            clearTimeout(sessionUpdateTimer);
-            sessionUpdateTimer = null;
-          }
-          logger.info('OPENAI_SESSION_UPDATED', { callSid });
-        }
-
-        // Gate greeting on BOTH session.created AND session.updated
-        if (sessionCreatedReceived && sessionUpdateAcknowledged && !greetingSent) {
-          sendGreeting();
-        }
-
-        // Track first greeting audio delta in closure scope (greetingTimeoutTimer is here)
-        if (msg.type === 'response.audio.delta' && rtmSession && !rtmSession.greetingAudioReceived && rtmSession.state === RealtimeSessionManager.STATES.GREETING) {
+        // Track greeting first audio
+        if (rtmSession && !rtmSession.greetingAudioReceived && rtmSession.state === RealtimeSessionManager.STATES.GREETING) {
           rtmSession.greetingAudioReceived = true;
           rtmSession.diagGreetingFirstAudioTime = Date.now();
           const latencyMs = rtmSession.diagGreetingRequestTime ? Date.now() - rtmSession.diagGreetingRequestTime : null;
@@ -623,109 +488,184 @@ function handleMediaStream(ws, req) {
           }
         }
 
-        // Phase 4-5 — pipeline counters and zero-audio detection (closure scope)
-        if (msg.type === 'response.created') responseCreatedSeen = true;
-        if (msg.type === 'response.audio.delta') {
-          responseAudioSeen = true;
-          pipelineCounters.outgoingFrames++;
-          pipelineCounters.audioBytes += (msg.delta?.length || 0);
+        const streamSid = rtmSession?.streamSid || legacySession?.streamSid;
+        if (!streamSid) {
+          logger.warn('TWILIO_AUDIO_FRAME_DROPPED', { callSid, reason: 'missing_streamSid', deltaSize: audioDelta.length });
+          if (rtmSession) rtmSession.droppedPackets++;
+          return;
         }
 
-        await handleOpenAIMessage(msg, rtmSession, legacySession, openaiWs);
-      } catch (err) {
-        logger.error('OPENAI_MESSAGE_PARSE_ERROR', { callSid, error: err.message });
-      }
-    });
+        if (rtmSession) {
+          if (rtmSession.state === RealtimeSessionManager.STATES.GREETING ||
+              rtmSession.state === RealtimeSessionManager.STATES.LISTENING) {
+            rtmSession.setState(RealtimeSessionManager.STATES.RESPONDING);
+          }
+          rtmSession.audioBytesSent += audioDelta.length;
+          rtmSession.packetsSent++;
+        }
 
-    openaiWs.on('close', (code, reason) => {
-      logger.info('OPENAI_SOCKET_CLOSED', {
-        callSid,
-        code,
-        reason: reason?.toString() || null,
-        model: config.realtime.model,
+        const twilioSocket = legacySession?.ws || rtmSession?.twilioSocket;
+        if (twilioSocket && twilioSocket.readyState === WebSocket.OPEN) {
+          twilioSocket.send(JSON.stringify({
+            event: 'media',
+            streamSid,
+            media: { payload: audioDelta },
+          }));
+          logger.info('TWILIO_AUDIO_FRAME_SENT', { callSid, deltaSize: audioDelta.length, format: 'g711_ulaw' });
+        } else {
+          logger.warn('TWILIO_AUDIO_FRAME_DROPPED', {
+            callSid,
+            reason: 'twilio_socket_not_open',
+            twilioReadyState: twilioSocket?.readyState,
+          });
+          if (rtmSession) rtmSession.droppedPackets++;
+        }
       });
-      if (legacySession) setOpenaiWs(callSid, null);
-      if (rtmSession) rtmSession.openAiSocket = null;
 
-      if (isClosing) return;
-      // Fatal provider errors — never reconnect
-      if (!providerHealth.getInternalState().available || legacySession?.stopReconnect || rtmSession?.stopReconnect) {
-        gracefulClose();
-        return;
-      }
-      if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-        reconnectAttempts++;
-        if (rtmSession) rtmSession.reconnectCount = reconnectAttempts;
-        logger.info('OPENAI_RECONNECT_ATTEMPT', {
-          callSid, attempt: reconnectAttempts, maxRetries: MAX_RECONNECT_ATTEMPTS,
-        });
-        scheduleTimer(connectToOpenAI, 2000 * reconnectAttempts);
-      } else {
-        logger.info('PIPELINE_FAILURE', {
-          callSid,
-          stage: 'openai_connection',
-          reason: 'max_reconnect_exceeded',
-          reconnectAttempt: reconnectAttempts,
-          maxRetries: MAX_RECONNECT_ATTEMPTS,
-          providerError: providerHealth.getInternalState().lastErrorCode,
-        });
-        gracefulClose();
-      }
-    });
-
-    openaiWs.on('error', (err) => {
-      const classification = providerHealth.classifyError(err);
-      logger.error('OPENAI_SOCKET_ERROR', {
-        callSid,
-        stage: 'openai_ws_error',
-        reason: err.message,
-        providerError: classification.code,
-        reconnectAttempt: reconnectAttempts + 1,
-        maxRetries: MAX_RECONNECT_ATTEMPTS,
+      provider.on('callerTranscript', (data) => {
+        logger.info('CALLER_TRANSCRIPTION', { callSid, text: data.text?.substring(0, 60) });
+        pipelineCounters.transcriptionEvents++;
+        addTranscriptEntry(callSid, { role: 'caller', content: data.text });
+        if (legacySession?.metadata?.callLogId) {
+          bufferTranscriptEntry(legacySession.metadata.callLogId, { role: 'caller', content: data.text, timestamp: new Date().toISOString() });
+        }
+        const io = legacySession?.ws?.app?.get('io');
+        if (io) {
+          io.to(`user:${legacySession?.metadata?.userId}`).emit('transcript.final', {
+            callSid, role: 'caller', text: data.text, timestamp: new Date().toISOString(),
+          });
+        }
+        const transcript = legacySession?.transcript || [];
+        if (!transcript.some(t => t.role === 'caller' && t.content === data.text)) {
+          transcript.push({ role: 'caller', content: data.text, timestamp: new Date().toISOString() });
+        }
+        if (legacySession) legacySession.transcript = transcript.slice(-500);
       });
-      if (classification.fatal) {
-        providerHealth.handleFatalError(err, callSid);
-        if (legacySession) legacySession.stopReconnect = true;
-        if (rtmSession) rtmSession.stopReconnect = true;
-        gracefulClose();
-        return;
-      }
-      providerHealth.handleTransientError(err, callSid);
-      if (rtmSession) {
-        rtmSession.lastError = { message: err.message, code: err.code, time: Date.now() };
-      }
-      if (!isClosing && (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS || legacySession?.stopReconnect || rtmSession?.stopReconnect)) {
-        gracefulClose();
-      }
-    });
 
-    openaiWs.on('unexpected-response', (req, res) => {
-      let bodyChunks = [];
-      res.on('data', (chunk) => bodyChunks.push(chunk));
-      res.on('end', () => {
-        const body = Buffer.concat(bodyChunks).toString();
-        logger.error('OPENAI_UNEXPECTED_RESPONSE', {
+      provider.on('assistantTranscript', (data) => {
+        if (data.partial) return;
+        addTranscriptEntry(callSid, { role: 'assistant', content: data.text });
+        if (legacySession?.metadata?.callLogId) {
+          bufferTranscriptEntry(legacySession.metadata.callLogId, { role: 'assistant', content: data.text, timestamp: new Date().toISOString() });
+        }
+        const io = legacySession?.ws?.app?.get('io');
+        if (io) {
+          io.to(`user:${legacySession?.metadata?.userId}`).emit('transcript.final', {
+            callSid, role: 'assistant', text: data.text, timestamp: new Date().toISOString(),
+          });
+        }
+        const transcript = legacySession?.transcript || [];
+        if (!transcript.some(t => t.role === 'assistant' && t.content === data.text)) {
+          transcript.push({ role: 'assistant', content: data.text, timestamp: new Date().toISOString() });
+        }
+        if (legacySession) legacySession.transcript = transcript.slice(-500);
+      });
+
+      provider.on('speechStarted', () => {
+        pipelineCounters.speechEvents++;
+        if (provider) provider.cancelResponse();
+        if (rtmSession && rtmSession.state !== RealtimeSessionManager.STATES.LISTENING) {
+          rtmSession.setState(RealtimeSessionManager.STATES.LISTENING);
+        }
+        const io = legacySession?.ws?.app?.get('io');
+        if (io) {
+          io.to(`user:${legacySession?.metadata?.userId}`).emit('transcript.partial', {
+            callSid, text: '...', isSpeaking: true,
+          });
+        }
+      });
+
+      provider.on('responseStarted', () => {
+        logger.info('AI_RESPONSE_STARTED', { callSid });
+        responseCreatedSeen = true;
+      });
+
+      provider.on('responseCompleted', () => {
+        if (rtmSession) {
+          if (rtmSession.state === RealtimeSessionManager.STATES.RESPONDING ||
+              rtmSession.state === RealtimeSessionManager.STATES.GREETING) {
+            rtmSession.greetingSent = true;
+            rtmSession.setState(RealtimeSessionManager.STATES.LISTENING);
+          }
+        }
+      });
+
+      provider.on('toolCall', async (data) => {
+        const result = await handleToolCall(data.name, data.arguments || {}, data.callId);
+        if (provider) provider.sendToolResult(data.callId, result);
+      });
+
+      provider.on('error', (err) => {
+        logger.error('PROVIDER_ERROR', {
           callSid,
-          statusCode: res.statusCode,
-          statusMessage: res.statusMessage,
-          model: config.realtime.model,
+          provider: err.provider,
+          code: err.code,
+          message: err.message?.substring(0, 200),
         });
+        const fakeErr = { code: err.code, message: err.message };
+        if (err.fatal) {
+          providerHealth.handleFatalError(fakeErr, callSid);
+          if (legacySession) legacySession.stopReconnect = true;
+          if (rtmSession) rtmSession.stopReconnect = true;
+          gracefulClose();
+        } else {
+          providerHealth.handleTransientError(fakeErr, callSid);
+          if (rtmSession) {
+            rtmSession.lastError = { message: err.message, code: err.code, time: Date.now() };
+          }
+        }
+      });
+
+      provider.on('closed', () => {
+        if (legacySession) setOpenaiWs(callSid, null);
+        if (rtmSession) rtmSession.openAiSocket = null;
+
+        if (isClosing) return;
+        if (!providerHealth.getInternalState().available || legacySession?.stopReconnect || rtmSession?.stopReconnect) {
+          gracefulClose();
+          return;
+        }
+        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+          reconnectAttempts++;
+          if (rtmSession) rtmSession.reconnectCount = reconnectAttempts;
+          logger.info('PROVIDER_RECONNECT_ATTEMPT', {
+            callSid, attempt: reconnectAttempts, maxRetries: MAX_RECONNECT_ATTEMPTS, provider: providerName,
+          });
+          scheduleTimer(connectProvider, 2000 * reconnectAttempts);
+        } else {
+          logger.info('PIPELINE_FAILURE', {
+            callSid,
+            stage: 'provider_connection',
+            reason: 'max_reconnect_exceeded',
+            reconnectAttempt: reconnectAttempts,
+            maxRetries: MAX_RECONNECT_ATTEMPTS,
+            providerError: providerHealth.getInternalState().lastErrorCode,
+          });
+          gracefulClose();
+        }
+      });
+
+      provider.connect({
+        callSid,
+        rtmSession,
+        memoryContext,
+        businessToolsEnabled,
+      }).catch(err => {
+        logger.error('REALTIME_CALL_FAILED', { callSid, reason: 'provider_connect_error', error: err.message });
         logger.error('PIPELINE_FAILURE', {
-          callSid,
-          stage: 'openai_connect',
-          reason: 'unexpected_http_response',
-          httpCode: res.statusCode,
-          openaiError: body.substring(0, 200),
-          providerError: `http_${res.statusCode}`,
-          reconnectAttempt: reconnectAttempts + 1,
+          callSid, stage: 'provider_connect', reason: 'construct_failed',
+          providerError: err.message, reconnectAttempt: reconnectAttempts + 1,
         });
-        const errForHealth = { code: `http_${res.statusCode}`, message: body.substring(0, 200) };
-        providerHealth.handleFatalError(errForHealth, callSid);
-        if (legacySession) legacySession.stopReconnect = true;
-        if (rtmSession) rtmSession.stopReconnect = true;
         gracefulClose();
       });
-    });
+    } catch (err) {
+      logger.error('REALTIME_CALL_FAILED', { callSid, reason: 'provider_connect_error', error: err.message });
+      logger.error('PIPELINE_FAILURE', {
+        callSid, stage: 'provider_connect', reason: 'construct_failed',
+        providerError: err.message, reconnectAttempt: reconnectAttempts + 1,
+      });
+      gracefulClose();
+    }
   }
 
   async function gracefulClose() {
@@ -733,17 +673,9 @@ function handleMediaStream(ws, req) {
     isClosing = true;
     if (rtmSession) rtmSession.setState(RealtimeSessionManager.STATES.CLOSING);
     clearTimers();
-    if (sessionCreatedTimer) {
-      clearTimeout(sessionCreatedTimer);
-      sessionCreatedTimer = null;
-    }
     if (greetingTimeoutTimer) {
       clearTimeout(greetingTimeoutTimer);
       greetingTimeoutTimer = null;
-    }
-    if (sessionUpdateTimer) {
-      clearTimeout(sessionUpdateTimer);
-      sessionUpdateTimer = null;
     }
 
     // Discard any buffered early audio
@@ -799,7 +731,7 @@ function handleMediaStream(ws, req) {
     }
 
     try {
-      if (openaiWs && openaiWs.readyState !== WebSocket.CLOSED) openaiWs.close();
+      if (provider) await provider.close('call_ended');
     } catch { }
     if (legacySession) setOpenaiWs(callSid, null);
     if (rtmSession) rtmSession.openAiSocket = null;
@@ -844,15 +776,12 @@ function handleMediaStream(ws, req) {
 
   function endCallGracefully(message) {
     if (isClosing) return;
-    if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) {
+    if (!provider || !provider.isConnected) {
       gracefulClose();
       return;
     }
     try {
-      openaiWs.send(JSON.stringify({
-        type: 'response.create',
-        response: { modalities: ['text', 'audio'], instructions: `Say exactly: "${message}"` },
-      }));
+      provider.sendText(message);
     } catch { }
     scheduleTimer(gracefulClose, 4000);
   }
@@ -991,7 +920,7 @@ function handleMediaStream(ws, req) {
         }, silenceMs);
         timers.push(silenceInterval);
 
-        connectToOpenAI();
+        connectProvider();
         break;
       }
 
@@ -1003,7 +932,7 @@ function handleMediaStream(ws, req) {
           break;
         }
 
-        const validation = validateAudioPayload(payload);
+        const validation = validateTwilioPayload(payload);
         if (!validation.valid) {
           logger.warn('TWILIO_AUDIO_VALIDATION_FAILED', { callSid, reason: validation.reason });
           if (rtmSession) rtmSession.droppedPackets++;
@@ -1022,21 +951,19 @@ function handleMediaStream(ws, req) {
           rtmSession.packetsReceived++;
         }
 
-        const openaiReady = openaiWs?.readyState === WebSocket.OPEN && !providerHealth.isAudioForwardingDisabled();
+        const providerReady = provider && provider.isConnected && !providerHealth.isAudioForwardingDisabled();
 
-        if (openaiReady) {
+        if (providerReady) {
           // If we have buffered early audio, flush it first
           if (earlyAudioQueue.length > 0) {
             for (const frame of earlyAudioQueue) {
-              if (openaiWs?.readyState === WebSocket.OPEN) {
-                openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: frame }));
-              }
+              provider.sendAudio(frame);
             }
             logger.info('EARLY_AUDIO_FLUSHED', { callSid, frames: earlyAudioQueue.length, bytes: earlyAudioBytes });
             earlyAudioQueue.length = 0;
             earlyAudioBytes = 0;
           }
-          openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: payload }));
+          provider.sendAudio(payload);
           if (logger.isLevelEnabled('debug')) {
             logger.info('CALLER_AUDIO_FORWARDED', { callSid, byteLength: validation.byteLength });
           }
@@ -1044,8 +971,8 @@ function handleMediaStream(ws, req) {
             fullDuplexEstablished = true;
             logger.info('FULL_DUPLEX_ESTABLISHED', { callSid });
           }
-        } else if (openaiWs?.readyState === WebSocket.CONNECTING && !providerHealth.isAudioForwardingDisabled()) {
-          // Buffer early audio while OpenAI is connecting
+        } else if (provider && !provider.isConnected && !providerHealth.isAudioForwardingDisabled()) {
+          // Buffer early audio while provider is connecting
           if (earlyAudioQueue.length < MAX_EARLY_AUDIO_FRAMES && earlyAudioBytes < MAX_EARLY_AUDIO_BYTES) {
             earlyAudioQueue.push(payload);
             earlyAudioBytes += validation.byteLength;
@@ -1060,20 +987,19 @@ function handleMediaStream(ws, req) {
             if (rtmSession) rtmSession.droppedPackets++;
           }
         } else {
-          // Provider is unavailable or OpenAI socket not open — throttle drop logging
+          // Provider is unavailable — throttle drop logging
           const now = Date.now();
           droppedFrameCount++;
           if (!firstDropLogged) {
             firstDropLogged = true;
-            const dropReason = providerHealth.isAudioForwardingDisabled() ? 'provider_unavailable' : 'openai_socket_not_open';
+            const dropReason = providerHealth.isAudioForwardingDisabled() ? 'provider_unavailable' : 'provider_not_ready';
             logger.info('CALLER_AUDIO_DROPPED', {
               callSid,
               reason: dropReason,
-              openaiWsReadyState: openaiWs?.readyState,
             });
           } else if (now - lastDropLogTime > 5000) {
             lastDropLogTime = now;
-            const dropReason = providerHealth.isAudioForwardingDisabled() ? 'provider_unavailable' : 'openai_socket_not_open';
+            const dropReason = providerHealth.isAudioForwardingDisabled() ? 'provider_unavailable' : 'provider_not_ready';
             logger.info('CALLER_AUDIO_DROPPED_SUMMARY', {
               callSid,
               reason: dropReason,
@@ -1115,208 +1041,6 @@ function handleMediaStream(ws, req) {
     });
     gracefulClose();
   });
-}
-
-export async function handleOpenAIMessage(msg, rtmSession, legacySession, openaiWs) {
-  if (!rtmSession && !legacySession) return;
-  const { callSid } = rtmSession || legacySession || {};
-  const io = legacySession?.ws?.app?.get('io');
-
-  switch (msg.type) {
-    case 'session.created':
-    case 'session.updated':
-      // handled in connectToOpenAI message handler
-      break;
-
-    case 'input_audio_buffer.speech_started':
-      pipelineCounters.speechEvents++;
-      if (openaiWs?.readyState === WebSocket.OPEN) {
-        try {
-          openaiWs.send(JSON.stringify({ type: 'response.cancel' }));
-        } catch { }
-      }
-      if (rtmSession && rtmSession.state !== RealtimeSessionManager.STATES.LISTENING) {
-        rtmSession.setState(RealtimeSessionManager.STATES.LISTENING);
-      }
-      if (io) {
-        io.to(`user:${legacySession?.metadata?.userId}`).emit('transcript.partial', {
-          callSid, text: '...', isSpeaking: true,
-        });
-      }
-      break;
-
-    case 'conversation.item.created':
-      if (msg.item?.type === 'message' && msg.item?.content) {
-        for (const content of msg.item.content) {
-          if (content.type === 'text') {
-            const role = msg.item.role === 'user' ? 'caller' : 'assistant';
-            addTranscriptEntry(callSid, { role, content: content.text });
-            if (legacySession?.metadata?.callLogId) {
-              bufferTranscriptEntry(legacySession.metadata.callLogId, { role, content: content.text, timestamp: new Date().toISOString() });
-            }
-          } else if (content.type === 'transcript') {
-            const role = msg.item.role === 'user' ? 'caller' : 'assistant';
-            addTranscriptEntry(callSid, { role, content: content.transcript });
-            if (role === 'caller') {
-              logger.info('TRANSCRIPTION_RECEIVED', { callSid, textPreview: content.transcript?.substring(0, 60) });
-              logger.info('CALLER_TRANSCRIPTION', { callSid, text: content.transcript?.substring(0, 60) });
-              pipelineCounters.transcriptionEvents++;
-            }
-            if (io) {
-              io.to(`user:${legacySession?.metadata?.userId}`).emit('transcript.final', {
-                callSid, role, text: content.transcript, timestamp: new Date().toISOString(),
-              });
-            }
-            if (legacySession?.metadata?.callLogId) {
-              bufferTranscriptEntry(legacySession.metadata.callLogId, { role, content: content.transcript, timestamp: new Date().toISOString() });
-            }
-
-            const transcript = legacySession?.transcript || [];
-            if (!transcript.some(t => t.role === role && t.content === content.transcript)) {
-              transcript.push({ role, content: content.transcript, timestamp: new Date().toISOString() });
-            }
-            if (legacySession) legacySession.transcript = transcript.slice(-500);
-          }
-        }
-      }
-
-      if (msg.item?.type === 'function_call' && msg.item?.name) {
-        logger.info('FUNCTION_CALL_RECEIVED', { callSid, name: msg.item.name, callId: msg.item.call_id });
-      }
-      break;
-
-    case 'response.function_call_arguments.done': {
-      const { name, arguments: rawArgs, call_id } = msg;
-      if (!name || !call_id) {
-        logger.warn('FUNCTION_CALL_MISSING_FIELDS', { callSid, name, call_id });
-        break;
-      }
-
-      logger.info('FUNCTION_CALL_ARGUMENTS_DONE', { callSid, name, call_id });
-
-      let args = {};
-      try {
-        args = rawArgs ? JSON.parse(rawArgs) : {};
-      } catch {
-        logger.warn('FUNCTION_CALL_PARSE_ERROR', { callSid, name, rawArgs });
-        args = {};
-      }
-
-      const result = await handleToolCall(name, args, call_id);
-
-      if (openaiWs?.readyState === WebSocket.OPEN) {
-        const functionResponse = {
-          type: 'conversation.item.create',
-          item: {
-            type: 'function_call_output',
-            call_id,
-            output: JSON.stringify(result),
-          },
-        };
-        openaiWs.send(JSON.stringify(functionResponse));
-        logger.info('FUNCTION_CALL_RESPONSE_SENT', { callSid, name, call_id });
-
-        try {
-          openaiWs.send(JSON.stringify({ type: 'response.create' }));
-        } catch { }
-      }
-      break;
-    }
-
-    case 'response.created':
-      logger.info('AI_RESPONSE_STARTED', { callSid });
-      break;
-
-    case 'response.audio_transcript.delta':
-      if (io) {
-        io.to(`user:${legacySession?.metadata?.userId}`).emit('transcript.partial', {
-          callSid, text: msg.delta, isSpeaking: false,
-        });
-      }
-      break;
-
-    case 'response.audio.delta': {
-      // Only accept msg.delta — the officially documented audio delta field
-      const audioDelta = msg.delta;
-      if (!audioDelta || typeof audioDelta !== 'string' || audioDelta.length === 0) {
-        logger.warn('OPENAI_AUDIO_DELTA_REJECTED', { callSid, reason: 'empty_or_nonstring', receivedFields: Object.keys(msg) });
-        if (rtmSession) rtmSession.droppedPackets++;
-        break;
-      }
-
-      const deltaSize = audioDelta.length;
-      logger.info('AI_AUDIO_DELTA', { callSid, deltaSize });
-      const streamSid = rtmSession?.streamSid || legacySession?.streamSid;
-
-      if (!streamSid) {
-        logger.warn('TWILIO_AUDIO_FRAME_DROPPED', { callSid, reason: 'missing_streamSid', deltaSize });
-        if (rtmSession) rtmSession.droppedPackets++;
-        break;
-      }
-
-      if (rtmSession) {
-        if (rtmSession.state === RealtimeSessionManager.STATES.GREETING ||
-            rtmSession.state === RealtimeSessionManager.STATES.LISTENING) {
-          rtmSession.setState(RealtimeSessionManager.STATES.RESPONDING);
-        }
-        rtmSession.audioBytesSent += deltaSize;
-        rtmSession.packetsSent++;
-      }
-
-      const twilioSocket = legacySession?.ws || rtmSession?.twilioSocket;
-      if (twilioSocket && twilioSocket.readyState === WebSocket.OPEN) {
-        // Twilio expects mu-law (g711_ulaw) audio — log format for diagnostics
-        const audioFormat = config.realtime.audioOutputFormat || 'g711_ulaw';
-        if (audioFormat !== 'g711_ulaw') {
-          logger.warn('AUDIO_FORMAT_MISMATCH', { callSid, configuredFormat: audioFormat, expected: 'g711_ulaw', deltaSize });
-        }
-        twilioSocket.send(JSON.stringify({
-          event: 'media',
-          streamSid,
-          media: { payload: audioDelta },
-        }));
-        logger.info('TWILIO_AUDIO_FRAME_SENT', { callSid, deltaSize, format: audioFormat });
-      } else {
-        logger.warn('TWILIO_AUDIO_FRAME_DROPPED', {
-          callSid,
-          reason: 'twilio_socket_not_open',
-          twilioReadyState: twilioSocket?.readyState,
-        });
-        if (rtmSession) rtmSession.droppedPackets++;
-      }
-      break;
-    }
-
-    case 'response.done':
-      if (rtmSession) {
-        if (rtmSession.state === RealtimeSessionManager.STATES.RESPONDING ||
-            rtmSession.state === RealtimeSessionManager.STATES.GREETING) {
-          rtmSession.greetingSent = true;
-          rtmSession.setState(RealtimeSessionManager.STATES.LISTENING);
-        }
-      }
-      break;
-
-    case 'error':
-      logger.error('OPENAI_ERROR_EVENT', {
-        callSid,
-        errorType: msg.error?.type || null,
-        errorCode: msg.error?.code || null,
-        errorMessage: msg.error?.message ? msg.error.message.substring(0, 200) : null,
-      });
-      const classification = providerHealth.classifyError(msg.error);
-      if (classification.fatal) {
-        providerHealth.handleFatalError(msg.error, callSid);
-        if (legacySession) legacySession.stopReconnect = true;
-        if (rtmSession) rtmSession.stopReconnect = true;
-      } else {
-        providerHealth.handleTransientError(msg.error, callSid);
-      }
-      break;
-
-    case 'rate_limits.updated':
-      break;
-  }
 }
 
 function buildMemoryContext(memory) {

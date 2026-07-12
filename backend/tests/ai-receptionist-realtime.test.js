@@ -153,9 +153,10 @@ describe('Twilio media events', () => {
     // Greeting is gated on BOTH session.created AND session.updated
     openai.emit('message', JSON.stringify({ type: 'session.updated' }));
 
-    const greeting = openai.sent.find((m) => m.includes('response.create'));
+    const greeting = openai.sent.find((m) => m.includes('conversation.item.create'));
     expect(greeting).toBeDefined();
     expect(greeting).toContain('FleetNimble AI Receptionist');
+    expect(openai.sent.find((m) => m.includes('response.create'))).toBeDefined();
     expect(getSession('CA123')).toBeDefined();
   });
 

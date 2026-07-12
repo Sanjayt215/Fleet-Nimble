@@ -1,6 +1,14 @@
 import { config } from '../config/index.js';
 
 const OPENAI_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
+const GEMINI_VOICE_MAP = {
+  alloy: 'Puck',
+  echo: 'Charon',
+  fable: 'Kore',
+  onyx: 'Fenrir',
+  nova: 'Aoede',
+  shimmer: 'Puck',
+};
 
 export const AI_RECEPTIONIST_GREETING =
   "Hello. Thank you for calling FleetNimble. I'm the FleetNimble AI Receptionist. How may I help you today?";
@@ -10,6 +18,13 @@ export function mapToOpenAIVoice(voiceId) {
     return voiceId.toLowerCase();
   }
   return config.openai.voice || 'alloy';
+}
+
+export function mapToProviderVoice(provider, voiceId) {
+  if (provider === 'gemini') {
+    return GEMINI_VOICE_MAP[voiceId?.toLowerCase()] || voiceId || 'Puck';
+  }
+  return mapToOpenAIVoice(voiceId);
 }
 
 export function buildSystemPrompt(config, memoryContext = '') {

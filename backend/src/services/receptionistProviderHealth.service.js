@@ -86,7 +86,7 @@ export function handleFatalError(err, callSid) {
   state.lastErrorAt = Date.now();
   state.audioForwardingDisabled = true;
 
-  logger.error('OPENAI_FATAL_ERROR', {
+  logger.error('PROVIDER_FATAL_ERROR', {
     code: classification.code,
     retryable: classification.retryable,
     callSid,
@@ -98,7 +98,7 @@ export function handleTransientError(err, callSid) {
   state.lastErrorCode = classification.code;
   state.lastErrorAt = Date.now();
 
-  logger.warn('OPENAI_TRANSIENT_ERROR', {
+  logger.warn('PROVIDER_TRANSIENT_ERROR', {
     code: classification.code,
     retryable: classification.retryable,
     callSid,
