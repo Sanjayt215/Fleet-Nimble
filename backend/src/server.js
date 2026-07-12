@@ -60,6 +60,8 @@ server.on('upgrade', (request, socket, head) => {
       logger.info('TWILIO_WS_UPGRADE_ACCEPTED', { pathname });
       wss.emit('connection', ws, request);
     });
+  } else {
+    // Socket.IO handles its own upgrade path — do not intercept
   }
 });
 
@@ -122,7 +124,7 @@ server.listen(config.port, host, async () => {
     maxCallSeconds: config.realtime.maxCallSeconds,
     silenceTimeoutSeconds: config.realtime.silenceTimeoutSeconds,
     openaiApiKeyPresent: Boolean(config.openai.apiKey),
-    openaiApiKeyPrefix: config.openai.apiKey ? config.openai.apiKey.substring(0, 8) + '...' : 'NONE',
+    openaiApiKeyConfigured: Boolean(config.openai.apiKey),
     aiReceptionistEnabled: config.aiReceptionist.enabled,
     voiceAgentMode: config.aiReceptionist.voiceAgentMode,
     sessionManagerVersion: '2.0',

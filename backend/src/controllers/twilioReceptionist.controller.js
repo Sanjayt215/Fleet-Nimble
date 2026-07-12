@@ -20,11 +20,19 @@ import { config } from '../config/index.js';
 
 export async function handleIncomingCall(req, res) {
   try {
+    logger.info('VOICE_WEBHOOK_RECEIVED', {
+      method: req.method,
+      originalUrl: req.originalUrl,
+      contentType: req.headers['content-type'],
+    });
+
     const valid = twilioWebhook.validateTwilioRequest(req);
     if (!valid) {
       logger.warn('TWILIO_INVALID_SIGNATURE', { path: req.originalUrl });
       return res.status(403).type('text/xml').send(twilioWebhook.buildFallbackTwiML());
     }
+
+    logger.info('VOICE_WEBHOOK_SIGNATURE_ACCEPTED', {});
 
     if (!config.aiReceptionist.enabled) {
       return res.type('text/xml').send(twilioWebhook.buildUnavailableTwiML());
@@ -32,26 +40,23 @@ export async function handleIncomingCall(req, res) {
 
     const { CallSid, From, To, AccountSid, AccountType } = req.body || {};
 
-    logger.info('DIAG_VOICE_WEBHOOK_RECEIVED', {
-      CallSid,
-      fromTail: From ? From.slice(-4) : 'unknown',
-      toTail: To ? To.slice(-4) : 'unknown',
+    const fromMasked = From ? From.slice(-4) : 'unknown';
+    const toMasked = To ? To.slice(-4) : 'unknown';
+
+    logger.info('CALL_SID_CAPTURED', {
+      callSid: CallSid,
+      fromTail: fromMasked,
+      toTail: toMasked,
       accountType: AccountType || 'unknown',
       isTrial: !From || From.startsWith('client:'),
     });
 
-    const realtimeReady = config.realtime.configured && config.realtime.mediaStreamEnabled;
+    if (!CallSid) {
+      logger.error('CALL_SID_MISSING', {});
+      return res.status(400).type('text/xml').send(twilioWebhook.buildFallbackTwiML());
+    }
 
-    logger.info('DIAG_REALTIME_READINESS', {
-      CallSid,
-      realtimeConfigured: config.realtime.configured,
-      mediaStreamEnabled: config.realtime.mediaStreamEnabled,
-      model: config.realtime.model || '(not set)',
-      apiKeyPresent: Boolean(config.openai.apiKey),
-      aiReceptionistEnabled: config.aiReceptionist.enabled,
-      realtimeReady,
-      action: realtimeReady ? 'BUILD_MEDIA_STREAM_TWIML' : 'FALLBACK_TO_GREETING',
-    });
+    const realtimeReady = config.realtime.configured && config.realtime.mediaStreamEnabled;
 
     if (!realtimeReady) {
       logger.warn('REALTIME_NOT_READY_FALLBACK_TO_GREETING', { CallSid });
@@ -64,14 +69,13 @@ export async function handleIncomingCall(req, res) {
       AccountSid,
     });
 
-    logger.info('DIAG_TWIML_SENT', {
+    logger.info('PRE_STREAM_GREETING_INCLUDED', {
       CallSid,
-      type: 'MEDIA_STREAM_TWIML',
-      containsStream: twiml.includes('<Stream'),
+      hasSay: twiml.includes('<Say'),
+      hasStream: twiml.includes('<Stream'),
     });
 
     res.type('text/xml').send(twiml);
-    logger.info('TWILIO_INCOMING_CALL', { CallSid, From, To });
   } catch (err) {
     logger.error('TWILIO_INCOMING_CALL_ERROR', { error: err.message });
     res.type('text/xml').send(twilioWebhook.buildFallbackTwiML());
@@ -95,27 +99,25 @@ export async function handleStreamStatus(req, res) {
     }
 
     const { StreamSid, CallSid, StreamEvent, StreamError } = req.body || {};
-    const safeEvent = StreamEvent || 'unknown';
-    const safeError = StreamError || null;
 
-    logger.info('STREAM_STATUS_CALLBACK_RECEIVED', {
-      streamEvent: safeEvent,
-      streamError: safeError,
+    logger.info('TWILIO_STREAM_STATUS_RECEIVED', {
+      streamEvent: StreamEvent || 'unknown',
+      streamError: StreamError || null,
       callSidMasked: CallSid ? CallSid.slice(-4) : 'unknown',
       streamSidMasked: StreamSid ? StreamSid.slice(-4) : 'unknown',
     });
 
-    if (safeError) {
-      logger.warn('STREAM_STATUS_ERROR', {
-        streamEvent: safeEvent,
-        streamError: safeError,
+    if (StreamError) {
+      logger.warn('TWILIO_STREAM_ERROR', {
+        streamEvent: StreamEvent || 'unknown',
+        streamError: StreamError,
         callSidMasked: CallSid ? CallSid.slice(-4) : 'unknown',
       });
     }
 
     res.status(204).send('');
   } catch (err) {
-    logger.error('STREAM_STATUS_ERROR', { error: err.message });
+    logger.error('TWILIO_STREAM_STATUS_HANDLER_ERROR', { error: err.message });
     res.status(204).send('');
   }
 }
@@ -125,7 +127,8 @@ export async function handlePostStreamFallback(req, res) {
     const { CallSid } = req.body || {};
 
     logger.info('POST_STREAM_FALLBACK_EXECUTED', {
-      callSidMasked: CallSid ? CallSid.slice(-4) : 'unknown',
+      callSid: CallSid ? CallSid.slice(-4) : 'unknown',
+      stage: 'post_stream_redirect',
     });
 
     const twiml = twilioWebhook.buildPostStreamFallbackTwiML(CallSid);

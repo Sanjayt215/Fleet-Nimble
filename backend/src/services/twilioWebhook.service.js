@@ -79,10 +79,17 @@ export function buildPostStreamUrl(baseUrl = config.publicUrl) {
 
 export function buildIncomingTwiML(callSid, from, to, cfg = {}) {
   const twiml = new VoiceResponse();
-  const streamUrl = buildMediaStreamUrl(cfg.publicUrl || config.publicUrl);
+  const publicUrl = cfg.publicUrl || config.publicUrl;
+  const streamUrl = buildMediaStreamUrl(publicUrl);
   const wsHost = new URL(streamUrl).host;
   const wsPath = new URL(streamUrl).pathname;
-  const statusCallbackUrl = buildStreamStatusUrl(cfg.publicUrl || config.publicUrl);
+  const statusCallbackUrl = buildStreamStatusUrl(publicUrl);
+
+  // PRE-STREAM GREETING — caller always hears this before media stream connects
+  twiml.say(
+    { voice: 'alice', language: 'en-US' },
+    'Hello. You have reached the FleetNimble AI Receptionist. Please wait while I connect your call.'
+  );
 
   const connect = twiml.connect();
   const stream = connect.stream({
@@ -95,12 +102,13 @@ export function buildIncomingTwiML(callSid, from, to, cfg = {}) {
   if (from) stream.parameter({ name: 'from', value: from });
   if (to) stream.parameter({ name: 'to', value: to });
 
-  const postStreamUrl = buildPostStreamUrl(cfg.publicUrl || config.publicUrl);
+  const postStreamUrl = buildPostStreamUrl(publicUrl);
   twiml.redirect({ method: 'POST' }, postStreamUrl);
 
-  logger.info('TWIML_MEDIA_STREAM_GENERATED', {
+  logger.info('STREAMING_TWIML_RETURNED', {
     wsHost,
     wsPath,
+    hasPreStreamSay: true,
     hasConnect: true,
     hasStream: true,
     hasTrackAttribute: false,
@@ -115,11 +123,11 @@ export function buildPostStreamFallbackTwiML(callSid) {
   const twiml = new VoiceResponse();
   twiml.say(
     { voice: 'alice', language: 'en-US' },
-    'Hello. Thank you for calling FleetNimble. Our AI voice service is temporarily unavailable. A member of the FleetNimble team can assist you shortly. Please try again later.'
+    'The FleetNimble AI voice service is temporarily unavailable. Please try again shortly or contact our team for assistance.'
   );
   twiml.hangup();
   const twimlStr = twiml.toString();
-  logger.info('POST_STREAM_FALLBACK_TWIML', { callSid });
+  logger.info('POST_STREAM_FALLBACK_TWIML', { callSid, twimlLength: twimlStr.length });
   return twimlStr;
 }
 
