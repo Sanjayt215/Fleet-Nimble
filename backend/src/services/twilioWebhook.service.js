@@ -123,7 +123,7 @@ export function buildPostStreamFallbackTwiML(callSid) {
   const twiml = new VoiceResponse();
   twiml.say(
     { voice: 'alice', language: 'en-US' },
-    'The FleetNimble AI voice service is temporarily unavailable. Please try again shortly or contact our team for assistance.'
+    'The FleetNimble AI service is temporarily unavailable. Please try again shortly or leave your contact details with our support team.'
   );
   twiml.hangup();
   const twimlStr = twiml.toString();

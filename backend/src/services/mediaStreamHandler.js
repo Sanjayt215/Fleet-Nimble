@@ -87,6 +87,10 @@ function handleMediaStream(ws, req) {
   let lastDropLogTime = 0;
   let droppedFrameCount = 0;
   let firstDropLogged = false;
+  const earlyAudioQueue = [];
+  let earlyAudioBytes = 0;
+  const MAX_EARLY_AUDIO_BYTES = 64000;
+  const MAX_EARLY_AUDIO_FRAMES = 100;
   const timers = [];
 
   let callRecordId = null;
@@ -679,6 +683,13 @@ function handleMediaStream(ws, req) {
       sessionUpdateTimer = null;
     }
 
+    // Discard any buffered early audio
+    if (earlyAudioQueue.length > 0) {
+      logger.info('EARLY_AUDIO_DISCARDED', { callSid, frames: earlyAudioQueue.length, bytes: earlyAudioBytes });
+      earlyAudioQueue.length = 0;
+      earlyAudioBytes = 0;
+    }
+
     const greetingNotDelivered = !greetingSent || (rtmSession && !rtmSession.greetingAudioReceived && greetingSent);
 
     if (greetingNotDelivered && callSid) {
@@ -923,7 +934,20 @@ function handleMediaStream(ws, req) {
           rtmSession.packetsReceived++;
         }
 
-        if (openaiWs?.readyState === WebSocket.OPEN && !providerHealth.isAudioForwardingDisabled()) {
+        const openaiReady = openaiWs?.readyState === WebSocket.OPEN && !providerHealth.isAudioForwardingDisabled();
+
+        if (openaiReady) {
+          // If we have buffered early audio, flush it first
+          if (earlyAudioQueue.length > 0) {
+            for (const frame of earlyAudioQueue) {
+              if (openaiWs?.readyState === WebSocket.OPEN) {
+                openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: frame }));
+              }
+            }
+            logger.info('EARLY_AUDIO_FLUSHED', { callSid, frames: earlyAudioQueue.length, bytes: earlyAudioBytes });
+            earlyAudioQueue.length = 0;
+            earlyAudioBytes = 0;
+          }
           openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: payload }));
           if (logger.isLevelEnabled('debug')) {
             logger.info('CALLER_AUDIO_FORWARDED', { callSid, byteLength: validation.byteLength });
@@ -932,21 +956,39 @@ function handleMediaStream(ws, req) {
             fullDuplexEstablished = true;
             logger.info('FULL_DUPLEX_ESTABLISHED', { callSid });
           }
+        } else if (openaiWs?.readyState === WebSocket.CONNECTING && !providerHealth.isAudioForwardingDisabled()) {
+          // Buffer early audio while OpenAI is connecting
+          if (earlyAudioQueue.length < MAX_EARLY_AUDIO_FRAMES && earlyAudioBytes < MAX_EARLY_AUDIO_BYTES) {
+            earlyAudioQueue.push(payload);
+            earlyAudioBytes += validation.byteLength;
+            if (earlyAudioQueue.length === 1) {
+              logger.info('EARLY_AUDIO_BUFFERING_STARTED', { callSid });
+            }
+          } else {
+            if (earlyAudioQueue.length === MAX_EARLY_AUDIO_FRAMES || earlyAudioBytes >= MAX_EARLY_AUDIO_BYTES) {
+              logger.info('EARLY_AUDIO_BUFFER_FULL', { callSid, frames: earlyAudioQueue.length, bytes: earlyAudioBytes });
+            }
+            droppedFrameCount++;
+            if (rtmSession) rtmSession.droppedPackets++;
+          }
         } else {
+          // Provider is unavailable or OpenAI socket not open — throttle drop logging
           const now = Date.now();
           droppedFrameCount++;
           if (!firstDropLogged) {
             firstDropLogged = true;
+            const dropReason = providerHealth.isAudioForwardingDisabled() ? 'provider_unavailable' : 'openai_socket_not_open';
             logger.info('CALLER_AUDIO_DROPPED', {
               callSid,
-              reason: providerHealth.isAudioForwardingDisabled() ? 'provider_unavailable' : 'openai_socket_not_open',
+              reason: dropReason,
               openaiWsReadyState: openaiWs?.readyState,
             });
           } else if (now - lastDropLogTime > 5000) {
             lastDropLogTime = now;
+            const dropReason = providerHealth.isAudioForwardingDisabled() ? 'provider_unavailable' : 'openai_socket_not_open';
             logger.info('CALLER_AUDIO_DROPPED_SUMMARY', {
               callSid,
-              reason: providerHealth.isAudioForwardingDisabled() ? 'provider_unavailable' : 'openai_socket_not_open',
+              reason: dropReason,
               totalDrops: droppedFrameCount,
               intervalMs: 5000,
             });

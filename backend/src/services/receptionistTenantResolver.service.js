@@ -3,6 +3,8 @@ import logger from '../utils/logger.js';
 import { config } from '../config/index.js';
 
 let resolvedOwner = null;
+let lastValidationTime = 0;
+const VALIDATION_CACHE_MS = 300000;
 
 export function getResolvedOwner() {
   return resolvedOwner;
@@ -16,45 +18,43 @@ export async function resolveTenant(input) {
     hasTwilioAccountSid: Boolean(twilioAccountSid),
   });
 
-  // 1. Try to look up AI Receptionist config by called Twilio number
   let userId = null;
   let companyId = null;
   let organizationId = null;
   let source = null;
 
-  try {
-    if (calledNumber) {
-      const config = await prisma.aiReceptionistConfig.findFirst({
+  // 1. Try to look up by called Twilio number (multi-tenant)
+  if (calledNumber) {
+    try {
+      const configByPhone = await prisma.aiReceptionistConfig.findFirst({
         where: { twilioPhoneNumber: calledNumber },
         select: { userId: true, companyId: true },
       });
-      if (config) {
-        userId = config.userId;
-        companyId = config.companyId;
+      if (configByPhone) {
+        userId = configByPhone.userId;
+        companyId = configByPhone.companyId || null;
         source = 'twilio_number';
       }
+    } catch (err) {
+      logger.warn('TENANT_LOOKUP_BY_NUMBER_FAILED', { error: err.message });
     }
-  } catch (err) {
-    logger.warn('TENANT_LOOKUP_BY_NUMBER_FAILED', { error: err.message });
   }
 
   // 2. Fall back to environment default for single-tenant
   if (!userId) {
-    const defaultUserId = process.env.AI_RECEPTIONIST_DEFAULT_USER_ID;
+    const defaultUserId = config.aiReceptionist.defaultUserId || process.env.AI_RECEPTIONIST_DEFAULT_USER_ID;
+    const defaultCompanyId = config.aiReceptionist.defaultCompanyId || process.env.AI_RECEPTIONIST_DEFAULT_COMPANY_ID;
+
     if (defaultUserId) {
       userId = defaultUserId;
       source = 'env_default';
     }
-  }
 
-  if (!companyId) {
-    const defaultCompanyId = process.env.AI_RECEPTIONIST_DEFAULT_COMPANY_ID;
-    if (defaultCompanyId) {
+    if (!companyId && defaultCompanyId) {
       companyId = defaultCompanyId;
     }
   }
 
-  // 3. Validate that the resolved userId exists in the database
   let userIdValid = false;
   if (userId) {
     try {
@@ -66,8 +66,8 @@ export async function resolveTenant(input) {
         userIdValid = true;
       } else {
         logger.warn('TENANT_RESOLVED_USER_INACTIVE', {
-          userIdMasked: userId.slice(-4),
           exists: Boolean(user),
+          userMasked: userId.slice(-4),
         });
       }
     } catch (err) {
@@ -83,6 +83,8 @@ export async function resolveTenant(input) {
     userIdValid,
   };
 
+  lastValidationTime = Date.now();
+
   logger.info('TENANT_RESOLUTION_COMPLETE', {
     resolved: Boolean(resolvedOwner.userId),
     source: resolvedOwner.source,
@@ -96,6 +98,49 @@ export function isPersistenceAvailable() {
   return Boolean(resolvedOwner?.userId && resolvedOwner?.userIdValid);
 }
 
+export async function validateOwnerAtStartup() {
+  const defaultUserId = config.aiReceptionist.defaultUserId || process.env.AI_RECEPTIONIST_DEFAULT_USER_ID;
+  if (!defaultUserId) {
+    logger.warn('RECEPTIONIST_OWNER_NOT_CONFIGURED', { reason: 'AI_RECEPTIONIST_DEFAULT_USER_ID not set' });
+    return { valid: false, reason: 'not_configured' };
+  }
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: defaultUserId },
+      select: { id: true, active: true, name: true, email: true },
+    });
+
+    if (!user) {
+      logger.error('RECEPTIONIST_OWNER_INVALID', { reason: 'user_not_found' });
+      return { valid: false, reason: 'user_not_found' };
+    }
+
+    if (user.active === false) {
+      logger.error('RECEPTIONIST_OWNER_INVALID', { reason: 'user_inactive' });
+      return { valid: false, reason: 'user_inactive' };
+    }
+
+    resolvedOwner = {
+      userId: user.id,
+      companyId: config.aiReceptionist.defaultCompanyId || null,
+      organizationId: null,
+      source: 'startup_validation',
+      userIdValid: true,
+    };
+
+    logger.info('OWNER_VALIDATED', {
+      source: 'startup_validation',
+    });
+
+    return { valid: true, user: { id: user.id, name: user.name } };
+  } catch (err) {
+    logger.error('RECEPTIONIST_OWNER_VALIDATION_FAILED', { error: err.message });
+    return { valid: false, reason: err.message };
+  }
+}
+
 export function clearCache() {
   resolvedOwner = null;
+  lastValidationTime = 0;
 }

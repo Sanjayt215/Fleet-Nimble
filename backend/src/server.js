@@ -11,6 +11,7 @@ import { startMqttConsumer, stopMqttConsumer } from './mqtt/consumer.js';
 import { verifyAIServiceStartup } from './services/aiService.js';
 import { handleMediaStream } from './services/mediaStreamHandler.js';
 import * as providerHealth from './services/receptionistProviderHealth.service.js';
+import { validateOwnerAtStartup } from './services/receptionistTenantResolver.service.js';
 
 logger.info('BOOT_START');
 
@@ -133,6 +134,10 @@ server.listen(config.port, host, async () => {
     aiReceptionistEnabled: config.aiReceptionist.enabled,
     voiceAgentMode: config.aiReceptionist.voiceAgentMode,
     sessionManagerVersion: '2.0',
+  });
+
+  validateOwnerAtStartup().then(result => {
+    logger.info('OWNER_VALIDATION_RESULT', { valid: result.valid, reason: result.valid ? null : result.reason });
   });
 
   logger.info('BOOT_COMPLETE');

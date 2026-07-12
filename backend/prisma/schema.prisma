@@ -876,6 +876,7 @@ model AiReceptionistConfig {
   id                     String   @id @default(uuid())
   userId                 String   @unique @map("user_id")
   companyId              String?  @map("company_id")
+  twilioPhoneNumber      String?  @unique @map("twilio_phone_number")
   businessName           String   @default("My Business") @map("business_name")
   greetingMessage        String   @default("Hello! Thank you for calling FleetNimble. How can I assist you today?") @map("greeting_message")
   workingHours           Json     @default("{\"monday\":{\"start\":\"09:00\",\"end\":\"17:00\"},\"tuesday\":{\"start\":\"09:00\",\"end\":\"17:00\"},\"wednesday\":{\"start\":\"09:00\",\"end\":\"17:00\"},\"thursday\":{\"start\":\"09:00\",\"end\":\"17:00\"},\"friday\":{\"start\":\"09:00\",\"end\":\"17:00\"},\"saturday\":{\"start\":null,\"end\":null},\"sunday\":{\"start\":null,\"end\":null}}") @map("working_hours")

@@ -5,7 +5,11 @@ import { RealtimeSessionManager } from './realtimeSessionManager.js';
 const ACTIVE_SESSIONS = new Map();
 
 export function registerSession(callSid, ws, metadata = {}) {
-  const mgr = RealtimeSessionManager.create(callSid, ws, metadata);
+  // Use existing session if already created (prevents SESSION_ALREADY_EXISTS)
+  let mgr = RealtimeSessionManager.get(callSid);
+  if (!mgr) {
+    mgr = RealtimeSessionManager.create(callSid, ws, metadata);
+  }
   const legacy = {
     callSid,
     ws,

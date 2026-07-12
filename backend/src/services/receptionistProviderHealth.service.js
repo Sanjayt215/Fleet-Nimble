@@ -15,6 +15,7 @@ const TRANSIENT_RETRYABLE_CODES = new Set([
   'server_error',
   'service_unavailable',
   'timeout',
+  'connection_reset',
 ]);
 
 const state = {
