@@ -1,16 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import api from '../services/api';
-
-function normalizeText(value) {
-  if (value == null) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  if (Array.isArray(value)) return value.map(normalizeText).join("\n");
-  if (typeof value === "object") {
-    return value.text || value.message || value.reply || value.content || JSON.stringify(value, null, 2);
-  }
-  return String(value);
-}
+import { normalizeDisplayText } from '../utils/normalizeDisplayText';
 
 export default function VoiceReceptionistAgent({ showToast }) {
   const [sessionId, setSessionId] = useState(null);
@@ -91,7 +81,7 @@ export default function VoiceReceptionistAgent({ showToast }) {
 
       setSessionId(data.sessionId);
       setStage(data.conversationStage || 'greeting');
-      const greeting = normalizeText(data.reply || data.greeting || '');
+      const greeting = normalizeDisplayText(data.reply || data.greeting || '');
       setReply(greeting);
       setSuggestedReplies(data.suggestedReplies || []);
       setIsThinking(false);
@@ -154,7 +144,7 @@ export default function VoiceReceptionistAgent({ showToast }) {
       console.log('VOICE_AGENT_RESPONSE', data);
 
       setStage(data.conversationStage || '');
-      const replyText = normalizeText(data.reply || '');
+      const replyText = normalizeDisplayText(data.reply || '');
       setReply(replyText);
       setExtractedData(data.extractedData || {});
       setSuggestedReplies(data.suggestedReplies || []);
@@ -206,7 +196,7 @@ export default function VoiceReceptionistAgent({ showToast }) {
       console.log('Agent confirm response:', data);
 
       setStage(data.conversationStage || '');
-      const replyText = normalizeText(data.reply || '');
+      const replyText = normalizeDisplayText(data.reply || '');
       setReply(replyText);
       setExtractedData(data.extractedData || {});
       setSuggestedReplies(data.suggestedReplies || []);
@@ -400,7 +390,7 @@ export default function VoiceReceptionistAgent({ showToast }) {
               <div className={`max-w-[85%] rounded-xl px-3 py-2 text-xs ${
                 msg.role === 'user' ? 'bg-cyan-600/30 text-cyan-200' : 'bg-slate-700/50 text-slate-300'
               }`}>
-                {normalizeText(msg.content).substring(0, 200)}
+                {normalizeDisplayText(msg.content).substring(0, 200)}
               </div>
             </div>
           ))}

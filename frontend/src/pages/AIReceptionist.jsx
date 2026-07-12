@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import AIPhoneConsole from './AIPhoneConsole';
 import AppointmentModal from './AppointmentModal';
 import SupportTicketModal from './SupportTicketModal';
@@ -7,9 +8,10 @@ import ReceptionistSettingsModal from './ReceptionistSettingsModal';
 import AnalyticsCards from './AnalyticsCards';
 import LiveCallsPanel from './LiveCallsPanel';
 import CallDetailModal from './CallDetailModal';
+import { normalizeDisplayText } from '../utils/normalizeDisplayText';
 
 const TABS = [
-  { id: 'voice', label: 'Voice Agent' },
+  { id: 'customer', label: 'AI Receptionist' },
   { id: 'admin-tools', label: 'Admin Tools' },
 ];
 
@@ -23,7 +25,8 @@ const ADMIN_SUBTABS = [
 ];
 
 export default function AIReceptionist() {
-  const [activeTab, setActiveTab] = useState('voice');
+  const { isAuthLoading, isAuthenticated } = useAuth();
+  const [activeTab, setActiveTab] = useState('customer');
   const [activeAdminTab, setActiveAdminTab] = useState('calls');
   const [summary, setSummary] = useState(null);
   const [calls, setCalls] = useState([]);
@@ -31,6 +34,8 @@ export default function AIReceptionist() {
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [twilioPhone, setTwilioPhone] = useState(null);
+  const [channelStatus, setChannelStatus] = useState(null);
 
   const [callPage, setCallPage] = useState(1);
   const [callTotalPages, setCallTotalPages] = useState(1);
@@ -53,37 +58,60 @@ export default function AIReceptionist() {
   }, []);
 
   const fetchData = useCallback(async () => {
+    if (isAuthLoading) return;
     try {
       setLoading(true);
       setError(null);
-      const [summaryRes, callsRes, apptsRes, ticketsRes] = await Promise.allSettled([
+      const [statusRes, summaryRes, callsRes, apptsRes, ticketsRes] = await Promise.allSettled([
+        api.get('/ai-receptionist/health'),
         api.get('/ai-receptionist/summary'),
         api.get('/ai-receptionist/calls?page=1&limit=10'),
         api.get('/ai-receptionist/appointments?limit=5'),
         api.get('/ai-receptionist/support-tickets?limit=5'),
       ]);
-      if (summaryRes.status === 'fulfilled') setSummary(summaryRes.value.data.data);
-      if (callsRes.status === 'fulfilled') {
-        setCalls(callsRes.value.data.data.calls || []);
-        setCallTotalPages(callsRes.value.data.data.totalPages || 1);
+      if (statusRes.status === 'fulfilled') {
+        const d = statusRes.value.data;
+        setTwilioPhone(d.phoneNumber || d.twilioPhone || null);
+        setChannelStatus({
+          phoneConfigured: d.phoneConfigured,
+          mediaStreamEnabled: d.mediaStreamEnabled,
+          businessToolsEnabled: d.businessToolsEnabled,
+          realtimeConfigured: d.realtimeConfigured,
+          voiceAgentMode: d.voiceAgentMode,
+        });
       }
-      if (apptsRes.status === 'fulfilled') setAppointments(apptsRes.value.data.data.appointments || []);
-      if (ticketsRes.status === 'fulfilled') setTickets(ticketsRes.value.data.data.tickets || []);
+      if (summaryRes.status === 'fulfilled') {
+        setSummary(summaryRes.value.data.data || null);
+      }
+      if (callsRes.status === 'fulfilled') {
+        const cd = callsRes.value.data.data || {};
+        setCalls(cd.calls || []);
+        setCallTotalPages(cd.totalPages || 1);
+      }
+      if (apptsRes.status === 'fulfilled') {
+        const ad = apptsRes.value.data.data || {};
+        setAppointments(ad.appointments || []);
+      }
+      if (ticketsRes.status === 'fulfilled') {
+        const td = ticketsRes.value.data.data || {};
+        setTickets(td.tickets || []);
+      }
     } catch (err) {
       console.error('Error fetching receptionist data:', err);
       setError('Failed to load data.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isAuthLoading]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => { if (!isAuthLoading && isAuthenticated) fetchData(); }, [fetchData, isAuthLoading, isAuthenticated]);
 
   const loadCalls = useCallback(async (page) => {
     try {
       const res = await api.get(`/ai-receptionist/calls?page=${page}&limit=10`);
-      setCalls(res.data.data.calls || []);
-      setCallTotalPages(res.data.data.totalPages || 1);
+      const d = res.data.data || {};
+      setCalls(d.calls || []);
+      setCallTotalPages(d.totalPages || 1);
       setCallPage(page);
     } catch (err) {
       console.error('Error loading calls:', err);
@@ -93,8 +121,9 @@ export default function AIReceptionist() {
   const loadAppointments = useCallback(async (page) => {
     try {
       const res = await api.get(`/ai-receptionist/appointments?page=${page}&limit=10`);
-      setAppointments(res.data.data.appointments || []);
-      setApptTotalPages(res.data.data.totalPages || 1);
+      const d = res.data.data || {};
+      setAppointments(d.appointments || []);
+      setApptTotalPages(d.totalPages || 1);
       setApptPage(page);
     } catch (err) {
       console.error('Error loading appointments:', err);
@@ -104,8 +133,9 @@ export default function AIReceptionist() {
   const loadTickets = useCallback(async (page) => {
     try {
       const res = await api.get(`/ai-receptionist/support-tickets?page=${page}&limit=10`);
-      setTickets(res.data.data.tickets || []);
-      setTicketTotalPages(res.data.data.totalPages || 1);
+      const d = res.data.data || {};
+      setTickets(d.tickets || []);
+      setTicketTotalPages(d.totalPages || 1);
       setTicketPage(page);
     } catch (err) {
       console.error('Error loading tickets:', err);
@@ -156,47 +186,107 @@ export default function AIReceptionist() {
     );
   };
 
+  const copyNumber = () => {
+    if (twilioPhone) {
+      navigator.clipboard.writeText(twilioPhone);
+      showToast('Phone number copied!');
+    }
+  };
+
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-white">AI Receptionist</h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Voice-first receptionist that speaks with customers, answers FleetNimble questions, collects details, and schedules appointments automatically.
-        </p>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex border-b border-slate-700">
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`px-4 py-2.5 text-sm font-medium transition-colors ${
-              activeTab === tab.id
-                ? 'border-b-2 border-cyan-500 text-cyan-400'
-                : 'text-slate-400 hover:text-slate-300'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {error && (
-        <div className="rounded-lg border border-red-700 bg-red-900/30 p-4 text-sm text-red-300">
-          {error}
-          <button onClick={fetchData} className="ml-3 underline hover:text-red-200">Retry</button>
+      {/* Toast */}
+      {toast && (
+        <div className={`fixed bottom-6 right-6 z-50 rounded-lg px-4 py-3 text-sm shadow-lg ${
+          toast.type === 'error' ? 'bg-red-700 text-white' : 'bg-green-700 text-white'
+        }`}>
+          {normalizeDisplayText(toast.message)}
         </div>
       )}
 
-      {/* Voice Agent Tab - Phone Console */}
-      {activeTab === 'voice' && (
-        <AIPhoneConsole showToast={showToast} />
+      {/* Tabs */}
+      {isAuthenticated && (
+        <div className="flex border-b border-slate-700">
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-4 py-2.5 text-sm font-medium transition-colors ${
+                activeTab === tab.id
+                  ? 'border-b-2 border-cyan-500 text-cyan-400'
+                  : 'text-slate-400 hover:text-slate-300'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
       )}
 
-      {/* Admin Tools Tab */}
-      {activeTab === 'admin-tools' && (
+      {/* ─── CUSTOMER TAB: Phone-First Experience ─── */}
+      {activeTab === 'customer' && (
+        <div className="space-y-8">
+          {/* Hero Section */}
+          <div className="text-center py-8">
+            <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-green-500/20 to-emerald-600/20">
+              <svg className="h-10 w-10 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 4.5v2.25z" />
+              </svg>
+            </div>
+            <h1 className="text-3xl font-bold text-white mb-3">FleetNimble AI Receptionist</h1>
+            <p className="text-lg text-slate-400 max-w-xl mx-auto mb-8">
+              Speak directly with our AI customer-service agent. Call our dedicated phone number to book demos, get support, or ask questions about FleetNimble.
+            </p>
+
+            {/* Twilio Phone Number Display */}
+            {twilioPhone ? (
+              <div className="inline-flex flex-col items-center gap-4">
+                <a
+                  href={`tel:${twilioPhone}`}
+                  className="inline-flex items-center gap-3 rounded-2xl bg-gradient-to-r from-green-600 to-emerald-600 px-8 py-4 text-xl font-bold text-white shadow-xl shadow-green-500/30 hover:from-green-500 hover:to-emerald-500 transition-all hover:scale-105"
+                >
+                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 4.5v2.25z" />
+                  </svg>
+                  {twilioPhone}
+                </a>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={copyNumber}
+                    className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-400 hover:text-white hover:border-slate-500 transition-colors"
+                  >
+                    Copy Phone Number
+                  </button>
+                  <span className="text-xs text-slate-600">Call opens in your phone app</span>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-slate-700 bg-slate-900/60 p-6 max-w-md mx-auto">
+                <p className="text-sm text-slate-400">Phone number not configured</p>
+                <p className="text-xs text-slate-500 mt-1">Contact your administrator to set up the Twilio phone number.</p>
+              </div>
+            )}
+          </div>
+
+          {/* Browser Voice Test — secondary, labeled clearly */}
+          <div className="max-w-3xl mx-auto w-full">
+            <details className="rounded-lg border border-slate-700 bg-slate-900/50">
+              <summary className="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm text-slate-400 hover:text-slate-300">
+                <svg className="h-4 w-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 10-7.517 0c.85.493 1.509 1.333 1.509 2.316V18" />
+                </svg>
+                Browser Voice Test — for testing and desktop fallback
+              </summary>
+              <div className="border-t border-slate-700 p-4">
+                <AIPhoneConsole showToast={showToast} />
+              </div>
+            </details>
+          </div>
+        </div>
+      )}
+
+      {/* ─── ADMIN TOOLS TAB ─── */}
+      {activeTab === 'admin-tools' && isAuthenticated && (
         <div className="space-y-4">
           {/* Admin Subtabs */}
           <div className="flex flex-wrap gap-2 border-b border-slate-700 pb-2">
@@ -214,6 +304,13 @@ export default function AIReceptionist() {
               </button>
             ))}
           </div>
+
+          {error && (
+            <div className="rounded-lg border border-red-700 bg-red-900/30 p-4 text-sm text-red-300">
+              {error}
+              <button onClick={fetchData} className="ml-3 underline hover:text-red-200">Retry</button>
+            </div>
+          )}
 
           {/* Summary Cards */}
           {activeAdminTab !== 'live' && activeAdminTab !== 'analytics' && activeAdminTab !== 'settings' && (
@@ -253,7 +350,7 @@ export default function AIReceptionist() {
             </div>
           )}
 
-          {/* Admin Panels */}
+          {/* Call Logs */}
           {activeAdminTab === 'calls' && (
             <div className="card">
               <h2 className="mb-4 text-lg font-semibold text-white">Call Logs</h2>
@@ -278,7 +375,7 @@ export default function AIReceptionist() {
                     ) : (
                       calls.map((call) => (
                         <tr key={call.id} className="hover:bg-slate-800/50">
-                          <td className="table-td font-medium">{call.callerName}</td>
+                          <td className="table-td font-medium">{call.callerName || '-'}</td>
                           <td className="table-td">{call.callerPhone || '-'}</td>
                           <td className="table-td">
                             <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
@@ -290,7 +387,7 @@ export default function AIReceptionist() {
                           </td>
                           <td className="table-td"><StatusBadge status={call.callStatus} /></td>
                           <td className="table-td max-w-xs truncate">{call.summary || '-'}</td>
-                          <td className="table-td text-xs">{new Date(call.callStartedAt).toLocaleString()}</td>
+                          <td className="table-td text-xs">{call.callStartedAt ? new Date(call.callStartedAt).toLocaleString() : '-'}</td>
                           <td className="table-td">
                             <button onClick={() => handleViewCall(call.id)} className="text-sm text-cyan-400 hover:text-cyan-300">View</button>
                           </td>
@@ -310,6 +407,7 @@ export default function AIReceptionist() {
             </div>
           )}
 
+          {/* Appointments */}
           {activeAdminTab === 'appointments' && (
             <div className="card">
               <h2 className="mb-4 text-lg font-semibold text-white">Appointments</h2>
@@ -322,7 +420,7 @@ export default function AIReceptionist() {
                       <div>
                         <p className="text-sm font-medium text-white">{apt.callerName}</p>
                         <p className="text-xs text-slate-400">{apt.meetingPurpose || apt.meetingTitle}</p>
-                        <p className="text-xs text-slate-500">{new Date(apt.scheduledDate).toLocaleString()}</p>
+                        <p className="text-xs text-slate-500">{apt.scheduledDate ? new Date(apt.scheduledDate).toLocaleString() : ''}</p>
                       </div>
                       <StatusBadge status={apt.status} />
                     </div>
@@ -339,6 +437,7 @@ export default function AIReceptionist() {
             </div>
           )}
 
+          {/* Support Tickets */}
           {activeAdminTab === 'support' && (
             <div className="card">
               <h2 className="mb-4 text-lg font-semibold text-white">Support Tickets</h2>
@@ -402,15 +501,6 @@ export default function AIReceptionist() {
           onClose={() => { setShowCallDetail(false); setSelectedCall(null); }}
           onRefresh={fetchData}
         />
-      )}
-
-      {/* Toast */}
-      {toast && (
-        <div className={`fixed bottom-6 right-6 z-50 rounded-lg px-4 py-3 text-sm shadow-lg ${
-          toast.type === 'error' ? 'bg-red-700 text-white' : 'bg-green-700 text-white'
-        }`}>
-          {toast.message}
-        </div>
       )}
     </div>
   );

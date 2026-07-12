@@ -341,42 +341,53 @@ function checkReceptionistEnabled(req, res, next) {
   next();
 }
 
+function safeReply(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') {
+    return value.message || value.reply || value.text || value.error || 'An unexpected error occurred.';
+  }
+  return String(value);
+}
+
 export async function startAgent(req, res, next) {
   if (!config.ai.receptionistEnabled) {
-    return res.status(503).json({ success: false, message: 'AI Receptionist is currently disabled.' });
+    return res.status(503).json({ success: false, enabled: false, message: 'AI Receptionist is currently disabled.' });
   }
   try {
     const result = await agentService.startSession(req.userId);
+    const reply = safeReply(result.reply);
     res.json({
       success: true,
       sessionId: result.sessionId,
-      reply: typeof result.reply === 'string' ? result.reply : String(result.reply || ''),
+      greeting: reply,
+      reply,
+      conversationStage: result.conversationStage || 'greeting',
       currentIntent: result.intent || null,
-      conversationStage: result.conversationStage,
       extractedData: result.extractedData || {},
       missingFields: result.missingFields || [],
       requiresConfirmation: !!result.requiresConfirmation,
       pendingAction: result.pendingAction || null,
       isComplete: !!result.isComplete,
       suggestedReplies: result.suggestedReplies || [],
+      actionResult: null,
+      channel: 'browser',
     });
   } catch (err) { next(err); }
 }
 
 export async function processAgentMessage(req, res, next) {
   if (!config.ai.receptionistEnabled) {
-    return res.status(503).json({ success: false, message: 'AI Receptionist is currently disabled.' });
+    return res.status(503).json({ success: false, enabled: false, message: 'AI Receptionist is currently disabled.' });
   }
   try {
     const { sessionId, message, mode } = req.body;
     if (!sessionId || !message) {
       return res.status(400).json({
-        error: 'Validation failed',
+        success: false,
         message: 'sessionId and message are required',
-        details: [
-          { field: 'sessionId', message: !sessionId ? 'sessionId is required' : null },
-          { field: 'message', message: !message ? 'message is required' : null },
-        ].filter(d => d.message),
+        error: { code: 'VALIDATION_ERROR', message: 'sessionId and message are required', retryable: false },
+        reply: 'Please provide your session ID and message.',
       });
     }
     const result = await agentService.processMessage(sessionId, message, mode || 'text');
@@ -385,13 +396,25 @@ export async function processAgentMessage(req, res, next) {
       return res.status(statusCode).json({
         success: false,
         code: result.code || 'SESSION_ERROR',
-        message: result.reply,
+        message: safeReply(result.reply),
+        reply: safeReply(result.reply),
+        error: { code: result.code || 'SESSION_ERROR', message: safeReply(result.reply), retryable: false },
       });
     }
-    const response = {
+    const reply = safeReply(result.reply);
+    const actionResult = result.actionResult
+      ? {
+          type: result.actionResult.type,
+          status: result.actionResult.status || 'completed',
+          entityId: result.actionResult.id,
+          reference: result.actionResult.id?.substring(0, 8) || null,
+          message: result.actionResult.message || reply,
+        }
+      : null;
+    res.json({
       success: true,
       sessionId: result.sessionId,
-      reply: typeof result.reply === 'string' ? result.reply : String(result.reply || ''),
+      reply,
       currentIntent: result.intent || null,
       conversationStage: result.conversationStage,
       extractedData: result.extractedData || {},
@@ -400,33 +423,51 @@ export async function processAgentMessage(req, res, next) {
       pendingAction: result.pendingAction || null,
       isComplete: !!result.isComplete,
       suggestedReplies: result.suggestedReplies || [],
-    };
-    res.json(response);
+      actionResult,
+    });
   } catch (err) { next(err); }
 }
 
 export async function confirmAgentAction(req, res, next) {
   if (!config.ai.receptionistEnabled) {
-    return res.status(503).json({ success: false, message: 'AI Receptionist is currently disabled.' });
+    return res.status(503).json({ success: false, enabled: false, message: 'AI Receptionist is currently disabled.' });
   }
   try {
     const { sessionId, action } = req.body;
     if (!sessionId) {
-      return res.status(400).json({ error: 'Validation failed', message: 'sessionId is required' });
+      return res.status(400).json({
+        success: false,
+        message: 'sessionId is required',
+        reply: 'Your session was not found. Please start a new conversation.',
+        error: { code: 'VALIDATION_ERROR', message: 'sessionId is required', retryable: false },
+      });
     }
     const result = await agentService.confirmAction(sessionId, action);
     if (result.error) {
       const statusCode = result.code === 'SESSION_EXPIRED' ? 410 : 400;
+      const errMsg = safeReply(result.message);
       return res.status(statusCode).json({
         success: false,
         code: result.code || 'SESSION_ERROR',
-        message: result.message,
+        message: errMsg,
+        reply: errMsg,
+        error: { code: result.code || 'SESSION_ERROR', message: errMsg, retryable: result.retryable !== false },
       });
     }
-    const response = {
+    const reply = safeReply(result.reply);
+    const actionResult = result.actionResult
+      ? {
+          type: result.actionResult.type,
+          status: result.actionResult.status || 'completed',
+          entityId: result.actionResult.id,
+          reference: result.actionResult.id?.substring(0, 8) || null,
+          message: result.actionResult.message || reply,
+        }
+      : null;
+    res.json({
       success: true,
       sessionId: result.sessionId,
-      reply: typeof result.reply === 'string' ? result.reply : String(result.reply || ''),
+      reply,
       currentIntent: result.intent || null,
       conversationStage: result.conversationStage,
       extractedData: result.extractedData || {},
@@ -435,8 +476,8 @@ export async function confirmAgentAction(req, res, next) {
       pendingAction: result.pendingAction || null,
       isComplete: !!result.isComplete,
       suggestedReplies: result.suggestedReplies || [],
-    };
-    res.json(response);
+      actionResult,
+    });
   } catch (err) { next(err); }
 }
 

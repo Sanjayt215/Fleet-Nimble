@@ -1,16 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import api from '../services/api';
-
-function normalizeText(value) {
-  if (value == null) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  if (Array.isArray(value)) return value.map(normalizeText).join("\n");
-  if (typeof value === "object") {
-    return value.text || value.message || value.reply || value.content || JSON.stringify(value, null, 2);
-  }
-  return String(value);
-}
+import { normalizeDisplayText } from '../utils/normalizeDisplayText';
 
 const ORB_STATES = {
   idle: {
@@ -72,10 +62,10 @@ const ORB_STATES = {
 };
 
 const STATUS_INDICATORS = [
-  { key: 'phoneOnline', label: 'Phone Online', check: async () => { const r = await api.get('/ai-receptionist/health'); return { online: r.data.status === 'ok' }; } },
-  { key: 'realtimeConnected', label: 'Realtime', check: async () => { const r = await api.get('/ai-receptionist/health'); return { online: r.data.realtimeConfigured && r.data.mediaStreamEnabled }; } },
-  { key: 'databaseConnected', label: 'Database', check: async () => { const r = await api.get('/health/ready'); return { online: r.data.database === 'connected' }; } },
-  { key: 'businessTools', label: 'Business Tools', check: async () => { const r = await api.get('/ai-receptionist/health'); return { online: r.data.businessToolsEnabled }; } },
+  { key: 'phoneOnline', label: 'Phone Agent', check: async () => { const r = await api.get('/ai-receptionist/health'); return { online: r.data.phoneConfigured && r.data.realtimeReady, label: r.data.phoneConfigured ? 'Phone Online' : 'Phone Not Configured', status: r.data.phoneConfigured ? (r.data.realtimeReady ? 'available' : 'degraded') : 'unconfigured' }; } },
+  { key: 'realtimeConnected', label: 'Realtime AI', check: async () => { const r = await api.get('/ai-receptionist/health'); return { online: r.data.realtimeConfigured && r.data.mediaStreamEnabled, status: r.data.realtimeConfigured ? (r.data.mediaStreamEnabled ? 'available' : 'degraded') : 'unconfigured' }; } },
+  { key: 'databaseConnected', label: 'Database', check: async () => { const r = await api.get('/health/ready'); return { online: r.data.database === 'connected', status: r.data.database === 'connected' ? 'available' : 'degraded' }; } },
+  { key: 'businessTools', label: 'Business Tools', check: async () => { const r = await api.get('/ai-receptionist/health'); return { online: !!r.data.businessToolsEnabled, status: r.data.businessToolsEnabled ? 'available' : 'disabled' }; } },
 ];
 
 function formatDuration(seconds) {
@@ -215,7 +205,7 @@ export default function AIPhoneConsole({ showToast }) {
 
       setSessionId(data.sessionId);
       setStage(data.conversationStage || 'greeting');
-      const greeting = normalizeText(data.reply || data.greeting || '');
+      const greeting = normalizeDisplayText(data.reply || data.greeting || '');
       setReply(greeting);
       setSuggestedReplies(data.suggestedReplies || []);
       setIsThinking(false);
@@ -228,15 +218,9 @@ export default function AIPhoneConsole({ showToast }) {
       console.error('Session start error:', err);
       setIsThinking(false);
       setCallActive(false);
-      const status = err.response?.status;
-      let errMsg;
-      if (status === 503) {
-        errMsg = err.response?.data?.message || 'AI Receptionist is currently disabled.';
-      } else if (status === 429) {
-        errMsg = 'Too many AI messages. Please wait a moment and try again.';
-      } else {
-        errMsg = err.response?.data?.message || err.response?.data?.error || 'Failed to start conversation. Please try again.';
-      }
+      const d = err.response?.data || {};
+      let errMsg = d.reply || d.message || d.error?.message || (typeof d.error === 'string' ? d.error : null) || 'Failed to start conversation. Please try again.';
+      if (err.response?.status === 429) errMsg = 'Too many AI messages. Please wait a moment and try again.';
       setStage('error');
       setReply(errMsg);
       showToast?.(errMsg, 'error');
@@ -270,7 +254,7 @@ export default function AIPhoneConsole({ showToast }) {
       const data = res.data;
 
       setStage(data.conversationStage || '');
-      const replyText = normalizeText(data.reply || '');
+      const replyText = normalizeDisplayText(data.reply || '');
       setReply(replyText);
       setExtractedData(data.extractedData || {});
       setSuggestedReplies(data.suggestedReplies || []);
@@ -290,19 +274,10 @@ export default function AIPhoneConsole({ showToast }) {
     } catch (err) {
       console.error('Message error:', err);
       setIsThinking(false);
-      const status = err.response?.status;
-      const errData = err.response?.data || {};
-      let errMsg;
-      if (status === 503) {
-        errMsg = errData.message || 'AI Receptionist is currently disabled.';
-      } else if (status === 429) {
-        errMsg = 'Too many AI messages. Please wait a moment and try again.';
-      } else if (errData.code === 'SESSION_EXPIRED') {
-        errMsg = errData.message || 'This session expired. Please start a new conversation.';
-        setSessionId(null);
-      } else {
-        errMsg = errData.message || errData.error || 'I encountered an error. Please try again.';
-      }
+      const d = err.response?.data || {};
+      let errMsg = normalizeDisplayText(d.reply) || normalizeDisplayText(d.message) || d.error?.message || (typeof d.error === 'string' ? d.error : null) || 'I encountered an error. Please try again.';
+      if (err.response?.status === 429) errMsg = 'Too many AI messages. Please wait a moment and try again.';
+      if (d.code === 'SESSION_EXPIRED') { setSessionId(null); }
       setReply(errMsg);
       addMessage('assistant', errMsg);
     }
@@ -321,7 +296,7 @@ export default function AIPhoneConsole({ showToast }) {
       const data = res.data;
 
       setStage(data.conversationStage || '');
-      const replyText = normalizeText(data.reply || '');
+      const replyText = normalizeDisplayText(data.reply || '');
       setReply(replyText);
       setExtractedData(data.extractedData || {});
       setSuggestedReplies(data.suggestedReplies || []);
@@ -342,19 +317,10 @@ export default function AIPhoneConsole({ showToast }) {
     } catch (err) {
       console.error('Confirmation error:', err);
       setIsThinking(false);
-      const status = err.response?.status;
-      const errData = err.response?.data || {};
-      let errMsg;
-      if (status === 503) {
-        errMsg = errData.message || 'AI Receptionist is currently disabled.';
-      } else if (status === 429) {
-        errMsg = 'Too many AI messages. Please wait a moment and try again.';
-      } else if (errData.code === 'SESSION_EXPIRED') {
-        errMsg = errData.message || 'This session expired. Please start a new conversation.';
-        setSessionId(null);
-      } else {
-        errMsg = errData.message || 'I encountered an error processing your confirmation. Please try again.';
-      }
+      const d = err.response?.data || {};
+      let errMsg = normalizeDisplayText(d.reply) || normalizeDisplayText(d.message) || d.error?.message || 'I encountered an error processing your confirmation. Please try again.';
+      if (err.response?.status === 429) errMsg = 'Too many AI messages. Please wait a moment and try again.';
+      if (d.code === 'SESSION_EXPIRED') { setSessionId(null); }
       setReply(errMsg);
       addMessage('assistant', errMsg);
     }
@@ -438,13 +404,24 @@ export default function AIPhoneConsole({ showToast }) {
         <div className="flex items-center gap-2 flex-1 flex-wrap">
           {STATUS_INDICATORS.map((ind) => {
             const s = statuses[ind.key];
+            const status = s?.status;
             const online = s?.online;
+            const isAvailable = status === 'available';
+            const isDegraded = status === 'degraded';
+            const isUnconfigured = status === 'unconfigured' || status === 'disabled';
             return (
               <div key={ind.key} className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors ${
                 statusLoading ? 'bg-slate-800/50 text-slate-500' :
-                online ? 'bg-green-900/20 text-green-300' : 'bg-red-900/20 text-red-300'
+                isAvailable ? 'bg-green-900/20 text-green-300' :
+                isDegraded ? 'bg-amber-900/20 text-amber-300' :
+                'bg-slate-700 text-slate-400'
               }`}>
-                <div className={`h-1.5 w-1.5 rounded-full ${statusLoading ? 'bg-slate-600' : online ? 'bg-green-400' : 'bg-red-400'}`} />
+                <div className={`h-1.5 w-1.5 rounded-full ${
+                  statusLoading ? 'bg-slate-600' :
+                  isAvailable ? 'bg-green-400' :
+                  isDegraded ? 'bg-amber-400' :
+                  'bg-slate-500'
+                }`} />
                 <span>{ind.label}</span>
               </div>
             );
@@ -497,7 +474,7 @@ export default function AIPhoneConsole({ showToast }) {
           {/* Reply / Current AI message */}
           {reply && (
             <div className="w-full max-w-lg rounded-lg border border-cyan-800/40 bg-slate-800/80 p-4">
-              <p className="text-sm text-slate-100 leading-relaxed whitespace-pre-line">{reply}</p>
+              <p className="text-sm text-slate-100 leading-relaxed whitespace-pre-line">{normalizeDisplayText(reply)}</p>
             </div>
           )}
 
@@ -516,9 +493,9 @@ export default function AIPhoneConsole({ showToast }) {
           {/* Suggested replies */}
           {suggestedReplies.length > 0 && !requiresConfirmation && (
             <div className="flex flex-wrap gap-2 justify-center">
-              {suggestedReplies.map((suggestion, i) => (
+                {suggestedReplies.map((suggestion, i) => (
                 <button key={i} onClick={() => sendMessage(suggestion)} disabled={isThinking} className="rounded-full border border-cyan-700/50 px-4 py-1.5 text-xs text-cyan-300 hover:bg-cyan-900/30 disabled:opacity-50 transition-colors">
-                  {suggestion}
+                  {normalizeDisplayText(suggestion)}
                 </button>
               ))}
             </div>
@@ -599,16 +576,16 @@ export default function AIPhoneConsole({ showToast }) {
             </div>
             {Object.keys(extractedData).some(k => extractedData[k]) ? (
               <div className="space-y-1.5 text-xs">
-                {extractedData.callerName && <div className="flex justify-between"><span className="text-slate-500">Name</span><span className="text-slate-200 text-right">{extractedData.callerName}</span></div>}
-                {extractedData.phone && <div className="flex justify-between"><span className="text-slate-500">Phone</span><span className="text-slate-200 text-right">{extractedData.phone}</span></div>}
-                {extractedData.email && <div className="flex justify-between"><span className="text-slate-500">Email</span><span className="text-slate-200 text-right">{extractedData.email}</span></div>}
-                {extractedData.company && <div className="flex justify-between"><span className="text-slate-500">Company</span><span className="text-slate-200 text-right">{extractedData.company}</span></div>}
-                {extractedData.fleetSize && <div className="flex justify-between"><span className="text-slate-500">Fleet Size</span><span className="text-slate-200 text-right">{extractedData.fleetSize}</span></div>}
-                {extractedData.preferredDate && <div className="flex justify-between"><span className="text-slate-500">Date</span><span className="text-slate-200 text-right">{extractedData.preferredDate}</span></div>}
-                {extractedData.preferredTime && <div className="flex justify-between"><span className="text-slate-500">Time</span><span className="text-slate-200 text-right">{extractedData.preferredTime}</span></div>}
-                {extractedData.meetingPurpose && <div className="flex flex-col"><span className="text-slate-500">Purpose</span><span className="text-slate-200">{extractedData.meetingPurpose}</span></div>}
-                {extractedData.issue && <div className="flex flex-col"><span className="text-slate-500">Issue</span><span className="text-slate-200">{extractedData.issue}</span></div>}
-                {extractedData.urgency && <div className="flex justify-between"><span className="text-slate-500">Urgency</span><span className={`text-right font-medium ${extractedData.urgency === 'CRITICAL' ? 'text-red-400' : extractedData.urgency === 'HIGH' ? 'text-orange-400' : 'text-slate-200'}`}>{extractedData.urgency}</span></div>}
+                {extractedData.callerName && <div className="flex justify-between"><span className="text-slate-500">Name</span><span className="text-slate-200 text-right">{normalizeDisplayText(extractedData.callerName)}</span></div>}
+                {extractedData.phone && <div className="flex justify-between"><span className="text-slate-500">Phone</span><span className="text-slate-200 text-right">{normalizeDisplayText(extractedData.phone)}</span></div>}
+                {extractedData.email && <div className="flex justify-between"><span className="text-slate-500">Email</span><span className="text-slate-200 text-right">{normalizeDisplayText(extractedData.email)}</span></div>}
+                {extractedData.company && <div className="flex justify-between"><span className="text-slate-500">Company</span><span className="text-slate-200 text-right">{normalizeDisplayText(extractedData.company)}</span></div>}
+                {extractedData.fleetSize && <div className="flex justify-between"><span className="text-slate-500">Fleet Size</span><span className="text-slate-200 text-right">{normalizeDisplayText(extractedData.fleetSize)}</span></div>}
+                {extractedData.preferredDate && <div className="flex justify-between"><span className="text-slate-500">Date</span><span className="text-slate-200 text-right">{normalizeDisplayText(extractedData.preferredDate)}</span></div>}
+                {extractedData.preferredTime && <div className="flex justify-between"><span className="text-slate-500">Time</span><span className="text-slate-200 text-right">{normalizeDisplayText(extractedData.preferredTime)}</span></div>}
+                {extractedData.meetingPurpose && <div className="flex flex-col"><span className="text-slate-500">Purpose</span><span className="text-slate-200">{normalizeDisplayText(extractedData.meetingPurpose)}</span></div>}
+                {extractedData.issue && <div className="flex flex-col"><span className="text-slate-500">Issue</span><span className="text-slate-200">{normalizeDisplayText(extractedData.issue)}</span></div>}
+                {extractedData.urgency && <div className="flex justify-between"><span className="text-slate-500">Urgency</span><span className={`text-right font-medium ${extractedData.urgency === 'CRITICAL' ? 'text-red-400' : extractedData.urgency === 'HIGH' ? 'text-orange-400' : 'text-slate-200'}`}>{normalizeDisplayText(extractedData.urgency)}</span></div>}
               </div>
             ) : (
               <p className="text-xs text-slate-600 py-2 text-center">No details collected yet</p>
@@ -632,8 +609,8 @@ export default function AIPhoneConsole({ showToast }) {
                       a.status === 'failed' || a.status === 'error' ? 'bg-red-400' :
                       'bg-amber-400'
                     }`} />
-                    <span className="text-slate-400 flex-1">{a.action}</span>
-                    {a.detail && <span className="text-slate-500">{a.detail}</span>}
+                    <span className="text-slate-400 flex-1">{normalizeDisplayText(a.action)}</span>
+                    {a.detail && <span className="text-slate-500">{normalizeDisplayText(a.detail)}</span>}
                   </div>
                 ))}
               </div>
@@ -699,7 +676,7 @@ export default function AIPhoneConsole({ showToast }) {
                     <span className="text-[10px] font-medium opacity-60">{msg.role === 'user' ? 'You' : 'Receptionist'}</span>
                     <span className="text-[10px] opacity-40">{new Date(msg.timestamp).toLocaleTimeString()}</span>
                   </div>
-                  <p className="leading-relaxed">{normalizeText(msg.content)}</p>
+                  <p className="leading-relaxed">{normalizeDisplayText(msg.content)}</p>
                 </div>
               </div>
             ))

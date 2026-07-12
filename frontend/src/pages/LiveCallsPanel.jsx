@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../services/api';
 import { connectSocket, subscribeSocket, unsubscribeSocket } from '../services/socket';
+import { normalizeDisplayText } from '../utils/normalizeDisplayText';
 
 export default function LiveCallsPanel({ showToast }) {
   const [activeCalls, setActiveCalls] = useState([]);
@@ -154,10 +155,10 @@ export default function LiveCallsPanel({ showToast }) {
                   <div className="flex items-center gap-3">
                     <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
                     <span className="text-sm font-medium text-white">
-                      {call.detectedName || call.callerNumber || 'Unknown'}
+                      {normalizeDisplayText(call.detectedName) || normalizeDisplayText(call.callerNumber) || 'Unknown'}
                     </span>
                     {call.detectedName && call.callerNumber && (
-                      <span className="text-xs text-slate-500">{call.callerNumber}</span>
+                      <span className="text-xs text-slate-500">{normalizeDisplayText(call.callerNumber)}</span>
                     )}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2 text-xs">
@@ -165,10 +166,10 @@ export default function LiveCallsPanel({ showToast }) {
                       {formatDuration(call.duration)}
                     </span>
                     <span className="rounded bg-slate-700 px-2 py-0.5 text-slate-300">
-                      {call.language?.toUpperCase() || 'EN'}
+                      {String(call.language || 'EN').toUpperCase()}
                     </span>
                     <span className="rounded bg-blue-900/30 px-2 py-0.5 text-blue-300">
-                      {call.currentIntent || 'Unknown'}
+                      {normalizeDisplayText(call.currentIntent) || 'Unknown'}
                     </span>
                     {call.aiConfidence != null && (
                       <span className={`rounded px-2 py-0.5 ${
@@ -182,7 +183,7 @@ export default function LiveCallsPanel({ showToast }) {
                     <span className={`rounded px-2 py-0.5 ${
                       call.status === 'IN_PROGRESS' ? 'bg-green-900/30 text-green-300' : 'bg-slate-700 text-slate-300'
                     }`}>
-                      {call.status}
+                      {normalizeDisplayText(call.status)}
                     </span>
                   </div>
                 </div>
@@ -207,7 +208,7 @@ export default function LiveCallsPanel({ showToast }) {
                   {call.liveTranscript && (
                     <div className="flex items-start gap-2 text-xs">
                       <span className="mt-0.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-cyan-500 animate-pulse" />
-                      <p className="text-slate-300 italic">{call.liveTranscript}</p>
+                      <p className="text-slate-300 italic">{normalizeDisplayText(call.liveTranscript)}</p>
                     </div>
                   )}
                   {call.transcriptHistory?.slice(-3).map((entry, i) => (
@@ -215,7 +216,7 @@ export default function LiveCallsPanel({ showToast }) {
                       entry.role === 'caller' ? 'text-slate-400' : 'text-cyan-400'
                     }`}>
                       <span className="mt-0.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-slate-600" />
-                      <p><span className="font-medium">{entry.role === 'caller' ? 'Caller' : 'AI'}:</span> {entry.text}</p>
+                      <p><span className="font-medium">{entry.role === 'caller' ? 'Caller' : 'AI'}:</span> {normalizeDisplayText(entry.text)}</p>
                     </div>
                   ))}
                 </div>

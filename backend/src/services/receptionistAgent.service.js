@@ -7,8 +7,10 @@ import * as supportService from './receptionistSupport.service.js';
 import * as callService from './receptionistCall.service.js';
 import * as memoryService from './receptionistMemory.service.js';
 import * as crmService from './receptionistCRM.service.js';
+import { parseDateTime, assembleSchedulingPayload, formatSchedulingSummary } from './receptionistScheduling.service.js';
 
 const SESSIONS = new Map();
+const COMPLETED_ACTIONS = new Set();
 
 const STAGES = {
   GREETING: 'greeting',
@@ -98,7 +100,11 @@ function extractDetails(message, existing = {}) {
   if (nameMatch && !extracted.callerName && !nameStopWords.includes(nameMatch[1].trim().toLowerCase())) extracted.callerName = nameMatch[1].trim();
   if (!extracted.callerName && message.length < 30) {
     const words = message.trim().split(/\s+/);
-    if (words.length >= 1 && words.length <= 3 && !message.match(/^(yes|no|sure|okay|ok|correct|right|yeah|yep|nope|nah)/i)) {
+    if (words.length >= 1 && words.length <= 3
+      && !message.match(/^(yes|no|sure|okay|ok|correct|right|yeah|yep|nope|nah)/i)
+      && !message.match(/contact\s+(support|sales|human)/i)
+      && !message.match(/talk\s+to|speak\s+with|transfer|switch/i)
+      && !message.match(/change|different|modify|update|something\s+else/i)) {
       extracted.callerName = message.trim();
     }
   }
@@ -120,33 +126,17 @@ function extractDetails(message, existing = {}) {
   const vehicleMatch = message.match(/(?:vehicle|truck|car|van|bus)\s*(?:number|name|id|#)?\s*[#:]?\s*([A-Za-z0-9\-\s]{2,15})/i);
   if (vehicleMatch) extracted.vehicleReference = vehicleMatch[1].trim();
 
-  const dateMatch = message.match(/(?:next\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow)/i);
-  if (dateMatch) {
-    extracted.preferredDate = resolveDayToDate(dateMatch[0]);
-  } else {
-    const dateStr = message.match(/(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)/i);
-    if (dateStr) {
-      const months = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
-      const monthKey = dateStr[2].toLowerCase().substring(0, 3);
-      const month = months[monthKey];
-      if (month !== undefined) {
-        const day = parseInt(dateStr[1], 10);
-        const now = new Date();
-        let year = now.getFullYear();
-        const date = new Date(year, month, day);
-        if (date < now) year++;
-        extracted.preferredDate = new Date(year, month, day).toISOString().split('T')[0];
-      }
+  if (!extracted.preferredDate || !extracted.preferredTime) {
+    const schedulingResult = parseDateTime(message, extracted.timezone || null);
+    if (schedulingResult.preferredDate && !extracted.preferredDate) {
+      extracted.preferredDate = schedulingResult.preferredDate;
     }
-  }
-
-  const timeMatch = message.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
-  if (timeMatch) {
-    let hours = parseInt(timeMatch[1], 10);
-    const mins = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
-    if (timeMatch[3].toLowerCase() === 'pm' && hours < 12) hours += 12;
-    if (timeMatch[3].toLowerCase() === 'am' && hours === 12) hours = 0;
-    extracted.preferredTime = `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+    if (schedulingResult.preferredTime && !extracted.preferredTime) {
+      extracted.preferredTime = schedulingResult.preferredTime;
+    }
+    if (schedulingResult.timezone && !extracted.timezone) {
+      extracted.timezone = schedulingResult.timezone;
+    }
   }
 
   const issueMatch = message.match(/(?:issue|problem|help with|trouble|error|broken|not working)\s*(?:is|with|:)?\s*(.+?)(?:\.|,|$)/i)
@@ -160,7 +150,7 @@ function extractDetails(message, existing = {}) {
 
   if (message.match(/urgent|asap|immediately|critical|emergency/i)) {
     extracted.urgency = 'HIGH';
-  } else if (message.match(/important|soon\r\n/i)) {
+  } else if (message.match(/important|soon/i)) {
     extracted.urgency = 'MEDIUM';
   }
 
@@ -175,20 +165,6 @@ function extractDetails(message, existing = {}) {
   }
 
   return extracted;
-}
-
-function resolveDayToDate(dayStr) {
-  const days = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
-  const dayNum = days[dayStr.toLowerCase()];
-  if (dayNum === undefined) return dayStr;
-  const now = new Date();
-  const today = now.getDay();
-  let diff = dayNum - today;
-  if (diff <= 0) diff += 7;
-  if (dayStr.toLowerCase() === 'tomorrow') diff = 1;
-  const target = new Date(now);
-  target.setDate(now.getDate() + diff);
-  return target.toISOString().split('T')[0];
 }
 
 function getLocalGreeting() {
@@ -261,6 +237,7 @@ function buildResponse(session, reply, conversationStage, intent, options = {}) 
     pendingAction: options.pendingAction || null,
     isComplete: options.isComplete || false,
     suggestedReplies: options.suggestedReplies || [],
+    actionResult: options.actionResult || null,
   };
 }
 
@@ -327,9 +304,51 @@ export async function processMessage(sessionId, message, mode = 'text') {
   if (session.stage === STAGES.AWAITING_CONFIRMATION ||
       session.stage === STAGES.SUMMARIZE_APPOINTMENT ||
       session.stage === STAGES.SUMMARIZE_SUPPORT) {
+    const lowerMessage = message.toLowerCase().trim();
+    const isContactSupport = /contact\s+(support|sales|human|person|agent|engineer|management|team)/i.test(lowerMessage)
+      || /talk\s+to\s+(a\s+)?(human|person|agent|sales|support|manager|engineer)/i.test(lowerMessage)
+      || /speak\s+(with|to)\s+(a\s+)?(human|person|agent|real|representative)/i.test(lowerMessage)
+      || /transfer\s+(me|to)|human\s+handoff|real\s+person/i.test(lowerMessage);
+    const isChangeRequest = /change\s+(date|time|email|phone|details|something|everything)/i.test(lowerMessage)
+      || /different\s+(date|time|day)/i.test(lowerMessage)
+      || /modify|update\s+(appointment|booking|meeting|ticket)/i.test(lowerMessage);
+    const isCancel = /cancel|cancel\s+(it|the\s+(appointment|meeting|booking|ticket|request|order))/i.test(lowerMessage)
+      && !isConfirmed;
+
     if (isConfirmed) {
       return handleConfirmation(session);
-    } else if (isDenied) {
+    }
+
+    if (isContactSupport) {
+      const department = lowerMessage.includes('sales') ? 'sales'
+        : lowerMessage.includes('engineer') || lowerMessage.includes('technical') ? 'technical'
+        : lowerMessage.includes('emergency') ? 'emergency'
+        : 'support';
+      session.stage = STAGES.CLARIFYING;
+      session.pendingAction = null;
+      session.intent = 'human_handoff';
+      session.details.handoffReason = message;
+      session.details.handoffDepartment = department;
+      return buildResponse(session,
+        `I understand you would like to speak with someone from our ${department} team. I can arrange a callback from a team member. What is the best time to reach you, and what should I let them know regarding this matter?`,
+        STAGES.CLARIFYING, 'human_handoff', {
+          missingFields: ['preferredDate', 'preferredTime'],
+          suggestedReplies: ['Anytime tomorrow', 'Call me at 2 PM', 'This afternoon is fine'],
+        });
+    }
+
+    if (isCancel) {
+      session.stage = STAGES.COLLECTING_PURPOSE;
+      session.pendingAction = null;
+      session.intent = null;
+      return buildResponse(session,
+        'I have cancelled the pending action. How else can I help you today? You can start a new booking, create a support ticket, or ask me anything about FleetNimble.',
+        STAGES.COLLECTING_PURPOSE, 'clarifying', {
+          suggestedReplies: ['I want to book a demo', 'I need support', 'Tell me about FleetNimble'],
+        });
+    }
+
+    if (isDenied || isChangeRequest) {
       session.stage = STAGES.CLARIFYING;
       session.pendingAction = null;
       return buildResponse(session,
@@ -338,6 +357,7 @@ export async function processMessage(sessionId, message, mode = 'text') {
           suggestedReplies: ['I want to change the date', 'I need something else', 'Tell me about FleetNimble'],
         });
     }
+
     return buildResponse(session,
       'I just need a quick yes or no. Should I go ahead with what we discussed?',
       STAGES.AWAITING_CONFIRMATION, session.intent, {
@@ -557,6 +577,64 @@ export async function processMessage(sessionId, message, mode = 'text') {
     });
   }
 
+  if (intent === 'human_handoff' || session.intent === 'human_handoff') {
+    session.intent = 'human_handoff';
+    if (!session.details.preferredDate && !session.details.preferredTime) {
+      const schedulingResult = parseDateTime(message, session.details.timezone || null);
+      if (schedulingResult.preferredDate) session.details.preferredDate = schedulingResult.preferredDate;
+      if (schedulingResult.preferredTime) session.details.preferredTime = schedulingResult.preferredTime;
+    }
+    if (!session.details.phone && !session.details.email && (message.match(/[\+\d][\d\s\-\(\)]{7,15}\d/))) {
+      const phoneMatch = message.match(/([\+\d][\d\s\-\(\)]{7,15}\d)/);
+      if (phoneMatch) session.details.phone = phoneMatch[1].trim().replace(/[\s\-\(\)]/g, '');
+    }
+
+    if (!session.details.phone && !session.details.email) {
+      return buildResponse(session,
+        `I will arrange a callback from our ${session.details.handoffDepartment || 'support'} team. What is the best phone number and time to reach you?`,
+        STAGES.CLARIFYING, 'human_handoff', {
+          missingFields: ['phone', 'preferredDate', 'preferredTime'],
+        });
+    }
+    if (!session.details.preferredDate || !session.details.preferredTime) {
+      return buildResponse(session,
+        'And what time works best for the callback?',
+        STAGES.CLARIFYING, 'human_handoff', {
+          missingFields: ['preferredDate', 'preferredTime'],
+        });
+    }
+
+    try {
+      const parsed = parseDateTime(`${session.details.preferredDate || ''} ${session.details.preferredTime || ''}`, session.details.timezone || null);
+      const payload = assembleSchedulingPayload(session.details, parsed);
+      const callbackAppointment = await appointmentService.createAppointment(session.userId, {
+        callerName: session.details.callerName || 'Caller',
+        callerPhone: session.details.phone || null,
+        callerEmail: session.details.email || null,
+        companyName: session.details.company || null,
+        meetingPurpose: `Callback request - ${session.details.handoffDepartment || 'support'} - ${session.details.handoffReason || ''}`,
+        meetingTitle: `Callback: ${session.details.handoffDepartment || 'Support'} - FleetNimble`,
+        scheduledDate: payload.scheduledDate,
+        durationMinutes: 15,
+      });
+      session.stage = STAGES.COMPLETED;
+      session.pendingAction = null;
+
+      const dept = session.details.handoffDepartment || 'support';
+      const reply = `Thank you! I have scheduled a callback from our ${dept} team for ${session.details.preferredDate || 'the requested date'} at ${session.details.preferredTime || 'the requested time'}. A team member will call you at ${session.details.phone || 'your number'}. Is there anything else I can help with?`;
+      session.messages.push({ role: 'assistant', content: reply });
+      return buildResponse(session, reply, STAGES.COMPLETED, 'human_handoff', {
+        isComplete: true,
+        suggestedReplies: ['No, that is all thanks', 'Yes, I also need to book a demo'],
+      });
+    } catch (err) {
+      logger.error('CALLBACK_CREATION_ERROR', { error: err.message });
+      return buildResponse(session,
+        'I have noted your request for a callback. Our team will contact you shortly. Is there anything else I can help with?',
+        STAGES.COMPLETED, 'human_handoff', { isComplete: true });
+    }
+  }
+
   if (intent === 'greeting') {
     if (session.details.callerName) {
       return buildResponse(session,
@@ -607,20 +685,35 @@ export async function processMessage(sessionId, message, mode = 'text') {
 }
 
 async function handleConfirmation(session) {
+  const actionKey = `${session.sessionId}_${session.pendingAction}`;
+  if (COMPLETED_ACTIONS.has(actionKey)) {
+    return buildResponse(session,
+      'This has already been processed. Is there anything else I can help you with?',
+      STAGES.COMPLETED, 'completed', {
+        isComplete: true,
+        suggestedReplies: ['No, that is all thanks', 'Yes, I have another question'],
+      });
+  }
+
   if (session.pendingAction === 'create_appointment') {
     try {
+      const parsed = parseDateTime(
+        `${session.details.preferredDate || ''} ${session.details.preferredTime || ''}`,
+        session.details.timezone || null
+      );
+      const payload = assembleSchedulingPayload(session.details, parsed);
       const appointment = await appointmentService.createAppointment(session.userId, {
         callerName: session.details.callerName || 'Caller',
         callerPhone: session.details.phone || null,
         callerEmail: session.details.email || null,
         companyName: session.details.company || null,
-        fleetSize: session.details.fleetSize || null,
+        fleetSize: typeof session.details.fleetSize === 'string' ? parseInt(session.details.fleetSize, 10) || null : session.details.fleetSize || null,
         meetingPurpose: session.details.meetingPurpose || 'General inquiry',
-        scheduledDate: session.details.preferredDate
-          ? new Date(session.details.preferredDate + (session.details.preferredTime ? `T${session.details.preferredTime}:00` : 'T10:00:00')).toISOString()
-          : new Date(Date.now() + 86400000).toISOString(),
+        meetingTitle: session.details.meetingPurpose ? `${session.details.meetingPurpose} - FleetNimble` : 'FleetNimble Meeting',
+        scheduledDate: payload.scheduledDate,
         durationMinutes: 30,
       });
+      COMPLETED_ACTIONS.add(actionKey);
 
       if (session.callId) {
         await callService.updateCall(session.userId, session.callId, {
@@ -653,6 +746,7 @@ async function handleConfirmation(session) {
         isComplete: true,
         pendingAction: null,
         suggestedReplies: ['No, that is all thanks', 'Yes, I have another question'],
+        actionResult: { type: 'appointment', status: 'completed', id: appointment.id, message: 'Appointment scheduled successfully' },
       });
     } catch (err) {
       logger.error('APPOINTMENT_CREATION_ERROR', { error: err.message });
@@ -676,6 +770,7 @@ async function handleConfirmation(session) {
         urgency: session.details.urgency || 'MEDIUM',
         relatedVehicleId: session.details.vehicleReference || null,
       });
+      COMPLETED_ACTIONS.add(actionKey);
 
       if (session.callId) {
         await callService.updateCall(session.userId, session.callId, {
@@ -708,6 +803,7 @@ async function handleConfirmation(session) {
         isComplete: true,
         pendingAction: null,
         suggestedReplies: ['No, that is all thanks', 'I also need to book a demo'],
+        actionResult: { type: 'support_ticket', status: 'completed', id: ticket.id, message: 'Support ticket created successfully' },
       });
     } catch (err) {
       logger.error('TICKET_CREATION_ERROR', { error: err.message });
@@ -743,11 +839,27 @@ export async function confirmAction(sessionId, action) {
     return { error: true, message: 'Session not found' };
   }
 
-  if (action === 'create_appointment' || (session.pendingAction === 'create_appointment' && action === 'confirm')) {
+  const resolvedAction = action === 'confirm' ? session.pendingAction : action;
+
+  if (session.stage === STAGES.COMPLETED) {
+    const actionKey = `${session.sessionId}_${resolvedAction}`;
+    if (COMPLETED_ACTIONS.has(actionKey)) {
+      return buildResponse(session,
+        'This has already been processed. Is there anything else I can help you with?',
+        STAGES.COMPLETED, 'completed', {
+          isComplete: true,
+          suggestedReplies: ['No, that is all thanks', 'Yes, I have another question'],
+        });
+    }
+  }
+
+  if (resolvedAction === 'create_appointment' || session.pendingAction === 'create_appointment') {
+    session.pendingAction = 'create_appointment';
     return handleConfirmation(session);
   }
 
-  if (action === 'create_support_ticket' || (session.pendingAction === 'create_support_ticket' && action === 'confirm')) {
+  if (resolvedAction === 'create_support_ticket' || session.pendingAction === 'create_support_ticket') {
+    session.pendingAction = 'create_support_ticket';
     return handleConfirmation(session);
   }
 
@@ -784,6 +896,9 @@ export function endSession(sessionId) {
   }
 
   SESSIONS.delete(sessionId);
+  for (const key of COMPLETED_ACTIONS) {
+    if (key.startsWith(sessionId)) COMPLETED_ACTIONS.delete(key);
+  }
   return { transcript, summary };
 }
 

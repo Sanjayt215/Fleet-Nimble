@@ -42,5 +42,6 @@ export function errorHandler(err, req, res, _next) {
         ? { stack: err.stack }
         : {}),
     },
+    message: err.isOperational ? err.message : 'Internal server error',
   });
 }
