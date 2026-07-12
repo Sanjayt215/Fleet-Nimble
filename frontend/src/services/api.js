@@ -13,14 +13,15 @@ let isRefreshing = false;
 let failedQueue = [];
 
 function processQueue(error, token = null) {
-  failedQueue.forEach(({ resolve, reject }) => {
+  const queue = failedQueue.slice();
+  failedQueue = [];
+  queue.forEach(({ resolve, reject }) => {
     if (error) {
       reject(error);
     } else {
       resolve(token);
     }
   });
-  failedQueue = [];
 }
 
 function clearTokens() {
@@ -30,6 +31,10 @@ function clearTokens() {
 
 function getAccessToken() {
   return localStorage.getItem(TOKEN_KEY);
+}
+
+function getRefreshToken() {
+  return localStorage.getItem(REFRESH_KEY);
 }
 
 const api = axios.create({
@@ -49,11 +54,18 @@ api.interceptors.response.use(
   (res) => res,
   async (error) => {
     const original = error.config;
+    const errCode = error.response?.data?.code || error.response?.data?.error?.code;
+
+    const isTokenExpired = error.response?.status === 401 && errCode === 'ACCESS_TOKEN_EXPIRED';
+    const isGeneric401 = error.response?.status === 401 && !errCode;
+
     if (
-      error.response?.status === 401 &&
+      (isTokenExpired || isGeneric401) &&
       !original._retry &&
       !original.url?.includes('/auth/login') &&
-      !original.url?.includes('/auth/refresh')
+      !original.url?.includes('/auth/register') &&
+      !original.url?.includes('/auth/refresh') &&
+      !original.url?.includes('/auth/logout')
     ) {
       if (isRefreshing) {
         return new Promise((resolve, reject) => {
@@ -67,12 +79,11 @@ api.interceptors.response.use(
       original._retry = true;
       isRefreshing = true;
 
-      const refreshToken = localStorage.getItem(REFRESH_KEY);
+      const refreshToken = getRefreshToken();
       if (!refreshToken) {
         clearTokens();
-        isRefreshing = false;
         processQueue(new Error('No refresh token'));
-        window.location.href = '/login?expired=1';
+        window.dispatchEvent(new CustomEvent('auth:sessionExpired'));
         return Promise.reject(error);
       }
 
@@ -96,15 +107,21 @@ api.interceptors.response.use(
       } catch (refreshError) {
         clearTokens();
         processQueue(refreshError);
-        window.location.href = '/login?expired=1';
+        window.dispatchEvent(new CustomEvent('auth:sessionExpired'));
         return Promise.reject(refreshError);
       } finally {
         isRefreshing = false;
       }
     }
+
+    if (error.response?.status === 401 && errCode === 'INVALID_ACCESS_TOKEN') {
+      clearTokens();
+      window.dispatchEvent(new CustomEvent('auth:sessionExpired'));
+    }
+
     return Promise.reject(error);
   }
 );
 
-export { TOKEN_KEY, REFRESH_KEY, getAccessToken, clearTokens };
+export { TOKEN_KEY, REFRESH_KEY, getAccessToken, getRefreshToken, clearTokens };
 export default api;

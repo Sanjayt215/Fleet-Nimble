@@ -2,6 +2,7 @@ import bcrypt from 'bcrypt';
 import prisma from '../utils/prisma.js';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt.js';
 import { AppError } from '../middleware/errorHandler.js';
+import logger from '../utils/logger.js';
 import { randomUUID } from 'crypto';
 
 export async function register(req, res, next) {
@@ -79,16 +80,47 @@ export async function refresh(req, res, next) {
       where: { token: refreshToken },
       include: { user: { include: { role: true } } },
     });
-    if (!stored || stored.expiresAt < new Date()) {
-      throw new AppError('Invalid refresh token', 401, 'UNAUTHORIZED');
+    if (!stored) {
+      throw new AppError('Refresh token not found', 401, 'INVALID_REFRESH_TOKEN');
+    }
+    if (stored.expiresAt < new Date()) {
+      await prisma.refreshToken.delete({ where: { id: stored.id } }).catch(() => {});
+      throw new AppError('Refresh token expired', 401, 'REFRESH_TOKEN_EXPIRED');
+    }
+    if (stored.user.deletedAt) {
+      await prisma.refreshToken.delete({ where: { id: stored.id } }).catch(() => {});
+      throw new AppError('User account disabled', 401, 'USER_DISABLED');
     }
 
-    verifyRefreshToken(refreshToken);
+    try {
+      verifyRefreshToken(refreshToken);
+    } catch (jwtErr) {
+      await prisma.refreshToken.delete({ where: { id: stored.id } }).catch(() => {});
+      if (jwtErr.name === 'TokenExpiredError') {
+        throw new AppError('Refresh token expired', 401, 'REFRESH_TOKEN_EXPIRED');
+      }
+      throw new AppError('Invalid refresh token', 401, 'INVALID_REFRESH_TOKEN');
+    }
+
     await prisma.refreshToken.delete({ where: { id: stored.id } });
     const tokens = await issueTokens(stored.user);
     res.json({ success: true, data: tokens });
   } catch (err) {
-    next(err);
+    if (err.isOperational) {
+      return res.status(err.statusCode || 401).json({
+        success: false,
+        code: err.code || 'REFRESH_FAILED',
+        message: err.message,
+        error: { code: err.code || 'REFRESH_FAILED', message: err.message },
+      });
+    }
+    logger.error('REFRESH_INTERNAL_ERROR', { error: err.message });
+    res.status(500).json({
+      success: false,
+      code: 'REFRESH_FAILED',
+      message: 'Refresh failed due to a server error',
+      error: { code: 'REFRESH_FAILED', message: 'Refresh failed due to a server error' },
+    });
   }
 }
 

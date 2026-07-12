@@ -163,4 +163,22 @@ export async function makeCall(to, from, statusCallbackUrl) {
   }
 }
 
-export default { validateTwilioRequest, buildMediaStreamUrl, buildIncomingTwiML, buildGreetingTwiML, buildUnavailableTwiML, buildFallbackTwiML, buildForwardCallTwiML, makeCall };
+export async function redirectToGreeting(callSid) {
+  const client = getClient();
+  if (!client || !callSid) {
+    logger.warn('REDIRECT_TO_GREETING_SKIPPED', { callSid, reason: !client ? 'no_client' : 'no_callSid' });
+    return false;
+  }
+  try {
+    await client.calls(callSid).update({
+      twiml: buildGreetingTwiML(),
+    });
+    logger.info('CALL_REDIRECTED_TO_GREETING', { callSid });
+    return true;
+  } catch (err) {
+    logger.warn('CALL_REDIRECT_TO_GREETING_FAILED', { callSid, error: err.message });
+    return false;
+  }
+}
+
+export default { validateTwilioRequest, buildMediaStreamUrl, buildIncomingTwiML, buildGreetingTwiML, buildUnavailableTwiML, buildFallbackTwiML, buildForwardCallTwiML, makeCall, redirectToGreeting };

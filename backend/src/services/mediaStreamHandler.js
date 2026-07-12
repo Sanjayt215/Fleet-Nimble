@@ -20,6 +20,7 @@ import { mapToOpenAIVoice, buildSystemPrompt, buildToolDefinitions } from './rec
 import * as orchestrator from './receptionistOrchestrator.service.js';
 import * as transcriptService from './receptionistTranscript.service.js';
 import * as callService from './receptionistCall.service.js';
+import { redirectToGreeting } from './twilioWebhook.service.js';
 
 const OPENAI_REALTIME_URL = 'wss://api.openai.com/v1/realtime';
 const MAX_RECONNECT_ATTEMPTS = 3;
@@ -624,6 +625,15 @@ function handleMediaStream(ws, req) {
     if (sessionUpdateTimer) {
       clearTimeout(sessionUpdateTimer);
       sessionUpdateTimer = null;
+    }
+
+    const greetingNeverSent = !greetingSent && rtmSession && !rtmSession.greetingAudioReceived;
+
+    if (greetingNeverSent && callSid) {
+      logger.info('FALLBACK_REDIRECT_TO_GREETING', { callSid });
+      try {
+        await redirectToGreeting(callSid);
+      } catch { /* best effort */ }
     }
 
     try {

@@ -1,6 +1,7 @@
 import { verifyAccessToken } from '../utils/jwt.js';
 import prisma from '../utils/prisma.js';
 import { AppError } from './errorHandler.js';
+import logger from '../utils/logger.js';
 
 export async function authenticate(req, res, next) {
   try {
@@ -19,19 +20,44 @@ export async function authenticate(req, res, next) {
     req.userId = user.id;
     next();
   } catch (err) {
-    console.error('AUTH ERROR', err);
-    console.error(err.stack);
-    // Always return 401 for auth errors, never 500
-    if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
+    if (err.name === 'TokenExpiredError') {
+      logger.info('ACCESS_TOKEN_EXPIRED', {
+        path: req.originalUrl,
+        method: req.method,
+      });
       return res.status(401).json({
         success: false,
-        error: { code: 'UNAUTHORIZED', message: 'Invalid or expired token' }
+        code: 'ACCESS_TOKEN_EXPIRED',
+        message: 'Your session access token has expired.',
+        error: { code: 'ACCESS_TOKEN_EXPIRED', message: 'Your session access token has expired.' },
       });
     }
-    // Convert any error to 401 to prevent 500
+    if (err.name === 'JsonWebTokenError') {
+      logger.warn('INVALID_ACCESS_TOKEN', {
+        path: req.originalUrl,
+        method: req.method,
+      });
+      return res.status(401).json({
+        success: false,
+        code: 'INVALID_ACCESS_TOKEN',
+        message: 'Authentication token is invalid.',
+        error: { code: 'INVALID_ACCESS_TOKEN', message: 'Authentication token is invalid.' },
+      });
+    }
+    if (err.isOperational) {
+      return res.status(err.statusCode || 401).json({
+        success: false,
+        code: err.code || 'UNAUTHORIZED',
+        message: err.message,
+        error: { code: err.code || 'UNAUTHORIZED', message: err.message },
+      });
+    }
+    logger.error('AUTH_INTERNAL_ERROR', { path: req.originalUrl, error: err.message });
     return res.status(401).json({
       success: false,
-      error: { code: 'UNAUTHORIZED', message: err.message || 'Authentication failed' }
+      code: 'UNAUTHORIZED',
+      message: 'Authentication failed',
+      error: { code: 'UNAUTHORIZED', message: 'Authentication failed' },
     });
   }
 }
