@@ -69,29 +69,58 @@ export function buildMediaStreamUrl(baseUrl = config.publicUrl) {
   }
 }
 
+export function buildStreamStatusUrl(baseUrl = config.publicUrl) {
+  return `${baseUrl.replace(/\/+$/, '')}/api/ai-receptionist/twilio/stream-status`;
+}
+
+export function buildPostStreamUrl(baseUrl = config.publicUrl) {
+  return `${baseUrl.replace(/\/+$/, '')}/api/ai-receptionist/twilio/post-stream`;
+}
+
 export function buildIncomingTwiML(callSid, from, to, cfg = {}) {
   const twiml = new VoiceResponse();
   const streamUrl = buildMediaStreamUrl(cfg.publicUrl || config.publicUrl);
   const wsHost = new URL(streamUrl).host;
   const wsPath = new URL(streamUrl).pathname;
+  const statusCallbackUrl = buildStreamStatusUrl(cfg.publicUrl || config.publicUrl);
 
   const connect = twiml.connect();
-  const stream = connect.stream({ url: streamUrl, track: 'both_tracks' });
+  const stream = connect.stream({
+    url: streamUrl,
+    statusCallback: statusCallbackUrl,
+    statusCallbackMethod: 'POST',
+  });
 
-  // Pass call context as Twilio <Parameter> children (available in the `start` event).
   if (callSid) stream.parameter({ name: 'callSid', value: callSid });
   if (from) stream.parameter({ name: 'from', value: from });
   if (to) stream.parameter({ name: 'to', value: to });
+
+  const postStreamUrl = buildPostStreamUrl(cfg.publicUrl || config.publicUrl);
+  twiml.redirect({ method: 'POST' }, postStreamUrl);
 
   logger.info('TWIML_MEDIA_STREAM_GENERATED', {
     wsHost,
     wsPath,
     hasConnect: true,
     hasStream: true,
-    hasTrackAttribute: true,
+    hasTrackAttribute: false,
+    hasStatusCallback: true,
+    hasPostStreamRedirect: true,
     CallSidPresent: Boolean(callSid),
   });
   return twiml.toString();
+}
+
+export function buildPostStreamFallbackTwiML(callSid) {
+  const twiml = new VoiceResponse();
+  twiml.say(
+    { voice: 'alice', language: 'en-US' },
+    'Hello. Thank you for calling FleetNimble. Our AI voice service is temporarily unavailable. A member of the FleetNimble team can assist you shortly. Please try again later.'
+  );
+  twiml.hangup();
+  const twimlStr = twiml.toString();
+  logger.info('POST_STREAM_FALLBACK_TWIML', { callSid });
+  return twimlStr;
 }
 
 export function buildGreetingTwiML() {
@@ -181,4 +210,4 @@ export async function redirectToGreeting(callSid) {
   }
 }
 
-export default { validateTwilioRequest, buildMediaStreamUrl, buildIncomingTwiML, buildGreetingTwiML, buildUnavailableTwiML, buildFallbackTwiML, buildForwardCallTwiML, makeCall, redirectToGreeting };
+export default { validateTwilioRequest, buildMediaStreamUrl, buildIncomingTwiML, buildPostStreamFallbackTwiML, buildGreetingTwiML, buildUnavailableTwiML, buildFallbackTwiML, buildForwardCallTwiML, makeCall, redirectToGreeting, buildStreamStatusUrl, buildPostStreamUrl };

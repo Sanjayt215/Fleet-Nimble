@@ -445,7 +445,6 @@ function handleMediaStream(ws, req) {
       openaiWs = new WebSocket(openaiUrl, {
         headers: {
           Authorization: `Bearer ${config.openai.apiKey}`,
-          'OpenAI-Beta': 'realtime=v1',
         },
       });
       if (rtmSession) rtmSession.openAiSocket = openaiWs;
@@ -467,7 +466,8 @@ function handleMediaStream(ws, req) {
 
       const tools = BUSINESS_TOOLS_ENABLED ? buildToolDefinitions(true) : [];
 
-      const sessionUpdatePayload = {
+      // Send minimal session.update first — some models reject unknown fields
+      const basePayload = {
         type: 'session.update',
         session: {
           modalities: ['text', 'audio'],
@@ -475,20 +475,22 @@ function handleMediaStream(ws, req) {
           voice,
           input_audio_format: 'g711_ulaw',
           output_audio_format: 'g711_ulaw',
-          input_audio_transcription: { enabled: true, model: 'whisper-1' },
           turn_detection: {
             type: 'server_vad',
             threshold: 0.5,
             prefix_padding_ms: 300,
             silence_duration_ms: 600,
-            interrupt_response: true,
           },
-          temperature: 0.7,
-          tools,
-          tool_choice: 'auto',
         },
       };
-      openaiWs.send(JSON.stringify(sessionUpdatePayload));
+      openaiWs.send(JSON.stringify(basePayload));
+      if (tools.length > 0) {
+        scheduleTimer(() => {
+          if (isClosing || openaiWs?.readyState !== WebSocket.OPEN) return;
+          const toolsPayload = { type: 'session.update', session: { tools, tool_choice: 'auto' } };
+          openaiWs.send(JSON.stringify(toolsPayload));
+        }, 2000);
+      }
 
       sessionCreatedTimer = setTimeout(() => {
         if (isClosing) return;
@@ -607,6 +609,24 @@ function handleMediaStream(ws, req) {
         gracefulClose();
       }
     });
+
+    openaiWs.on('unexpected-response', (req, res) => {
+      let bodyChunks = [];
+      res.on('data', (chunk) => bodyChunks.push(chunk));
+      res.on('end', () => {
+        const body = Buffer.concat(bodyChunks).toString();
+        logger.error('OPENAI_UNEXPECTED_RESPONSE', {
+          callSid,
+          statusCode: res.statusCode,
+          statusMessage: res.statusMessage,
+          headers: res.headers,
+          body,
+          model: config.realtime.model,
+        });
+        RealtimeModelValidator.markFailed(config.realtime.model, `http_${res.statusCode}: ${body}`);
+        gracefulClose();
+      });
+    });
   }
 
   async function gracefulClose() {
@@ -627,10 +647,10 @@ function handleMediaStream(ws, req) {
       sessionUpdateTimer = null;
     }
 
-    const greetingNeverSent = !greetingSent && rtmSession && !rtmSession.greetingAudioReceived;
+    const greetingNotDelivered = !greetingSent || (rtmSession && !rtmSession.greetingAudioReceived && greetingSent);
 
-    if (greetingNeverSent && callSid) {
-      logger.info('FALLBACK_REDIRECT_TO_GREETING', { callSid });
+    if (greetingNotDelivered && callSid) {
+      logger.info('FALLBACK_REDIRECT_TO_GREETING', { callSid, greetingSent, greetingAudioReceived: rtmSession?.greetingAudioReceived });
       try {
         await redirectToGreeting(callSid);
       } catch { /* best effort */ }
@@ -1006,13 +1026,14 @@ export async function handleOpenAIMessage(msg, rtmSession, legacySession, openai
       break;
 
     case 'response.audio.delta': {
-      if (!msg.delta || typeof msg.delta !== 'string' || msg.delta.length === 0) {
-        logger.warn('OPENAI_AUDIO_DELTA_REJECTED', { callSid, reason: 'empty_or_nonstring' });
+      const audioDelta = msg.delta || msg.audio || msg.payload;
+      if (!audioDelta || typeof audioDelta !== 'string' || audioDelta.length === 0) {
+        logger.warn('OPENAI_AUDIO_DELTA_REJECTED', { callSid, reason: 'empty_or_nonstring', fieldSource: Object.keys(msg).filter(k => ['delta','audio','payload'].includes(k)) });
         if (rtmSession) rtmSession.droppedPackets++;
         break;
       }
 
-      const deltaSize = msg.delta.length;
+      const deltaSize = audioDelta.length;
       logger.info('OPENAI_AUDIO_DELTA_RECEIVED', { callSid, deltaSize });
       const streamSid = rtmSession?.streamSid || legacySession?.streamSid;
 
@@ -1036,7 +1057,7 @@ export async function handleOpenAIMessage(msg, rtmSession, legacySession, openai
         twilioSocket.send(JSON.stringify({
           event: 'media',
           streamSid,
-          media: { payload: msg.delta },
+          media: { payload: audioDelta },
         }));
         logger.info('TWILIO_AUDIO_FRAME_SENT', { callSid, deltaSize });
       } else {

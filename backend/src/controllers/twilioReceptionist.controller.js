@@ -87,6 +87,55 @@ export async function handleFallbackCall(req, res) {
   }
 }
 
+export async function handleStreamStatus(req, res) {
+  try {
+    const valid = twilioWebhook.validateTwilioRequest(req);
+    if (!valid) {
+      return res.status(403).send('');
+    }
+
+    const { StreamSid, CallSid, StreamEvent, StreamError } = req.body || {};
+    const safeEvent = StreamEvent || 'unknown';
+    const safeError = StreamError || null;
+
+    logger.info('STREAM_STATUS_CALLBACK_RECEIVED', {
+      streamEvent: safeEvent,
+      streamError: safeError,
+      callSidMasked: CallSid ? CallSid.slice(-4) : 'unknown',
+      streamSidMasked: StreamSid ? StreamSid.slice(-4) : 'unknown',
+    });
+
+    if (safeError) {
+      logger.warn('STREAM_STATUS_ERROR', {
+        streamEvent: safeEvent,
+        streamError: safeError,
+        callSidMasked: CallSid ? CallSid.slice(-4) : 'unknown',
+      });
+    }
+
+    res.status(204).send('');
+  } catch (err) {
+    logger.error('STREAM_STATUS_ERROR', { error: err.message });
+    res.status(204).send('');
+  }
+}
+
+export async function handlePostStreamFallback(req, res) {
+  try {
+    const { CallSid } = req.body || {};
+
+    logger.info('POST_STREAM_FALLBACK_EXECUTED', {
+      callSidMasked: CallSid ? CallSid.slice(-4) : 'unknown',
+    });
+
+    const twiml = twilioWebhook.buildPostStreamFallbackTwiML(CallSid);
+    res.type('text/xml').send(twiml);
+  } catch (err) {
+    logger.error('POST_STREAM_FALLBACK_ERROR', { error: err.message });
+    res.type('text/xml').send(twilioWebhook.buildFallbackTwiML());
+  }
+}
+
 export async function handleStatusCallback(req, res) {
   try {
     const { CallSid, CallStatus, CallDuration, From, To, AccountSid } = req.body || {};
