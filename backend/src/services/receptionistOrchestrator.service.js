@@ -191,7 +191,7 @@ export async function handleConfirmation(session, userText) {
   return { reply: 'How else can I help you today?', intent: 'clarifying' };
 }
 
-async function executeAppointmentCreation(session) {
+export async function executeAppointmentCreation(session) {
   const { userId, callId, customerId, collectedData = {} } = session;
   const executionId = `${callId}_create_appointment`;
   if (PENDING_ACTIONS.has(executionId)) {
@@ -268,12 +268,23 @@ async function executeAppointmentCreation(session) {
 
     return { reply, intent: 'appointment_created', isComplete: true, actionResult: { type: 'appointment', id: appointment.id }, collectedData };
   } catch (err) {
-    logger.error('APPOINTMENT_CREATION_ERROR', { error: err.message });
-    return { reply: 'I apologize, but I encountered an issue creating the appointment. Our team has been notified and will follow up. Is there anything else?', intent: 'error' };
+    logger.error('VOICE_AGENT_TOOL_FAILED', {
+      tool: 'create_appointment',
+      error: err.message,
+      stack: err.stack,
+      userId,
+      callId,
+      customerId,
+      payload: collectedData,
+      prismaError: err.code || null,
+      constraint: err.meta?.constraint || null,
+      field: err.meta?.field_name || null,
+    });
+    return { reply: 'I apologize, but I encountered an issue creating the appointment. Our team has been notified and will follow up. Is there anything else?', intent: 'error', error: err.message };
   }
 }
 
-async function executeSupportTicketCreation(session) {
+export async function executeSupportTicketCreation(session) {
   const { userId, callId, customerId, collectedData = {} } = session;
   const executionId = `${callId}_create_support_ticket`;
   if (PENDING_ACTIONS.has(executionId)) {
@@ -333,8 +344,18 @@ async function executeSupportTicketCreation(session) {
 
     return { reply, intent: 'support_ticket_created', isComplete: true, actionResult: { type: 'support_ticket', id: ticket.id }, collectedData };
   } catch (err) {
-    logger.error('TICKET_CREATION_ERROR', { error: err.message });
-    return { reply: 'I apologize, but I encountered an issue creating the support ticket. Our team has been notified. Is there anything else?', intent: 'error' };
+    logger.error('VOICE_AGENT_TOOL_FAILED', {
+      tool: 'create_support_ticket',
+      error: err.message,
+      stack: err.stack,
+      userId,
+      callId,
+      customerId,
+      payload: collectedData,
+      prismaError: err.code || null,
+      constraint: err.meta?.constraint || null,
+    });
+    return { reply: 'I apologize, but I encountered an issue creating the support ticket. Our team has been notified. Is there anything else?', intent: 'error', error: err.message };
   }
 }
 

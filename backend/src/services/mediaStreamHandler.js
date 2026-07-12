@@ -37,6 +37,9 @@ const ALLOWED_TOOLS = new Set([
 ]);
 
 const COMPLETED_TOOL_CALLS = new Set();
+const MAX_TOOL_RETRIES = 2;
+const TOOL_TIMEOUT_MS = 15000;
+const ROLLBACK_ACTIONS = [];
 
 function buildOpenAiUrl() {
   return `${OPENAI_REALTIME_URL}?model=${encodeURIComponent(config.realtime.model)}`;
@@ -124,6 +127,198 @@ function handleMediaStream(ws, req) {
     }
   }
 
+  async function executeToolCall(functionName, args) {
+    let result;
+
+    switch (functionName) {
+      case 'lookup_customer': {
+        if (args?.phone && userId) {
+          const memory = await orchestrator.lookupCustomerByPhone(userId, args.phone);
+          if (memory) {
+            customerMemory = memory;
+            customerId = memory.customer?.id;
+            result = { found: true, name: memory.customer?.name, company: memory.customer?.companyName, isReturning: memory.isReturning, lastContact: memory.customer?.lastContactAt };
+          } else {
+            result = { found: false };
+          }
+        } else {
+          result = { found: false, reason: 'no_phone_or_user' };
+        }
+        break;
+      }
+
+      case 'create_appointment': {
+        if (!BUSINESS_TOOLS_ENABLED) {
+          logger.warn('VOICE_AGENT_TOOL_FAILED', { tool: 'create_appointment', error: 'feature_disabled', callSid });
+          return { error: 'feature_disabled', message: 'Business tools are currently disabled' };
+        }
+
+        collectedData.callerName = collectedData.callerName || args?.callerName;
+        collectedData.company = collectedData.company || args?.companyName;
+        collectedData.fleetSize = collectedData.fleetSize || args?.fleetSize;
+        collectedData.email = collectedData.email || args?.email;
+        collectedData.phone = collectedData.phone || args?.phone;
+        collectedData.meetingPurpose = collectedData.meetingPurpose || args?.meetingPurpose;
+
+        if (args?.scheduledDateTime) {
+          const dt = new Date(args.scheduledDateTime);
+          if (!isNaN(dt.getTime())) {
+            collectedData.preferredDate = dt.toISOString().split('T')[0];
+            collectedData.preferredTime = dt.toTimeString().split(' ')[0].substring(0, 5);
+          }
+        }
+
+        const session = {
+          userId, callId: callRecordId, customerId, collectedData,
+          currentStage, pendingAction,
+        };
+
+        let orchestratorResult;
+        try {
+          orchestratorResult = await orchestrator.executeAppointmentCreation(session);
+        } catch (err) {
+          logger.error('VOICE_AGENT_TOOL_FAILED', {
+            tool: 'create_appointment',
+            payload: args,
+            error: err.message,
+            stack: err.stack,
+            callSid,
+            customerId,
+            sessionId: callRecordId,
+            conversationState: currentStage,
+          });
+          return { success: false, message: 'I encountered a system error creating the appointment. Our team has been notified.', error: err.message };
+        }
+
+        if (orchestratorResult.actionResult) {
+          collectedData = orchestratorResult.collectedData || collectedData;
+          collectedData.appointmentCreated = true;
+          pendingAction = null;
+          currentStage = 'completed';
+          result = { success: true, appointmentId: orchestratorResult.actionResult.id, message: orchestratorResult.reply };
+        } else {
+          logger.error('VOICE_AGENT_TOOL_FAILED', {
+            tool: 'create_appointment',
+            payload: args,
+            error: orchestratorResult.reply,
+            callSid,
+            customerId,
+            sessionId: callRecordId,
+            conversationState: currentStage,
+          });
+          result = { success: false, message: orchestratorResult.reply || 'Unable to create the appointment.', error: 'creation_failed' };
+        }
+        break;
+      }
+
+      case 'create_support_ticket': {
+        if (!BUSINESS_TOOLS_ENABLED) {
+          logger.warn('VOICE_AGENT_TOOL_FAILED', { tool: 'create_support_ticket', error: 'feature_disabled', callSid });
+          return { error: 'feature_disabled', message: 'Business tools are currently disabled' };
+        }
+        collectedData.issue = args?.issueTitle || args?.issueDescription || collectedData.issue;
+        collectedData.callerName = collectedData.callerName || args?.callerName;
+        collectedData.phone = collectedData.phone || args?.callerPhone;
+        collectedData.email = collectedData.email || args?.callerEmail;
+        collectedData.company = collectedData.company || args?.companyName;
+        collectedData.urgency = args?.urgency || collectedData.urgency || 'MEDIUM';
+        collectedData.vehicleReference = args?.relatedVehicle || collectedData.vehicleReference;
+
+        const session = {
+          userId, callId: callRecordId, customerId, collectedData,
+          currentStage, pendingAction,
+        };
+
+        let orchestratorResult;
+        try {
+          orchestratorResult = await orchestrator.executeSupportTicketCreation(session);
+        } catch (err) {
+          logger.error('VOICE_AGENT_TOOL_FAILED', {
+            tool: 'create_support_ticket',
+            payload: args,
+            error: err.message,
+            stack: err.stack,
+            callSid,
+            customerId,
+            sessionId: callRecordId,
+            conversationState: currentStage,
+          });
+          return { success: false, message: 'I encountered a system error creating the support ticket. Our team has been notified.', error: err.message };
+        }
+
+        if (orchestratorResult.actionResult) {
+          collectedData.supportTicketCreated = true;
+          pendingAction = null;
+          currentStage = 'completed';
+          result = { success: true, ticketId: orchestratorResult.actionResult.id, message: orchestratorResult.reply };
+        } else {
+          logger.error('VOICE_AGENT_TOOL_FAILED', {
+            tool: 'create_support_ticket',
+            payload: args,
+            error: orchestratorResult.reply,
+            callSid,
+            customerId,
+            sessionId: callRecordId,
+            conversationState: currentStage,
+          });
+          result = { success: false, message: orchestratorResult.reply || 'Unable to create the support ticket.', error: 'creation_failed' };
+        }
+        break;
+      }
+
+      case 'save_customer_note': {
+        if (customerId && args?.content) {
+          const { default: crmService } = await import('./receptionistCRM.service.js');
+          await crmService.addCustomerNote(userId, customerId, args.content, args.noteType || 'CALL');
+          result = { success: true, noteSaved: true };
+        } else {
+          result = { success: false, reason: 'missing_customer_or_content' };
+        }
+        break;
+      }
+
+      case 'request_human_handoff': {
+        const department = args?.department || 'support';
+        if (callRecordId) {
+          const { default: handoffService } = await import('./receptionistHandoff.service.js');
+          await handoffService.escalateCall(callRecordId, args?.reason || 'Caller requested human', department);
+        }
+        result = { success: true, department, message: 'Handoff initiated' };
+        break;
+      }
+
+      case 'end_call': {
+        result = { success: true, message: 'Ending call' };
+        scheduleTimer(() => {
+          endCallGracefully('Thank you for calling FleetNimble. Have a great day! Goodbye.');
+        }, 1000);
+        break;
+      }
+
+      default:
+        result = { error: 'not_implemented', message: `Tool ${functionName} not implemented` };
+    }
+
+    return result;
+  }
+
+  async function rollbackToolCall(functionName, originalArgs) {
+    logger.warn('TOOL_ROLLBACK', { callSid, functionName });
+    switch (functionName) {
+      case 'create_appointment':
+        collectedData.appointmentCreated = false;
+        currentStage = 'collecting';
+        break;
+      case 'create_support_ticket':
+        collectedData.supportTicketCreated = false;
+        currentStage = 'collecting';
+        break;
+      case 'save_customer_note':
+        break;
+    }
+    ROLLBACK_ACTIONS.length = 0;
+  }
+
   async function handleToolCall(functionName, args, callId) {
     const toolCallKey = `${callSid}_${functionName}_${callId}`;
     if (COMPLETED_TOOL_CALLS.has(toolCallKey)) {
@@ -138,116 +333,68 @@ function handleMediaStream(ws, req) {
 
     logger.info('TOOL_CALL_EXECUTING', { callSid, functionName, args });
 
-    try {
-      let result;
+    let lastError = null;
+    const maxRetries = functionName === 'lookup_customer' ? 0 : MAX_TOOL_RETRIES;
 
-      switch (functionName) {
-        case 'lookup_customer': {
-          if (args?.phone && userId) {
-            const memory = await orchestrator.lookupCustomerByPhone(userId, args.phone);
-            if (memory) {
-              customerMemory = memory;
-              customerId = memory.customer?.id;
-              result = { found: true, name: memory.customer?.name, company: memory.customer?.companyName, isReturning: memory.isReturning, lastContact: memory.customer?.lastContactAt };
-            } else {
-              result = { found: false };
-            }
-          } else {
-            result = { found: false, reason: 'no_phone_or_user' };
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('tool_timeout')), TOOL_TIMEOUT_MS)
+      );
+
+      try {
+        const result = await Promise.race([
+          executeToolCall(functionName, args),
+          timeoutPromise,
+        ]);
+
+        if (result && result.success === false && attempt < maxRetries) {
+          lastError = result.error || 'transient_failure';
+          logger.warn('TOOL_RETRY', { callSid, functionName, attempt, error: lastError });
+          if (attempt < maxRetries - 1) {
+            await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 500));
           }
-          break;
+          continue;
         }
 
-        case 'create_appointment': {
-          if (!BUSINESS_TOOLS_ENABLED) {
-            return { error: 'feature_disabled', message: 'Business tools are currently disabled' };
-          }
-          const session = {
-            userId, callId: callRecordId, customerId, collectedData,
-            currentStage, pendingAction,
-          };
-          const orchestratorResult = await orchestrator.executeAppointmentCreation(session);
-          if (orchestratorResult.actionResult) {
-            COMPLETED_TOOL_CALLS.add(toolCallKey);
-            collectedData = orchestratorResult.collectedData || collectedData;
-            collectedData.appointmentCreated = true;
-            pendingAction = null;
-            currentStage = 'completed';
-            result = { success: true, appointmentId: orchestratorResult.actionResult.id, message: orchestratorResult.reply };
-          } else {
-            result = { success: false, message: orchestratorResult.reply, error: 'creation_failed' };
-          }
-          break;
+        COMPLETED_TOOL_CALLS.add(toolCallKey);
+        return result;
+      } catch (err) {
+        lastError = err.message;
+        logger.warn('TOOL_RETRY', { callSid, functionName, attempt, error: err.message });
+
+        if (attempt < maxRetries) {
+          const delay = Math.pow(2, attempt) * 500;
+          await new Promise(r => setTimeout(r, delay));
+          continue;
         }
 
-        case 'create_support_ticket': {
-          if (!BUSINESS_TOOLS_ENABLED) {
-            return { error: 'feature_disabled', message: 'Business tools are currently disabled' };
-          }
-          collectedData.issue = args?.issueTitle || args?.issueDescription || collectedData.issue;
-          collectedData.callerName = collectedData.callerName || args?.callerName;
-          collectedData.phone = collectedData.phone || args?.callerPhone;
-          collectedData.email = collectedData.email || args?.callerEmail;
-          collectedData.company = collectedData.company || args?.companyName;
-          collectedData.urgency = args?.urgency || collectedData.urgency || 'MEDIUM';
-          collectedData.vehicleReference = args?.relatedVehicle || collectedData.vehicleReference;
+        await rollbackToolCall(functionName, args);
 
-          const session = {
-            userId, callId: callRecordId, customerId, collectedData,
-            currentStage, pendingAction,
-          };
-          const orchestratorResult = await orchestrator.executeSupportTicketCreation(session);
-          if (orchestratorResult.actionResult) {
-            COMPLETED_TOOL_CALLS.add(toolCallKey);
-            collectedData.supportTicketCreated = true;
-            pendingAction = null;
-            currentStage = 'completed';
-            result = { success: true, ticketId: orchestratorResult.actionResult.id, message: orchestratorResult.reply };
-          } else {
-            result = { success: false, message: orchestratorResult.reply, error: 'creation_failed' };
-          }
-          break;
-        }
-
-        case 'save_customer_note': {
-          if (customerId && args?.content) {
-            const { default: crmService } = await import('./receptionistCRM.service.js');
-            await crmService.addCustomerNote(userId, customerId, args.content, args.noteType || 'CALL');
-            result = { success: true };
-          } else {
-            result = { success: false, reason: 'missing_customer_or_content' };
-          }
-          break;
-        }
-
-        case 'request_human_handoff': {
-          const department = args?.department || 'support';
-          if (callRecordId) {
-            const { default: handoffService } = await import('./receptionistHandoff.service.js');
-            await handoffService.escalateCall(callRecordId, args?.reason || 'Caller requested human', department);
-          }
-          result = { success: true, department, message: 'Handoff initiated' };
-          break;
-        }
-
-        case 'end_call': {
-          result = { success: true, message: 'Ending call' };
-          scheduleTimer(() => {
-            endCallGracefully('Thank you for calling FleetNimble. Have a great day! Goodbye.');
-          }, 1000);
-          break;
-        }
-
-        default:
-          result = { error: 'not_implemented', message: `Tool ${functionName} not implemented` };
+        logger.error('VOICE_AGENT_TOOL_FAILED', {
+          tool: functionName,
+          payload: args,
+          error: err.message,
+          stack: err.stack,
+          callSid,
+          customerId,
+          sessionId: callRecordId,
+          conversationState: currentStage,
+        });
+        return { success: false, message: 'I encountered an issue processing that request. Our team has been notified.', error: err.message };
       }
-
-      COMPLETED_TOOL_CALLS.add(toolCallKey);
-      return result;
-    } catch (err) {
-      logger.error('TOOL_CALL_ERROR', { callSid, functionName, error: err.message });
-      return { error: 'execution_error', message: err.message };
     }
+
+    await rollbackToolCall(functionName, args);
+    logger.error('VOICE_AGENT_TOOL_FAILED', {
+      tool: functionName,
+      payload: args,
+      error: lastError || 'max_retries_exceeded',
+      callSid,
+      customerId,
+      sessionId: callRecordId,
+      conversationState: currentStage,
+    });
+    return { success: false, message: 'Unable to complete that action after multiple attempts.', error: lastError || 'max_retries_exceeded' };
   }
 
   function connectToOpenAI() {

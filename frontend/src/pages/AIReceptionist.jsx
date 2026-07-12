@@ -1,13 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
-import VoiceReceptionistAgent from './VoiceReceptionistAgent';
+import AIPhoneConsole from './AIPhoneConsole';
 import AppointmentModal from './AppointmentModal';
 import SupportTicketModal from './SupportTicketModal';
 import ReceptionistSettingsModal from './ReceptionistSettingsModal';
 import AnalyticsCards from './AnalyticsCards';
 import LiveCallsPanel from './LiveCallsPanel';
 import CallDetailModal from './CallDetailModal';
-import RealtimeStatusIndicators from './RealtimeStatusIndicators';
 
 const TABS = [
   { id: 'voice', label: 'Voice Agent' },
@@ -191,12 +190,9 @@ export default function AIReceptionist() {
         </div>
       )}
 
-      {/* Phone Status Indicators */}
-      <RealtimeStatusIndicators />
-
-      {/* Voice Agent Tab - Primary */}
+      {/* Voice Agent Tab - Phone Console */}
       {activeTab === 'voice' && (
-        <VoiceReceptionistAgent showToast={showToast} />
+        <AIPhoneConsole showToast={showToast} />
       )}
 
       {/* Admin Tools Tab */}

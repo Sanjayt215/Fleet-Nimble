@@ -48,3 +48,45 @@
     @apply rounded-lg border border-cyan-500/30 bg-slate-900 p-6 text-cyan-100;
   }
 }
+
+@layer utilities {
+  @keyframes receptionist-listening {
+    0%, 100% { transform: scale(1); opacity: 0.4; }
+    50% { transform: scale(1.08); opacity: 0.7; }
+  }
+  @keyframes receptionist-thinking {
+    0%, 100% { transform: rotate(0deg); }
+    50% { transform: rotate(180deg); }
+  }
+  @keyframes receptionist-speaking {
+    0%, 100% { transform: scale(1); opacity: 0.3; }
+    25% { transform: scale(1.02) translateX(-2px); opacity: 0.5; }
+    75% { transform: scale(1.02) translateX(2px); opacity: 0.5; }
+  }
+  @keyframes receptionist-pulse {
+    0%, 100% { transform: scale(1); opacity: 0.5; }
+    50% { transform: scale(1.12); opacity: 0.8; }
+  }
+  @keyframes receptionist-alert {
+    0%, 100% { transform: scale(1); opacity: 0.3; }
+    25% { transform: scale(1.05); opacity: 0.7; }
+    50% { transform: scale(0.95); opacity: 0.5; }
+    75% { transform: scale(1.05); opacity: 0.7; }
+  }
+
+  .animate-receptionist-listening {
+    animation: receptionist-listening 1.5s ease-in-out infinite;
+  }
+  .animate-receptionist-thinking {
+    animation: receptionist-thinking 2s ease-in-out infinite;
+  }
+  .animate-receptionist-speaking {
+    animation: receptionist-speaking 1.2s ease-in-out infinite;
+  }
+  .animate-receptionist-pulse {
+    animation: receptionist-pulse 1s ease-in-out infinite;
+  }
+  .animate-receptionist-alert {
+    animation: receptionist-alert 0.6s ease-in-out infinite;
+  }
+}
