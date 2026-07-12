@@ -192,10 +192,15 @@ export async function handleConfirmation(session, userText) {
 }
 
 export async function executeAppointmentCreation(session) {
-  const { userId, callId, customerId, collectedData = {} } = session;
+  const { userId, companyId, callId, customerId, collectedData = {} } = session;
   const executionId = `${callId}_create_appointment`;
   if (PENDING_ACTIONS.has(executionId)) {
     return { reply: 'The appointment has already been created. Is there anything else?', intent: 'completed' };
+  }
+
+  if (!userId || !companyId) {
+    logger.error('APPOINTMENT_CREATION_SKIPPED_NO_OWNER', { callId });
+    return { reply: 'I apologize, but our system is unable to create appointments at this time. Our team has been notified.', intent: 'error', error: 'missing_owner' };
   }
 
   try {
@@ -206,63 +211,103 @@ export async function executeAppointmentCreation(session) {
       throw new Error('Invalid date/time');
     }
 
-    const appointment = await appointmentService.createAppointment(userId, {
-      callerName: collectedData.callerName || 'Caller',
-      callerPhone: collectedData.phone || null,
-      callerEmail: collectedData.email || null,
-      companyName: collectedData.company || null,
-      fleetSize: collectedData.fleetSize || null,
-      meetingPurpose: collectedData.meetingPurpose || 'General inquiry',
-      meetingTitle: collectedData.meetingPurpose ? `${collectedData.meetingPurpose} - FleetNimble` : 'FleetNimble Meeting',
-      scheduledDate: scheduledDate.toISOString(),
-      durationMinutes: 30,
+    const appointment = await prisma.aiReceptionistAppointment.create({
+      data: {
+        userId,
+        companyId,
+        callerName: collectedData.callerName || 'Caller',
+        callerPhone: collectedData.phone || null,
+        callerEmail: collectedData.email || null,
+        companyName: collectedData.company || null,
+        fleetSize: collectedData.fleetSize || null,
+        meetingPurpose: collectedData.meetingPurpose || 'General inquiry',
+        meetingTitle: collectedData.meetingPurpose ? `${collectedData.meetingPurpose} - FleetNimble` : 'FleetNimble Meeting',
+        scheduledDate,
+        durationMinutes: 30,
+        status: 'SCHEDULED',
+      },
     });
 
     PENDING_ACTIONS.set(executionId, { id: appointment.id, timestamp: Date.now() });
 
     if (callId) {
-      await callService.updateCall(userId, callId, {
-        appointmentId: appointment.id,
-        callType: 'DEMO',
-      }).catch(e => logger.warn('CALL_APPOINTMENT_LINK_FAILED', { callId, error: e.message }));
+      try {
+        await prisma.aiReceptionistCall.update({
+          where: { id: callId },
+          data: { appointmentId: appointment.id, callType: 'DEMO' },
+        });
+      } catch (e) {
+        logger.warn('CALL_APPOINTMENT_LINK_FAILED', { callId, error: e.message });
+      }
     }
 
-    const calResult = await calendarService.createCalendarEvent(userId, appointment).catch(() => ({ provider: 'internal', eventId: null }));
+    let calResult;
+    try {
+      calResult = await calendarService.createCalendarEvent(userId, appointment);
+    } catch {
+      calResult = { provider: 'internal', eventId: null };
+    }
     if (calResult.provider !== 'internal') {
-      await appointmentService.updateAppointment(userId, appointment.id, {
-        calendarProvider: calResult.provider,
-        calendarEventId: calResult.eventId,
-        meetingLink: calResult.meetingLink || null,
-      }).catch(() => {});
+      try {
+        await prisma.aiReceptionistAppointment.update({
+          where: { id: appointment.id },
+          data: {
+            calendarProvider: calResult.provider,
+            calendarEventId: calResult.eventId,
+            meetingLink: calResult.meetingLink || null,
+          },
+        });
+      } catch {}
     }
 
-    await notificationService.sendConfirmationEmail(userId, appointment).catch(() => {});
+    try { await notificationService.sendConfirmationEmail(userId, appointment); } catch {}
     if (collectedData.phone) {
-      await notificationService.sendSmsNotification(userId, collectedData.phone,
-        `Your FleetNimble meeting has been scheduled for ${scheduledDate.toLocaleString()}. Confirmation: ${appointment.id.substring(0, 8)}`
-      ).catch(() => {});
+      try {
+        await notificationService.sendSmsNotification(userId, collectedData.phone,
+          `Your FleetNimble meeting has been scheduled for ${scheduledDate.toLocaleString()}. Confirmation: ${appointment.id.substring(0, 8)}`
+        );
+      } catch {}
     }
-    await notificationService.notifyAdmin(userId, 'appointment_booked', {
-      appointmentId: appointment.id,
-      callerName: collectedData.callerName,
-      company: collectedData.company,
-      date: collectedData.preferredDate,
-    }).catch(() => {});
+    try {
+      await notificationService.notifyAdmin(userId, 'appointment_booked', {
+        appointmentId: appointment.id,
+        callerName: collectedData.callerName,
+        company: collectedData.company,
+        date: collectedData.preferredDate,
+      });
+    } catch {}
 
     if (customerId) {
-      await memoryService.updateCustomerAfterCall(customerId, {
-        appointmentId: appointment.id,
-        intent: 'schedule_meeting',
-        summary: `Scheduled: ${collectedData.meetingPurpose || 'General'} on ${collectedData.preferredDate}`,
-        sentiment: 'positive',
-      }).catch(() => {});
+      try {
+        await memoryService.updateCustomerAfterCall(customerId, {
+          appointmentId: appointment.id,
+          intent: 'schedule_meeting',
+          summary: `Scheduled: ${collectedData.meetingPurpose || 'General'} on ${collectedData.preferredDate}`,
+          sentiment: 'positive',
+        });
+      } catch {}
     }
 
-    await auditService.logCallEvent(userId, 'appointment_created', {
+    try {
+      await prisma.aiReceptionistAuditLog.create({
+        data: {
+          userId,
+          eventType: 'appointment_created',
+          metadata: {
+            appointmentId: appointment.id,
+            callerName: collectedData.callerName,
+            company: collectedData.company,
+          },
+        },
+      });
+    } catch {};
+
+    logger.info('APPOINTMENT_CREATED', {
       appointmentId: appointment.id,
-      callerName: collectedData.callerName,
-      company: collectedData.company,
-    }).catch(() => {});
+      callId,
+      userId,
+      companyId,
+    });
 
     const reply = `Perfect! Your meeting has been scheduled.\n\n- Purpose: ${collectedData.meetingPurpose || 'General'}\n- Date: ${collectedData.preferredDate}\n- Time: ${collectedData.preferredTime || '10:00'}\n- Confirmation: ${appointment.id.substring(0, 8)}\n\nIs there anything else I can help you with?`;
 
@@ -285,60 +330,95 @@ export async function executeAppointmentCreation(session) {
 }
 
 export async function executeSupportTicketCreation(session) {
-  const { userId, callId, customerId, collectedData = {} } = session;
+  const { userId, companyId, callId, customerId, collectedData = {} } = session;
   const executionId = `${callId}_create_support_ticket`;
   if (PENDING_ACTIONS.has(executionId)) {
     return { reply: 'The support ticket has already been created. Is there anything else?', intent: 'completed' };
   }
 
+  if (!userId || !companyId) {
+    logger.error('SUPPORT_TICKET_CREATION_SKIPPED_NO_OWNER', { callId });
+    return { reply: 'I apologize, but our system is unable to create support tickets at this time. Our team has been notified.', intent: 'error', error: 'missing_owner' };
+  }
+
   try {
-    const ticket = await supportService.createSupportTicket(userId, {
-      callerName: collectedData.callerName || 'Caller',
-      callerPhone: collectedData.phone || null,
-      callerEmail: collectedData.email || null,
-      companyName: collectedData.company || null,
-      issueTitle: collectedData.issue?.substring(0, 200) || 'Support request',
-      issueDescription: collectedData.issue || null,
-      urgency: collectedData.urgency || 'MEDIUM',
-      relatedVehicleId: collectedData.vehicleReference || null,
+    const ticket = await prisma.aiReceptionistSupportTicket.create({
+      data: {
+        userId,
+        companyId,
+        callerName: collectedData.callerName || 'Caller',
+        callerPhone: collectedData.phone || null,
+        callerEmail: collectedData.email || null,
+        companyName: collectedData.company || null,
+        issueTitle: collectedData.issue?.substring(0, 200) || 'Support request',
+        issueDescription: collectedData.issue || null,
+        urgency: collectedData.urgency || 'MEDIUM',
+        status: 'OPEN',
+        relatedVehicleId: collectedData.vehicleReference || null,
+      },
     });
 
     PENDING_ACTIONS.set(executionId, { id: ticket.id, timestamp: Date.now() });
 
     if (callId) {
-      await callService.updateCall(userId, callId, {
-        supportTicketId: ticket.id,
-        callType: 'SUPPORT',
-      }).catch(e => logger.warn('CALL_TICKET_LINK_FAILED', { callId, error: e.message }));
+      try {
+        await prisma.aiReceptionistCall.update({
+          where: { id: callId },
+          data: { supportTicketId: ticket.id, callType: 'SUPPORT' },
+        });
+      } catch (e) {
+        logger.warn('CALL_TICKET_LINK_FAILED', { callId, error: e.message });
+      }
     }
 
-    await notificationService.notifyAdmin(userId, 'support_ticket_created', {
-      ticketId: ticket.id,
-      issue: collectedData.issue?.substring(0, 100),
-      caller: collectedData.callerName,
-      urgency: collectedData.urgency || 'MEDIUM',
-    }).catch(() => {});
+    try {
+      await notificationService.notifyAdmin(userId, 'support_ticket_created', {
+        ticketId: ticket.id,
+        issue: collectedData.issue?.substring(0, 100),
+        caller: collectedData.callerName,
+        urgency: collectedData.urgency || 'MEDIUM',
+      });
+    } catch {}
 
     if (collectedData.phone) {
-      await notificationService.sendSmsNotification(userId, collectedData.phone,
-        `Your support ticket has been created (Ref: ${ticket.id.substring(0, 8)}). Our team will follow up soon.`
-      ).catch(() => {});
+      try {
+        await notificationService.sendSmsNotification(userId, collectedData.phone,
+          `Your support ticket has been created (Ref: ${ticket.id.substring(0, 8)}). Our team will follow up soon.`
+        );
+      } catch {}
     }
 
     if (customerId) {
-      await memoryService.updateCustomerAfterCall(customerId, {
-        ticketId: ticket.id,
-        intent: 'support_request',
-        summary: `Support ticket: ${collectedData.issue?.substring(0, 100)}`,
-        sentiment: 'neutral',
-      }).catch(() => {});
+      try {
+        await memoryService.updateCustomerAfterCall(customerId, {
+          ticketId: ticket.id,
+          intent: 'support_request',
+          summary: `Support ticket: ${collectedData.issue?.substring(0, 100)}`,
+          sentiment: 'neutral',
+        });
+      } catch {}
     }
 
-    await auditService.logCallEvent(userId, 'support_ticket_created', {
+    try {
+      await prisma.aiReceptionistAuditLog.create({
+        data: {
+          userId,
+          eventType: 'support_ticket_created',
+          metadata: {
+            ticketId: ticket.id,
+            issue: collectedData.issue?.substring(0, 100),
+            urgency: collectedData.urgency,
+          },
+        },
+      });
+    } catch {};
+
+    logger.info('SUPPORT_TICKET_CREATED', {
       ticketId: ticket.id,
-      issue: collectedData.issue?.substring(0, 100),
-      urgency: collectedData.urgency,
-    }).catch(() => {});
+      callId,
+      userId,
+      companyId,
+    });
 
     const reply = `Done! I have created a support ticket for your issue.\n\n- Reference: ${ticket.id.substring(0, 8)}\n- Issue: ${collectedData.issue}\n- Urgency: ${collectedData.urgency || 'MEDIUM'}\n\nOur support team will follow up with you soon. Is there anything else I can help you with?`;
 
@@ -367,9 +447,12 @@ export async function lookupCustomerByPhone(userId, phone) {
   }
   try {
     const normalized = phone.replace(/[^\d+]/g, '');
-    const where = { userId };
-    where.phone = normalized.length >= 10 ? { contains: normalized.slice(-10) } : normalized;
-    const customer = await prisma.receptionistCustomer.findFirst({ where });
+    const customer = await prisma.receptionistCustomer.findFirst({
+      where: {
+        userId,
+        phone: normalized,
+      },
+    });
     if (!customer) return null;
     const memory = await memoryService.getCustomerMemory(customer.id);
     return memory;
@@ -379,30 +462,36 @@ export async function lookupCustomerByPhone(userId, phone) {
   }
 }
 
-export async function createCallRecord({ userId, callSid, from, to, twilioAccountSid }) {
-  if (!userId) {
+export async function createCallRecord({ userId, companyId, callSid, from, to, twilioAccountSid }) {
+  if (!userId || !companyId) {
     logger.info('CALL_RECORD_SKIPPED_NO_OWNER', { callSid });
     return null;
   }
   try {
-    const existing = await prisma.aiReceptionistCall.findFirst({
-      where: { twilioCallSid: callSid },
-    });
-    if (existing) {
-      logger.info('CALL_RECORD_ALREADY_EXISTS', { callSid, callId: existing.id });
-      return existing;
-    }
+    const normalizedFrom = from ? from.replace(/[^\d+]/g, '') : null;
 
-    const call = await callService.createCall(userId, {
-      twilioCallSid: callSid,
-      twilioAccountSid: twilioAccountSid || null,
-      callerPhone: from || null,
-      twilioFrom: from || null,
-      twilioTo: to || null,
-      callStatus: 'IN_PROGRESS',
-      callStartedAt: new Date(),
-      callerName: 'Caller',
-      detectedLanguage: 'en',
+    const call = await prisma.aiReceptionistCall.upsert({
+      where: { twilioCallSid: callSid },
+      update: {
+        callStatus: 'IN_PROGRESS',
+        callerPhone: normalizedFrom,
+        twilioFrom: normalizedFrom,
+        twilioTo: to ? to.replace(/[^\d+]/g, '') : null,
+        twilioAccountSid: twilioAccountSid || null,
+      },
+      create: {
+        userId,
+        companyId,
+        twilioCallSid: callSid,
+        twilioAccountSid: twilioAccountSid || null,
+        callerPhone: normalizedFrom,
+        twilioFrom: normalizedFrom,
+        twilioTo: to ? to.replace(/[^\d+]/g, '') : null,
+        callStatus: 'IN_PROGRESS',
+        callStartedAt: new Date(),
+        callerName: 'Caller',
+        detectedLanguage: 'en',
+      },
     });
 
     logger.info('CALL_RECORD_CREATED', { callSid, callId: call.id });

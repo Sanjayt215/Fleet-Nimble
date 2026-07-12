@@ -39,6 +39,16 @@ vi.mock('ws', () => ({
   WebSocketServer: class extends EventEmitter {},
 }));
 
+// Mock orchestrator to avoid real Prisma calls in gracefulClose
+vi.mock('../src/services/receptionistOrchestrator.service.js', () => ({
+  createCallRecord: vi.fn().mockResolvedValue({ id: 'mock-call-id' }),
+  updateCallRecordAtEnd: vi.fn().mockResolvedValue(),
+  updateCRMAfterCall: vi.fn().mockResolvedValue(),
+  lookupCustomerByPhone: vi.fn().mockResolvedValue(null),
+  executeAppointmentCreation: vi.fn().mockResolvedValue({ actionResult: null, reply: 'mock' }),
+  executeSupportTicketCreation: vi.fn().mockResolvedValue({ actionResult: null, reply: 'mock' }),
+}));
+
 const { handleMediaStream } = await import('../src/services/mediaStreamHandler.js');
 const { config } = await import('../src/config/index.js');
 const { getSession, removeSession } = await import('../src/services/receptionistRealtime.service.js');
@@ -66,6 +76,10 @@ beforeEach(() => {
   setRealtimeReady(true);
   config.realtime.maxCallSeconds = 600;
   config.realtime.silenceTimeoutSeconds = 30;
+  // Wipe real Twilio creds so redirectToGreeting/getClient() returns null (no I/O)
+  config.twilio.accountSid = '';
+  config.twilio.authToken = '';
+  config.twilio.phoneNumber = '';
 });
 
 afterEach(() => {
@@ -95,7 +109,7 @@ describe('Streaming TwiML creation', () => {
     expect(twiml).toContain('<Parameter name="callSid" value="CA123"');
     expect(twiml).toContain('<Parameter name="from" value="+919876543210"');
     expect(twiml).toContain('<Parameter name="to" value="+1XXXXXXXXXX"');
-    expect(twiml).not.toContain('<Say');
+    expect(twiml).toContain('<Say');  // pre-stream greeting
     expect(twiml).not.toContain('<Hangup');
   });
 });
@@ -136,6 +150,9 @@ describe('Twilio media events', () => {
       session: { id: 'sess_123', model: 'gpt-4o-realtime-preview' },
     }));
 
+    // Greeting is gated on BOTH session.created AND session.updated
+    openai.emit('message', JSON.stringify({ type: 'session.updated' }));
+
     const greeting = openai.sent.find((m) => m.includes('response.create'));
     expect(greeting).toBeDefined();
     expect(greeting).toContain('FleetNimble AI Receptionist');
@@ -174,7 +191,7 @@ describe('Twilio media events', () => {
     expect(media).toContain('DELTA64');
   });
 
-  it('cleans up session on stop and closes the Twilio socket', () => {
+  it('cleans up session on stop and closes the Twilio socket', async () => {
     const ws = makeFakeTwilioWs();
     handleMediaStream(ws, { url: '/api/ai-receptionist/twilio/media-stream?callSid=CA123' });
     ws.emit('message', JSON.stringify({
@@ -184,6 +201,8 @@ describe('Twilio media events', () => {
     expect(getSession('CA123')).toBeDefined();
 
     ws.emit('message', JSON.stringify({ event: 'stop' }));
+    // gracefulClose is async — flush microtasks so it completes
+    await new Promise(resolve => setTimeout(resolve, 0));
     expect(getSession('CA123')).toBeUndefined();
     expect(ws.readyState).toBe(FakeWebSocket.CLOSED);
   });
@@ -208,7 +227,7 @@ describe('Twilio media events', () => {
 });
 
 describe('Realtime configuration and failures', () => {
-  it('falls back gracefully when realtime is not configured', () => {
+  it('falls back gracefully when realtime is not configured', async () => {
     setRealtimeReady(false);
     const ws = makeFakeTwilioWs();
     handleMediaStream(ws, { url: '/api/ai-receptionist/twilio/media-stream?callSid=CA123' });
@@ -216,11 +235,13 @@ describe('Realtime configuration and failures', () => {
       event: 'start',
       start: { streamSid: 'MZ123', callSid: 'CA123', customParameters: { callSid: 'CA123' } },
     }));
+    // connectToOpenAI calls gracefulClose which is async — flush microtasks
+    await new Promise(resolve => setTimeout(resolve, 0));
     expect(openaiSockets.length).toBe(0);
     expect(ws.readyState).toBe(FakeWebSocket.CLOSED);
   });
 
-  it('falls back gracefully on OpenAI connection error', () => {
+  it('falls back gracefully on OpenAI connection error', async () => {
     throwOnConstruct = true;
     const ws = makeFakeTwilioWs();
     handleMediaStream(ws, { url: '/api/ai-receptionist/twilio/media-stream?callSid=CA123' });
@@ -228,6 +249,8 @@ describe('Realtime configuration and failures', () => {
       event: 'start',
       start: { streamSid: 'MZ123', callSid: 'CA123', customParameters: { callSid: 'CA123' } },
     }));
+    // connectToOpenAI calls gracefulClose which is async — flush microtasks
+    await new Promise(resolve => setTimeout(resolve, 0));
     expect(ws.readyState).toBe(FakeWebSocket.CLOSED);
   });
 

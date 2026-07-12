@@ -25,7 +25,7 @@ import * as providerHealth from './receptionistProviderHealth.service.js';
 import { resolveTenant, isPersistenceAvailable, getResolvedOwner } from './receptionistTenantResolver.service.js';
 
 const OPENAI_REALTIME_URL = 'wss://api.openai.com/v1/realtime';
-const MAX_RECONNECT_ATTEMPTS = 3;
+const MAX_RECONNECT_ATTEMPTS = 2; // Phase 3 — max 2 retries, then redirect to greeting
 const SESSION_CREATED_TIMEOUT_MS = 8000;
 const SESSION_UPDATE_TIMEOUT_MS = 8000;
 const GREETING_AUDIO_TIMEOUT_MS = 10000;
@@ -95,6 +95,7 @@ function handleMediaStream(ws, req) {
 
   let callRecordId = null;
   let userId = null;
+  let companyId = null;
   let customerMemory = null;
   let customerId = null;
   let collectedData = {};
@@ -102,6 +103,20 @@ function handleMediaStream(ws, req) {
   let currentStage = 'greeting';
   let pendingAction = null;
   let callTranscriptBuffer = [];
+
+  // Phase 4 — audio pipeline counters
+  let pipelineCounters = {
+    incomingFrames: 0,
+    outgoingFrames: 0,
+    audioBytes: 0,
+    speechEvents: 0,
+    transcriptionEvents: 0,
+  };
+  // Phase 5 — zero-audio detection
+  let responseCreatedSeen = false;
+  let responseAudioSeen = false;
+  let pipelineFailStage = null;
+  let pipelineFailReason = null;
 
   function scheduleTimer(fn, ms) {
     const handle = setTimeout(() => {
@@ -205,7 +220,7 @@ function handleMediaStream(ws, req) {
         }
 
         const session = {
-          userId, callId: callRecordId, customerId, collectedData,
+          userId, companyId, callId: callRecordId, customerId, collectedData,
           currentStage, pendingAction,
         };
 
@@ -261,7 +276,7 @@ function handleMediaStream(ws, req) {
         collectedData.vehicleReference = args?.relatedVehicle || collectedData.vehicleReference;
 
         const session = {
-          userId, callId: callRecordId, customerId, collectedData,
+          userId, companyId, callId: callRecordId, customerId, collectedData,
           currentStage, pendingAction,
         };
 
@@ -303,12 +318,12 @@ function handleMediaStream(ws, req) {
       }
 
       case 'save_customer_note': {
-        if (customerId && args?.content) {
+        if (customerId && args?.content && userId) {
           const { default: crmService } = await import('./receptionistCRM.service.js');
           await crmService.addCustomerNote(userId, customerId, args.content, args.noteType || 'CALL');
           result = { success: true, noteSaved: true };
         } else {
-          result = { success: false, reason: 'missing_customer_or_content' };
+          result = { success: false, reason: 'missing_customer_or_content_or_owner' };
         }
         break;
       }
@@ -438,6 +453,10 @@ function handleMediaStream(ws, req) {
 
     if (!config.realtime.configured) {
       logger.error('REALTIME_CALL_FAILED', { callSid, reason: 'realtime_not_configured' });
+      logger.error('PIPELINE_FAILURE', {
+        callSid, stage: 'openai_connect', reason: 'realtime_not_configured',
+        openaiError: 'REALTIME_NOT_CONFIGURED',
+      });
       gracefulClose();
       return;
     }
@@ -450,12 +469,17 @@ function handleMediaStream(ws, req) {
         model: config.realtime.model,
         validation: modelValid,
       });
+      logger.error('PIPELINE_FAILURE', {
+        callSid, stage: 'model_validation', reason: 'model_validation_failed',
+        openaiError: modelValid.reason || 'unsupported_model',
+        providerError: 'model_validation_failed',
+      });
       gracefulClose();
       return;
     }
 
     if (rtmSession) rtmSession.setState(RealtimeSessionManager.STATES.CONNECTING);
-    logger.info('OPENAI_CONNECT_ATTEMPT', { callSid, model: config.realtime.model });
+    logger.info('OPENAI_CONNECTING', { callSid, model: config.realtime.model });
     const voice = mapToOpenAIVoice(config.realtime.voice);
     const openaiUrl = buildOpenAiUrl();
 
@@ -469,6 +493,10 @@ function handleMediaStream(ws, req) {
       if (legacySession) setOpenaiWs(callSid, openaiWs);
     } catch (err) {
       logger.error('REALTIME_CALL_FAILED', { callSid, reason: 'openai_connect_error', error: err.message });
+      logger.error('PIPELINE_FAILURE', {
+        callSid, stage: 'openai_connect', reason: 'construct_failed',
+        openaiError: err.message, reconnectAttempt: reconnectAttempts + 1,
+      });
       gracefulClose();
       return;
     }
@@ -575,7 +603,7 @@ function handleMediaStream(ws, req) {
             clearTimeout(sessionUpdateTimer);
             sessionUpdateTimer = null;
           }
-          logger.info('SESSION_UPDATE_ACCEPTED', { callSid });
+          logger.info('OPENAI_SESSION_UPDATED', { callSid });
         }
 
         // Gate greeting on BOTH session.created AND session.updated
@@ -588,11 +616,19 @@ function handleMediaStream(ws, req) {
           rtmSession.greetingAudioReceived = true;
           rtmSession.diagGreetingFirstAudioTime = Date.now();
           const latencyMs = rtmSession.diagGreetingRequestTime ? Date.now() - rtmSession.diagGreetingRequestTime : null;
-          logger.info('GREETING_FIRST_AUDIO_RECEIVED', { callSid, latencyMs });
+          logger.info('GREETING_FIRST_AUDIO', { callSid, latencyMs });
           if (greetingTimeoutTimer) {
             clearTimeout(greetingTimeoutTimer);
             greetingTimeoutTimer = null;
           }
+        }
+
+        // Phase 4-5 — pipeline counters and zero-audio detection (closure scope)
+        if (msg.type === 'response.created') responseCreatedSeen = true;
+        if (msg.type === 'response.audio.delta') {
+          responseAudioSeen = true;
+          pipelineCounters.outgoingFrames++;
+          pipelineCounters.audioBytes += (msg.delta?.length || 0);
         }
 
         await handleOpenAIMessage(msg, rtmSession, legacySession, openaiWs);
@@ -620,15 +656,33 @@ function handleMediaStream(ws, req) {
       if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
         reconnectAttempts++;
         if (rtmSession) rtmSession.reconnectCount = reconnectAttempts;
-        logger.info('OPENAI_RECONNECT_ATTEMPT', { callSid, attempt: reconnectAttempts });
+        logger.info('OPENAI_RECONNECT_ATTEMPT', {
+          callSid, attempt: reconnectAttempts, maxRetries: MAX_RECONNECT_ATTEMPTS,
+        });
         scheduleTimer(connectToOpenAI, 2000 * reconnectAttempts);
       } else {
+        logger.info('PIPELINE_FAILURE', {
+          callSid,
+          stage: 'openai_connection',
+          reason: 'max_reconnect_exceeded',
+          reconnectAttempt: reconnectAttempts,
+          maxRetries: MAX_RECONNECT_ATTEMPTS,
+          providerError: providerHealth.getInternalState().lastErrorCode,
+        });
         gracefulClose();
       }
     });
 
     openaiWs.on('error', (err) => {
       const classification = providerHealth.classifyError(err);
+      logger.error('OPENAI_SOCKET_ERROR', {
+        callSid,
+        stage: 'openai_ws_error',
+        reason: err.message,
+        providerError: classification.code,
+        reconnectAttempt: reconnectAttempts + 1,
+        maxRetries: MAX_RECONNECT_ATTEMPTS,
+      });
       if (classification.fatal) {
         providerHealth.handleFatalError(err, callSid);
         if (legacySession) legacySession.stopReconnect = true;
@@ -655,6 +709,15 @@ function handleMediaStream(ws, req) {
           statusCode: res.statusCode,
           statusMessage: res.statusMessage,
           model: config.realtime.model,
+        });
+        logger.error('PIPELINE_FAILURE', {
+          callSid,
+          stage: 'openai_connect',
+          reason: 'unexpected_http_response',
+          httpCode: res.statusCode,
+          openaiError: body.substring(0, 200),
+          providerError: `http_${res.statusCode}`,
+          reconnectAttempt: reconnectAttempts + 1,
         });
         const errForHealth = { code: `http_${res.statusCode}`, message: body.substring(0, 200) };
         providerHealth.handleFatalError(errForHealth, callSid);
@@ -749,12 +812,31 @@ function handleMediaStream(ws, req) {
       if (legacySession) removeSession(callSid);
       if (rtmSession) RealtimeSessionManager.remove(callSid);
       if (rtmSession) rtmSession.setState(RealtimeSessionManager.STATES.CLOSED);
-      logger.info('CALL_SESSION_CLEANED', {
+
+      // Phase 5 — report zero audio if response.created had no audio delta
+      if (responseCreatedSeen && !responseAudioSeen) {
+        logger.warn('ZERO_AUDIO_DETECTED', {
+          callSid,
+          stage: 'response.audio.delta',
+          reason: 'session.update rejected or unsupported model or quota exceeded',
+          providerError: providerHealth.getInternalState().lastErrorCode,
+          model: config.realtime.model,
+          voice: config.realtime.voice,
+        });
+      }
+
+      logger.info('CALL_ENDED', {
         callSid,
         greetingSent,
         greetingAudioReceived: rtmSession?.greetingAudioReceived,
         totalDroppedAudioFrames: droppedFrameCount,
         providerError: providerHealth.getInternalState().lastErrorCode,
+        // Phase 4 — pipeline counters
+        incomingFrames: pipelineCounters.incomingFrames,
+        outgoingFrames: pipelineCounters.outgoingFrames,
+        audioBytes: pipelineCounters.audioBytes,
+        speechEvents: pipelineCounters.speechEvents,
+        transcriptionEvents: pipelineCounters.transcriptionEvents,
       });
     }
     providerHealth.enableAudioForwarding();
@@ -792,7 +874,7 @@ function handleMediaStream(ws, req) {
 
     switch (msg.event) {
       case 'connected':
-        logger.info('TWILIO_CONNECTED_EVENT', { callSid });
+        logger.info('TWILIO_MEDIA_CONNECTED', { callSid });
         break;
 
       case 'start': {
@@ -811,7 +893,7 @@ function handleMediaStream(ws, req) {
           logger.warn('TWILIO_MEDIA_STARTED', { callSid, warning: 'missing_streamSid' });
         }
 
-        // Resolve tenant owner for this call
+        // Resolve tenant owner for this call — trusted server-side only
         const callerPhone = params.from || start.from || null;
         const calledNumber = params.to || start.to || null;
         const twilioAccountSid = params.AccountSid || null;
@@ -819,6 +901,7 @@ function handleMediaStream(ws, req) {
         resolveTenant({ calledNumber, twilioAccountSid, callSid }).then(owner => {
           if (owner?.userId) {
             userId = owner.userId;
+            companyId = owner.companyId;
             logger.info('TENANT_RESOLVED_FOR_CALL', { callSid, source: owner.source });
           } else {
             logger.warn('TENANT_NOT_RESOLVED', { callSid });
@@ -845,25 +928,28 @@ function handleMediaStream(ws, req) {
         legacySession.streamSid = streamSid;
         legacySession.timers = timers;
 
+        // Customer lookup uses trusted userId from resolver — never accept from caller input
         if (callerPhone) {
           const normalized = callerPhone.replace(/[^\d+]/g, '');
-          // Only look up customer if we have a valid resolved userId
           const lookupUserId = userId || getResolvedOwner()?.userId;
-          orchestrator.lookupCustomerByPhone(lookupUserId, normalized).then(memory => {
-            if (memory && memory.customer) {
-              customerMemory = memory;
-              customerId = memory.customer?.id;
-              if (memory.customer?.userId) userId = memory.customer.userId;
-              logger.info('CUSTOMER_IDENTIFIED', { callSid, name: memory.customer?.name });
-            }
-          }).catch(() => {});
+          if (lookupUserId) {
+            orchestrator.lookupCustomerByPhone(lookupUserId, normalized).then(memory => {
+              if (memory && memory.customer) {
+                customerMemory = memory;
+                customerId = memory.customer?.id;
+                logger.info('CUSTOMER_IDENTIFIED', { callSid, name: memory.customer?.name });
+              }
+            }).catch(() => {});
+          }
         }
 
-        // Only create call record if we have a valid resolved userId
+        // Upsert call record with trusted ownership — never from caller input
         const recordUserId = userId || getResolvedOwner()?.userId;
-        if (recordUserId && isPersistenceAvailable()) {
+        const recordCompanyId = companyId || getResolvedOwner()?.companyId;
+        if (recordUserId && recordCompanyId && isPersistenceAvailable()) {
           orchestrator.createCallRecord({
             userId: recordUserId,
+            companyId: recordCompanyId,
             callSid,
             from: callerPhone,
             to: calledNumber,
@@ -878,7 +964,7 @@ function handleMediaStream(ws, req) {
           logger.info('CALL_RECORD_SKIPPED_NO_OWNER', { callSid });
         }
 
-        logger.info('TWILIO_START_EVENT', {
+        logger.info('TWILIO_START_RECEIVED', {
           callSid,
           streamSid,
           fromTail: callerPhone ? callerPhone.slice(-4) : 'unknown',
@@ -928,6 +1014,8 @@ function handleMediaStream(ws, req) {
           audioBridgeActive = true;
           logger.info('CALLER_AUDIO_RECEIVED', { callSid, streamSid: msg.streamSid });
         }
+
+        pipelineCounters.incomingFrames++;
 
         if (rtmSession) {
           rtmSession.audioBytesReceived += validation.byteLength;
@@ -1041,6 +1129,7 @@ export async function handleOpenAIMessage(msg, rtmSession, legacySession, openai
       break;
 
     case 'input_audio_buffer.speech_started':
+      pipelineCounters.speechEvents++;
       if (openaiWs?.readyState === WebSocket.OPEN) {
         try {
           openaiWs.send(JSON.stringify({ type: 'response.cancel' }));
@@ -1070,6 +1159,8 @@ export async function handleOpenAIMessage(msg, rtmSession, legacySession, openai
             addTranscriptEntry(callSid, { role, content: content.transcript });
             if (role === 'caller') {
               logger.info('TRANSCRIPTION_RECEIVED', { callSid, textPreview: content.transcript?.substring(0, 60) });
+              logger.info('CALLER_TRANSCRIPTION', { callSid, text: content.transcript?.substring(0, 60) });
+              pipelineCounters.transcriptionEvents++;
             }
             if (io) {
               io.to(`user:${legacySession?.metadata?.userId}`).emit('transcript.final', {
@@ -1154,7 +1245,7 @@ export async function handleOpenAIMessage(msg, rtmSession, legacySession, openai
       }
 
       const deltaSize = audioDelta.length;
-      logger.info('OPENAI_AUDIO_DELTA_RECEIVED', { callSid, deltaSize });
+      logger.info('AI_AUDIO_DELTA', { callSid, deltaSize });
       const streamSid = rtmSession?.streamSid || legacySession?.streamSid;
 
       if (!streamSid) {

@@ -136,9 +136,20 @@ server.listen(config.port, host, async () => {
     sessionManagerVersion: '2.0',
   });
 
-  validateOwnerAtStartup().then(result => {
-    logger.info('OWNER_VALIDATION_RESULT', { valid: result.valid, reason: result.valid ? null : result.reason });
-  });
+  (async function retryOwnerValidation() {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      try {
+        const result = await validateOwnerAtStartup();
+        if (result.ownerValidated && result.companyValidated) break;
+        if (result.ownerConfigured && !result.ownerValidated) {
+          logger.warn('OWNER_VALIDATION_RETRY', { attempt: attempt + 1 });
+        }
+      } catch (err) {
+        logger.warn('OWNER_VALIDATION_RETRY', { attempt: attempt + 1, error: err.message });
+      }
+      await new Promise(r => setTimeout(r, Math.min(1000 * Math.pow(2, attempt), 30000)));
+    }
+  })();
 
   logger.info('BOOT_COMPLETE');
 });

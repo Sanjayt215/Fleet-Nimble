@@ -2,12 +2,84 @@ import prisma from '../utils/prisma.js';
 import logger from '../utils/logger.js';
 import { config } from '../config/index.js';
 
-let resolvedOwner = null;
+const TENANT_STATE = {
+  userId: null,
+  companyId: null,
+  source: null,
+  ownerValidated: false,
+  companyValidated: false,
+  persistenceAvailable: false,
+};
+
 let lastValidationTime = 0;
 const VALIDATION_CACHE_MS = 300000;
 
+const OWNER_CONFIGURED = Boolean(
+  config.aiReceptionist?.defaultUserId || process.env.AI_RECEPTIONIST_DEFAULT_USER_ID
+);
+
+const COMPANY_CONFIGURED = Boolean(
+  config.aiReceptionist?.defaultCompanyId || process.env.AI_RECEPTIONIST_DEFAULT_COMPANY_ID
+);
+
 export function getResolvedOwner() {
-  return resolvedOwner;
+  return { ...TENANT_STATE };
+}
+
+function resolveCompanyId(userRecord) {
+  const envCompanyId =
+    config.aiReceptionist.defaultCompanyId ||
+    process.env.AI_RECEPTIONIST_DEFAULT_COMPANY_ID ||
+    null;
+
+  if (envCompanyId) return envCompanyId;
+  if (userRecord?.companyId) return userRecord.companyId;
+  return null;
+}
+
+async function validateCompany(companyId) {
+  if (!companyId) return false;
+  try {
+    const company = await prisma.company.findUnique({
+      where: { id: companyId },
+      select: { id: true },
+    });
+    return Boolean(company);
+  } catch {
+    return false;
+  }
+}
+
+async function validateUser(userId) {
+  if (!userId) return { valid: false, user: null };
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, companyId: true, deletedAt: true },
+    });
+    if (!user) return { valid: false, user: null };
+    if (user.deletedAt !== null) return { valid: false, user: null };
+    return { valid: true, user };
+  } catch {
+    return { valid: false, user: null };
+  }
+}
+
+function buildOwnerState(validation) {
+  const { userValid, user, companyValid } = validation;
+  const userId = userValid && user ? user.id : null;
+  const companyId =
+    userValid && companyValid
+      ? resolveCompanyId(user)
+      : null;
+
+  TENANT_STATE.userId = userId;
+  TENANT_STATE.companyId = companyId;
+  TENANT_STATE.source = userId ? 'environment-default' : null;
+  TENANT_STATE.ownerValidated = userValid;
+  TENANT_STATE.companyValidated = companyValid;
+  TENANT_STATE.persistenceAvailable = userValid && companyValid && Boolean(userId) && Boolean(companyId);
+  return { ...TENANT_STATE };
 }
 
 export async function resolveTenant(input) {
@@ -20,10 +92,10 @@ export async function resolveTenant(input) {
 
   let userId = null;
   let companyId = null;
-  let organizationId = null;
   let source = null;
+  let ownerValidated = false;
+  let companyValidated = false;
 
-  // 1. Try to look up by called Twilio number (multi-tenant)
   if (calledNumber) {
     try {
       const configByPhone = await prisma.aiReceptionistConfig.findFirst({
@@ -40,107 +112,143 @@ export async function resolveTenant(input) {
     }
   }
 
-  // 2. Fall back to environment default for single-tenant
   if (!userId) {
-    const defaultUserId = config.aiReceptionist.defaultUserId || process.env.AI_RECEPTIONIST_DEFAULT_USER_ID;
-    const defaultCompanyId = config.aiReceptionist.defaultCompanyId || process.env.AI_RECEPTIONIST_DEFAULT_COMPANY_ID;
+    const defaultUserId =
+      config.aiReceptionist.defaultUserId ||
+      process.env.AI_RECEPTIONIST_DEFAULT_USER_ID;
 
     if (defaultUserId) {
-      userId = defaultUserId;
-      source = 'env_default';
-    }
+      const { valid, user } = await validateUser(defaultUserId);
+      if (valid && user) {
+        userId = user.id;
+        ownerValidated = true;
+        source = 'environment-default';
 
-    if (!companyId && defaultCompanyId) {
-      companyId = defaultCompanyId;
-    }
-  }
-
-  let userIdValid = false;
-  if (userId) {
-    try {
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { id: true, active: true },
-      });
-      if (user && user.active !== false) {
-        userIdValid = true;
-      } else {
-        logger.warn('TENANT_RESOLVED_USER_INACTIVE', {
-          exists: Boolean(user),
-          userMasked: userId.slice(-4),
-        });
+        const resolvedCompanyId = resolveCompanyId(user);
+        if (resolvedCompanyId) {
+          companyValidated = await validateCompany(resolvedCompanyId);
+          if (companyValidated) {
+            companyId = resolvedCompanyId;
+          }
+        }
       }
-    } catch (err) {
-      logger.warn('TENANT_USER_VERIFY_FAILED', { error: err.message });
     }
   }
 
-  resolvedOwner = {
-    userId: userIdValid ? userId : null,
-    companyId: companyId || null,
-    organizationId: organizationId || null,
-    source: source || 'none',
-    userIdValid,
-  };
+  if (!ownerValidated && userId) {
+    const { valid } = await validateUser(userId);
+    ownerValidated = valid;
+  }
 
+  if (companyId && !companyValidated) {
+    companyValidated = await validateCompany(companyId);
+    if (!companyValidated) companyId = null;
+  }
+
+  const persistenceAvailable = ownerValidated && companyValidated && Boolean(userId) && Boolean(companyId);
+
+  TENANT_STATE.userId = userId;
+  TENANT_STATE.companyId = companyId;
+  TENANT_STATE.source = source;
+  TENANT_STATE.ownerValidated = ownerValidated;
+  TENANT_STATE.companyValidated = companyValidated;
+  TENANT_STATE.persistenceAvailable = persistenceAvailable;
   lastValidationTime = Date.now();
 
   logger.info('TENANT_RESOLUTION_COMPLETE', {
-    resolved: Boolean(resolvedOwner.userId),
-    source: resolvedOwner.source,
-    userValid: userIdValid,
+    resolved: persistenceAvailable,
+    source: source || 'none',
+    ownerValidated,
+    companyValidated,
+    persistenceAvailable,
   });
 
-  return resolvedOwner;
+  return { ...TENANT_STATE };
 }
 
 export function isPersistenceAvailable() {
-  return Boolean(resolvedOwner?.userId && resolvedOwner?.userIdValid);
+  return TENANT_STATE.persistenceAvailable;
 }
 
 export async function validateOwnerAtStartup() {
-  const defaultUserId = config.aiReceptionist.defaultUserId || process.env.AI_RECEPTIONIST_DEFAULT_USER_ID;
+  const defaultUserId =
+    config.aiReceptionist.defaultUserId ||
+    process.env.AI_RECEPTIONIST_DEFAULT_USER_ID;
+
   if (!defaultUserId) {
-    logger.warn('RECEPTIONIST_OWNER_NOT_CONFIGURED', { reason: 'AI_RECEPTIONIST_DEFAULT_USER_ID not set' });
-    return { valid: false, reason: 'not_configured' };
-  }
-
-  try {
-    const user = await prisma.user.findUnique({
-      where: { id: defaultUserId },
-      select: { id: true, active: true, name: true, email: true },
+    logger.warn('OWNER_VALIDATION_RESULT', {
+      ownerConfigured: false,
+      ownerValidated: false,
+      companyConfigured: false,
+      companyValidated: false,
+      persistenceAvailable: false,
     });
-
-    if (!user) {
-      logger.error('RECEPTIONIST_OWNER_INVALID', { reason: 'user_not_found' });
-      return { valid: false, reason: 'user_not_found' };
-    }
-
-    if (user.active === false) {
-      logger.error('RECEPTIONIST_OWNER_INVALID', { reason: 'user_inactive' });
-      return { valid: false, reason: 'user_inactive' };
-    }
-
-    resolvedOwner = {
-      userId: user.id,
-      companyId: config.aiReceptionist.defaultCompanyId || null,
-      organizationId: null,
-      source: 'startup_validation',
-      userIdValid: true,
+    return {
+      valid: false,
+      ownerConfigured: false,
+      ownerValidated: false,
+      companyConfigured: false,
+      companyValidated: false,
+      persistenceAvailable: false,
     };
-
-    logger.info('OWNER_VALIDATED', {
-      source: 'startup_validation',
-    });
-
-    return { valid: true, user: { id: user.id, name: user.name } };
-  } catch (err) {
-    logger.error('RECEPTIONIST_OWNER_VALIDATION_FAILED', { error: err.message });
-    return { valid: false, reason: err.message };
   }
+
+  const { valid: userValid, user } = await validateUser(defaultUserId);
+
+  if (!userValid) {
+    logger.warn('OWNER_VALIDATION_RESULT', {
+      ownerConfigured: true,
+      ownerValidated: false,
+      companyConfigured: COMPANY_CONFIGURED,
+      companyValidated: false,
+      persistenceAvailable: false,
+    });
+    return {
+      valid: false,
+      ownerConfigured: true,
+      ownerValidated: false,
+      companyConfigured: COMPANY_CONFIGURED,
+      companyValidated: false,
+      persistenceAvailable: false,
+    };
+  }
+
+  const resolvedCompanyId = resolveCompanyId(user);
+  const companyValidated = resolvedCompanyId
+    ? await validateCompany(resolvedCompanyId)
+    : false;
+
+  TENANT_STATE.userId = user.id;
+  TENANT_STATE.companyId = companyValidated ? resolvedCompanyId : null;
+  TENANT_STATE.source = 'startup_validation';
+  TENANT_STATE.ownerValidated = true;
+  TENANT_STATE.companyValidated = companyValidated;
+  TENANT_STATE.persistenceAvailable = companyValidated;
+
+  logger.info('OWNER_VALIDATION_RESULT', {
+    ownerConfigured: true,
+    ownerValidated: true,
+    companyConfigured: Boolean(resolvedCompanyId),
+    companyValidated,
+    persistenceAvailable: companyValidated,
+  });
+
+  return {
+    valid: companyValidated,
+    ownerConfigured: true,
+    ownerValidated: true,
+    companyConfigured: Boolean(resolvedCompanyId),
+    companyValidated,
+    persistenceAvailable: companyValidated,
+  };
 }
 
 export function clearCache() {
-  resolvedOwner = null;
+  TENANT_STATE.userId = null;
+  TENANT_STATE.companyId = null;
+  TENANT_STATE.source = null;
+  TENANT_STATE.ownerValidated = false;
+  TENANT_STATE.companyValidated = false;
+  TENANT_STATE.persistenceAvailable = false;
   lastValidationTime = 0;
 }

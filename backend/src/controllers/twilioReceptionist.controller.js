@@ -26,6 +26,8 @@ export async function handleIncomingCall(req, res) {
       contentType: req.headers['content-type'],
     });
 
+    logger.info('TWILIO_CALL_STARTED', { callSid: req.body?.CallSid, from: req.body?.From, to: req.body?.To });
+
     const valid = twilioWebhook.validateTwilioRequest(req);
     if (!valid) {
       logger.warn('TWILIO_INVALID_SIGNATURE', { path: req.originalUrl });
