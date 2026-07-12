@@ -21,6 +21,8 @@ import * as orchestrator from './receptionistOrchestrator.service.js';
 import * as transcriptService from './receptionistTranscript.service.js';
 import * as callService from './receptionistCall.service.js';
 import { redirectToGreeting } from './twilioWebhook.service.js';
+import * as providerHealth from './receptionistProviderHealth.service.js';
+import { resolveTenant, isPersistenceAvailable, getResolvedOwner } from './receptionistTenantResolver.service.js';
 
 const OPENAI_REALTIME_URL = 'wss://api.openai.com/v1/realtime';
 const MAX_RECONNECT_ATTEMPTS = 3;
@@ -82,6 +84,9 @@ function handleMediaStream(ws, req) {
   let greetingTimeoutMs = GREETING_AUDIO_TIMEOUT_MS;
   let greetingTimeoutTimer = null;
   let fullDuplexEstablished = false;
+  let lastDropLogTime = 0;
+  let droppedFrameCount = 0;
+  let firstDropLogged = false;
   const timers = [];
 
   let callRecordId = null;
@@ -118,6 +123,10 @@ function handleMediaStream(ws, req) {
 
   function sendGreeting() {
     if (greetingSent) return;
+    if (!providerHealth.getInternalState().available) {
+      logger.warn('GREETING_SKIPPED_PROVIDER_UNAVAILABLE', { callSid });
+      return;
+    }
     greetingSent = true;
     if (rtmSession) {
       rtmSession.greetingSent = true;
@@ -599,7 +608,8 @@ function handleMediaStream(ws, req) {
       if (rtmSession) rtmSession.openAiSocket = null;
 
       if (isClosing) return;
-      if (legacySession?.stopReconnect || rtmSession?.stopReconnect) {
+      // Fatal provider errors — never reconnect
+      if (!providerHealth.getInternalState().available || legacySession?.stopReconnect || rtmSession?.stopReconnect) {
         gracefulClose();
         return;
       }
@@ -614,12 +624,15 @@ function handleMediaStream(ws, req) {
     });
 
     openaiWs.on('error', (err) => {
-      logger.error('OPENAI_SOCKET_ERROR_EVENT', {
-        callSid,
-        error: err.message,
-        code: err.code,
-        model: config.realtime.model,
-      });
+      const classification = providerHealth.classifyError(err);
+      if (classification.fatal) {
+        providerHealth.handleFatalError(err, callSid);
+        if (legacySession) legacySession.stopReconnect = true;
+        if (rtmSession) rtmSession.stopReconnect = true;
+        gracefulClose();
+        return;
+      }
+      providerHealth.handleTransientError(err, callSid);
       if (rtmSession) {
         rtmSession.lastError = { message: err.message, code: err.code, time: Date.now() };
       }
@@ -637,11 +650,12 @@ function handleMediaStream(ws, req) {
           callSid,
           statusCode: res.statusCode,
           statusMessage: res.statusMessage,
-          headers: res.headers,
-          body,
           model: config.realtime.model,
         });
-        RealtimeModelValidator.markFailed(config.realtime.model, `http_${res.statusCode}: ${body}`);
+        const errForHealth = { code: `http_${res.statusCode}`, message: body.substring(0, 200) };
+        providerHealth.handleFatalError(errForHealth, callSid);
+        if (legacySession) legacySession.stopReconnect = true;
+        if (rtmSession) rtmSession.stopReconnect = true;
         gracefulClose();
       });
     });
@@ -724,8 +738,15 @@ function handleMediaStream(ws, req) {
       if (legacySession) removeSession(callSid);
       if (rtmSession) RealtimeSessionManager.remove(callSid);
       if (rtmSession) rtmSession.setState(RealtimeSessionManager.STATES.CLOSED);
-      logger.info('CALL_SESSION_CLEANED', { callSid, greetingSent, greetingAudioReceived: rtmSession?.greetingAudioReceived });
+      logger.info('CALL_SESSION_CLEANED', {
+        callSid,
+        greetingSent,
+        greetingAudioReceived: rtmSession?.greetingAudioReceived,
+        totalDroppedAudioFrames: droppedFrameCount,
+        providerError: providerHealth.getInternalState().lastErrorCode,
+      });
     }
+    providerHealth.enableAudioForwarding();
   }
 
   function endCallGracefully(message) {
@@ -779,6 +800,20 @@ function handleMediaStream(ws, req) {
           logger.warn('TWILIO_MEDIA_STARTED', { callSid, warning: 'missing_streamSid' });
         }
 
+        // Resolve tenant owner for this call
+        const callerPhone = params.from || start.from || null;
+        const calledNumber = params.to || start.to || null;
+        const twilioAccountSid = params.AccountSid || null;
+
+        resolveTenant({ calledNumber, twilioAccountSid, callSid }).then(owner => {
+          if (owner?.userId) {
+            userId = owner.userId;
+            logger.info('TENANT_RESOLVED_FOR_CALL', { callSid, source: owner.source });
+          } else {
+            logger.warn('TENANT_NOT_RESOLVED', { callSid });
+          }
+        });
+
         rtmSession = RealtimeSessionManager.create(callSid, ws, {
           from: params.from || start.from || null,
           to: params.to || start.to || null,
@@ -799,26 +834,25 @@ function handleMediaStream(ws, req) {
         legacySession.streamSid = streamSid;
         legacySession.timers = timers;
 
-        const callerPhone = params.from || start.from || null;
-        const calledNumber = params.to || start.to || null;
-        const twilioAccountSid = params.AccountSid || null;
-
         if (callerPhone) {
           const normalized = callerPhone.replace(/[^\d+]/g, '');
-          orchestrator.lookupCustomerByPhone(null, normalized).then(memory => {
+          // Only look up customer if we have a valid resolved userId
+          const lookupUserId = userId || getResolvedOwner()?.userId;
+          orchestrator.lookupCustomerByPhone(lookupUserId, normalized).then(memory => {
             if (memory && memory.customer) {
               customerMemory = memory;
               customerId = memory.customer?.id;
-              userId = memory.customer?.userId;
+              if (memory.customer?.userId) userId = memory.customer.userId;
               logger.info('CUSTOMER_IDENTIFIED', { callSid, name: memory.customer?.name });
             }
           }).catch(() => {});
         }
 
-        if (userId || callerPhone) {
-          userId = userId || 'system';
+        // Only create call record if we have a valid resolved userId
+        const recordUserId = userId || getResolvedOwner()?.userId;
+        if (recordUserId && isPersistenceAvailable()) {
           orchestrator.createCallRecord({
-            userId,
+            userId: recordUserId,
             callSid,
             from: callerPhone,
             to: calledNumber,
@@ -829,6 +863,8 @@ function handleMediaStream(ws, req) {
               if (legacySession) legacySession.metadata.callLogId = record.id;
             }
           }).catch(e => logger.warn('CALL_RECORD_START_FAILED', { error: e.message }));
+        } else {
+          logger.info('CALL_RECORD_SKIPPED_NO_OWNER', { callSid });
         }
 
         logger.info('TWILIO_START_EVENT', {
@@ -887,19 +923,34 @@ function handleMediaStream(ws, req) {
           rtmSession.packetsReceived++;
         }
 
-        if (openaiWs?.readyState === WebSocket.OPEN) {
+        if (openaiWs?.readyState === WebSocket.OPEN && !providerHealth.isAudioForwardingDisabled()) {
           openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: payload }));
-          logger.info('CALLER_AUDIO_FORWARDED', { callSid, byteLength: validation.byteLength });
+          if (logger.isLevelEnabled('debug')) {
+            logger.info('CALLER_AUDIO_FORWARDED', { callSid, byteLength: validation.byteLength });
+          }
           if (!fullDuplexEstablished) {
             fullDuplexEstablished = true;
             logger.info('FULL_DUPLEX_ESTABLISHED', { callSid });
           }
         } else {
-          logger.warn('CALLER_AUDIO_DROPPED', {
-            callSid,
-            reason: 'openai_socket_not_open',
-            openaiWsReadyState: openaiWs?.readyState,
-          });
+          const now = Date.now();
+          droppedFrameCount++;
+          if (!firstDropLogged) {
+            firstDropLogged = true;
+            logger.info('CALLER_AUDIO_DROPPED', {
+              callSid,
+              reason: providerHealth.isAudioForwardingDisabled() ? 'provider_unavailable' : 'openai_socket_not_open',
+              openaiWsReadyState: openaiWs?.readyState,
+            });
+          } else if (now - lastDropLogTime > 5000) {
+            lastDropLogTime = now;
+            logger.info('CALLER_AUDIO_DROPPED_SUMMARY', {
+              callSid,
+              reason: providerHealth.isAudioForwardingDisabled() ? 'provider_unavailable' : 'openai_socket_not_open',
+              totalDrops: droppedFrameCount,
+              intervalMs: 5000,
+            });
+          }
           if (rtmSession) rtmSession.droppedPackets++;
         }
         break;
@@ -1120,11 +1171,13 @@ export async function handleOpenAIMessage(msg, rtmSession, legacySession, openai
         errorCode: msg.error?.code || null,
         errorMessage: msg.error?.message ? msg.error.message.substring(0, 200) : null,
       });
-      if (['invalid_api_key', 'authentication', 'model_not_found', 'unsupported_model'].includes(msg.error?.code) ||
-          (msg.error?.message || '').toLowerCase().includes('authentication')) {
-        RealtimeModelValidator.markFailed(config.realtime.model, msg.error?.message || 'unknown');
+      const classification = providerHealth.classifyError(msg.error);
+      if (classification.fatal) {
+        providerHealth.handleFatalError(msg.error, callSid);
         if (legacySession) legacySession.stopReconnect = true;
         if (rtmSession) rtmSession.stopReconnect = true;
+      } else {
+        providerHealth.handleTransientError(msg.error, callSid);
       }
       break;
 

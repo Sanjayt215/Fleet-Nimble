@@ -5,13 +5,16 @@ import { twilioWebhookLimiter } from '../middleware/rateLimiter.js';
 import { config } from '../config/index.js';
 import { RealtimeSessionManager } from '../services/realtimeSessionManager.js';
 import { RealtimeModelValidator } from '../services/realtimeModelValidator.js';
+import * as providerHealth from '../services/receptionistProviderHealth.service.js';
+import { getResolvedOwner } from '../services/receptionistTenantResolver.service.js';
 
 const router = Router();
 
 // ── Public health check (no auth, no secrets exposed) ──
 router.get('/health', (_req, res) => {
   const modelCheck = RealtimeModelValidator.validate(config.realtime.model);
-  const lastFailure = RealtimeModelValidator.getLastError(config.realtime.model);
+  const ph = providerHealth.getPublicHealth();
+  const owner = getResolvedOwner();
   res.json({
     status: 'ok',
     module: 'ai-receptionist',
@@ -24,9 +27,13 @@ router.get('/health', (_req, res) => {
     modelValidated: modelCheck.valid,
     modelValidationReason: modelCheck.valid ? null : modelCheck.reason,
     realtimeConfigured: config.realtime.configured,
-    realtimeProviderVerified: modelCheck.valid && !modelCheck.cached,
-    lastRealtimeError: lastFailure?.reason || null,
-    realtimeReady: config.realtime.configured && config.realtime.mediaStreamEnabled,
+    realtimeProviderVerified: ph.verified,
+    realtimeAvailable: ph.available,
+    lastRealtimeErrorCode: ph.lastRealtimeErrorCode,
+    realtimeReady: config.realtime.configured && config.realtime.mediaStreamEnabled && ph.available,
+    defaultOwnerConfigured: Boolean(config.aiReceptionist.defaultUserId),
+    defaultOwnerValid: owner?.userIdValid || false,
+    persistenceAvailable: Boolean(owner?.userId && owner?.userIdValid),
     voiceAgentMode: config.aiReceptionist.voiceAgentMode,
     activeCalls: RealtimeSessionManager.getCount(),
     sessionManagerVersion: '2.0',

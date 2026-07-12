@@ -361,11 +361,15 @@ export async function executeSupportTicketCreation(session) {
 
 export async function lookupCustomerByPhone(userId, phone) {
   if (!phone) return null;
+  if (!userId) {
+    logger.info('CUSTOMER_LOOKUP_SKIPPED_NO_OWNER', { phoneTail: phone.slice(-4) });
+    return null;
+  }
   try {
     const normalized = phone.replace(/[^\d+]/g, '');
-    const customer = await prisma.receptionistCustomer.findFirst({
-      where: { userId, phone: { contains: normalized.slice(-10) } },
-    });
+    const where = { userId };
+    where.phone = normalized.length >= 10 ? { contains: normalized.slice(-10) } : normalized;
+    const customer = await prisma.receptionistCustomer.findFirst({ where });
     if (!customer) return null;
     const memory = await memoryService.getCustomerMemory(customer.id);
     return memory;
@@ -376,6 +380,10 @@ export async function lookupCustomerByPhone(userId, phone) {
 }
 
 export async function createCallRecord({ userId, callSid, from, to, twilioAccountSid }) {
+  if (!userId) {
+    logger.info('CALL_RECORD_SKIPPED_NO_OWNER', { callSid });
+    return null;
+  }
   try {
     const existing = await prisma.aiReceptionistCall.findFirst({
       where: { twilioCallSid: callSid },
@@ -400,7 +408,7 @@ export async function createCallRecord({ userId, callSid, from, to, twilioAccoun
     logger.info('CALL_RECORD_CREATED', { callSid, callId: call.id });
     return call;
   } catch (err) {
-    logger.error('CALL_RECORD_CREATE_FAILED', { callSid, error: err.message });
+    logger.error('CALL_RECORD_CREATE_FAILED', { callSid, error: err.message, userId });
     return null;
   }
 }

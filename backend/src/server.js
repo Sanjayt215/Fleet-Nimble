@@ -10,6 +10,7 @@ import { socketCorsOrigin } from './utils/corsOrigins.js';
 import { startMqttConsumer, stopMqttConsumer } from './mqtt/consumer.js';
 import { verifyAIServiceStartup } from './services/aiService.js';
 import { handleMediaStream } from './services/mediaStreamHandler.js';
+import * as providerHealth from './services/receptionistProviderHealth.service.js';
 
 logger.info('BOOT_START');
 
@@ -109,6 +110,10 @@ server.listen(config.port, host, async () => {
     aiReceptionistEnabled: config.aiReceptionist.enabled,
     voiceAgentMode: config.aiReceptionist.voiceAgentMode,
   });
+
+  if (config.realtime.configured) {
+    providerHealth.markConfigured();
+  }
 
   // ── DIAG: Full voice pipeline startup diagnostics ──
   const { RealtimeModelValidator: RMV } = await import('./services/realtimeModelValidator.js');

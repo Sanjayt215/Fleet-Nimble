@@ -1,4 +1,5 @@
 import logger from '../utils/logger.js';
+import * as providerHealth from './receptionistProviderHealth.service.js';
 
 const FAILURE_CACHE = new Map();
 const FAILURE_TTL_MS = 300000;
@@ -22,12 +23,14 @@ export class RealtimeModelValidator {
   static markFailed(model, reason) {
     const key = model.trim();
     FAILURE_CACHE.set(key, { valid: false, reason, failedAt: Date.now() });
+    providerHealth.markUnavailable();
     logger.error('MODEL_NOT_SUPPORTED', { model: key, reason });
   }
 
   static markSucceeded(model) {
     const key = model.trim();
     FAILURE_CACHE.delete(key);
+    providerHealth.markVerified();
   }
 
   static getLastError(model) {
