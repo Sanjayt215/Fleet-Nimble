@@ -1116,17 +1116,17 @@ model KnowledgeApprovalEvent {
 
 /// Vector Embedding — stores embeddings for approved knowledge articles (RAG)
 model VectorEmbedding {
-  id               String                       @id @default(uuid())
+  id               String                      @id @default(uuid())
   articleId        String
-  chunkIndex       Int                          @default(0)
+  chunkIndex       Int                         @default(0)
   chunkText        String
-  embedding        Unsupported("vector(1536)")?
-  embeddingModel   String                       @default("text-embedding-ada-002")
-  embeddingVersion Int                          @default(1)
+  embedding        Unsupported("vector(768)")?
+  embeddingModel   String                      @default("text-embedding-ada-002")
+  embeddingVersion Int                         @default(1)
   contentHash      String?
-  metadata         Json                         @default("{}")
-  createdAt        DateTime                     @default(now())
-  updatedAt        DateTime                     @updatedAt
+  metadata         Json                        @default("{}")
+  createdAt        DateTime                    @default(now())
+  updatedAt        DateTime                    @updatedAt
 
   article KnowledgeStagedArticle @relation(fields: [articleId], references: [id], onDelete: Cascade)
 
