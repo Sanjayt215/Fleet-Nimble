@@ -149,7 +149,7 @@ export function buildUnavailableTwiML() {
   const twiml = new VoiceResponse();
   twiml.say(
     { voice: 'alice', language: 'en-US' },
-    'Thank you for calling FleetNimble. Our AI Receptionist is currently unavailable. Please try again later.'
+    'I\'m sorry. Our AI assistant is temporarily unavailable. Please leave your details after the beep or we\'ll arrange a callback.'
   );
   twiml.hangup();
   return twiml.toString();
@@ -218,4 +218,22 @@ export async function redirectToGreeting(callSid) {
   }
 }
 
-export default { validateTwilioRequest, buildMediaStreamUrl, buildIncomingTwiML, buildPostStreamFallbackTwiML, buildGreetingTwiML, buildUnavailableTwiML, buildFallbackTwiML, buildForwardCallTwiML, makeCall, redirectToGreeting, buildStreamStatusUrl, buildPostStreamUrl };
+export async function redirectToUnavailable(callSid) {
+  const client = getClient();
+  if (!client || !callSid) {
+    logger.warn('REDIRECT_TO_UNAVAILABLE_SKIPPED', { callSid, reason: !client ? 'no_client' : 'no_callSid' });
+    return false;
+  }
+  try {
+    await client.calls(callSid).update({
+      twiml: buildUnavailableTwiML(),
+    });
+    logger.info('CALL_REDIRECTED_TO_UNAVAILABLE', { callSid });
+    return true;
+  } catch (err) {
+    logger.warn('CALL_REDIRECT_TO_UNAVAILABLE_FAILED', { callSid, error: err.message });
+    return false;
+  }
+}
+
+export default { validateTwilioRequest, buildMediaStreamUrl, buildIncomingTwiML, buildPostStreamFallbackTwiML, buildGreetingTwiML, buildUnavailableTwiML, buildFallbackTwiML, buildForwardCallTwiML, makeCall, redirectToGreeting, redirectToUnavailable, buildStreamStatusUrl, buildPostStreamUrl };

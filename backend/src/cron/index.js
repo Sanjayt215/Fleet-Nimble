@@ -105,5 +105,86 @@ export function startCronJobs(app) {
     }
   });
 
+  // Knowledge sync: crawl approved sources every 6 hours
+  cron.schedule('0 */6 * * *', async () => {
+    try {
+      const prisma = (await import('../../utils/prisma.js')).default;
+      const sources = await prisma.knowledgeSource.findMany({ where: { enabled: true, schedule: { not: null } } });
+      for (const source of sources) {
+        try {
+          const { syncSource } = await import('../knowledge/sync/syncWorkflow.service.js');
+          const result = await syncSource(source.id, { userId: 'cron' });
+          if (result.error) {
+            logger.warn('KNOWLEDGE_CRON_SYNC_FAILED', { sourceId: source.id, error: result.error });
+          }
+        } catch (err) {
+          logger.error('KNOWLEDGE_CRON_SOURCE_ERROR', { sourceId: source.id, error: err.message });
+        }
+      }
+    } catch (err) {
+      logger.error('KNOWLEDGE_CRON_ERROR', { err: err.message });
+    }
+  });
+
+  // Knowledge cache refresh every 30 minutes
+  cron.schedule('*/30 * * * *', async () => {
+    try {
+      const { getKnowledgeEngine } = await import('../knowledge/index.js');
+      const engine = await getKnowledgeEngine();
+      await engine.refreshProvider('synchronized');
+    } catch (err) {
+      logger.debug('KNOWLEDGE_CACHE_REFRESH_SKIPPED', { error: err.message });
+    }
+  });
+
+  // RAG: index all approved articles every 2 hours
+  cron.schedule('0 */2 * * *', async () => {
+    try {
+      const rag = await import('../knowledge/rag/index.js');
+      await rag.initializeVectorStore();
+      const result = await rag.indexAllApprovedArticles();
+      logger.info('RAG_CRON_INDEX_ALL', result);
+    } catch (err) {
+      logger.error('RAG_CRON_INDEX_ALL_FAILED', { error: err.message });
+    }
+  });
+
+  // RAG: retry failed embeddings every 30 minutes
+  cron.schedule('*/30 * * * *', async () => {
+    try {
+      const rag = await import('../knowledge/rag/index.js');
+      const result = await rag.retryFailedEmbeddings();
+      if (result.retried > 0) {
+        logger.info('RAG_CRON_RETRY_EMBEDDINGS', result);
+      }
+    } catch (err) {
+      logger.debug('RAG_CRON_RETRY_FAILED', { error: err.message });
+    }
+  });
+
+  // RAG: reindex stale articles daily at 2 AM
+  cron.schedule('0 2 * * *', async () => {
+    try {
+      const rag = await import('../knowledge/rag/index.js');
+      const result = await rag.reindexStaleArticles();
+      logger.info('RAG_CRON_REINDEX_STALE', result);
+    } catch (err) {
+      logger.error('RAG_CRON_REINDEX_STALE_FAILED', { error: err.message });
+    }
+  });
+
+  // RAG: process reindex queue every 5 minutes
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      const rag = await import('../knowledge/rag/index.js');
+      const result = await rag.processReindexQueue();
+      if (result.processed > 0) {
+        logger.info('RAG_CRON_PROCESS_QUEUE', result);
+      }
+    } catch (err) {
+      logger.debug('RAG_CRON_PROCESS_QUEUE_FAILED', { error: err.message });
+    }
+  });
+
   logger.info('Cron jobs started');
 }

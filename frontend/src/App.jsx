@@ -17,6 +17,8 @@ import Drivers from './pages/Drivers';
 import WorkOrders from './pages/WorkOrders';
 import Settings from './pages/Settings';
 import Admin from './pages/Admin';
+import KnowledgeSync from './pages/KnowledgeSync';
+import RAGDashboard from './pages/RAGDashboard';
 import LiveOBD from './pages/LiveOBD';
 import GpsTracking from './pages/GpsTracking';
 import AIAssistant from './pages/AIAssistant';
@@ -47,6 +49,8 @@ export default function App() {
           <Route path="/demo/work-orders" element={<WorkOrders />} />
           <Route path="/demo/settings" element={<Settings />} />
           <Route path="/demo/admin" element={<Admin />} />
+          <Route path="/demo/admin/knowledge" element={<KnowledgeSync />} />
+          <Route path="/demo/admin/rag" element={<RAGDashboard />} />
           <Route path="/demo/ai-assistant" element={<AIAssistant />} />
           <Route path="/demo/ai-receptionist" element={<AIReceptionist />} />
 
@@ -66,6 +70,8 @@ export default function App() {
           <Route path="/analysis/work-orders" element={<WorkOrders />} />
           <Route path="/analysis/settings" element={<Settings />} />
           <Route path="/analysis/admin" element={<Admin />} />
+          <Route path="/analysis/admin/knowledge" element={<KnowledgeSync />} />
+          <Route path="/analysis/admin/rag" element={<RAGDashboard />} />
           <Route path="/analysis/ai-assistant" element={<AIAssistant />} />
           <Route path="/analysis/ai-receptionist" element={<AIReceptionist />} />
         </Route>

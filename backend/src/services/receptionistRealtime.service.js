@@ -5,25 +5,33 @@ import { RealtimeSessionManager } from './realtimeSessionManager.js';
 const ACTIVE_SESSIONS = new Map();
 
 export function registerSession(callSid, ws, metadata = {}) {
-  // Use existing session if already created (prevents SESSION_ALREADY_EXISTS)
+  // RSM is authoritative — create it first
   let mgr = RealtimeSessionManager.get(callSid);
   if (!mgr) {
-    mgr = RealtimeSessionManager.create(callSid, ws, metadata);
+    mgr = RealtimeSessionManager.create(callSid, ws, { ...metadata });
   }
+  // Legacy session is a thin proxy over RSM
   const legacy = {
     callSid,
     ws,
-    metadata,
-    transcript: [],
-    openaiWs: null,
-    isActive: true,
-    startedAt: Date.now(),
-    lastActivityAt: Date.now(),
-    streamSid: null,
+    metadata: mgr.metadata,
+    _rtmSession: mgr,
+    get transcript() { return mgr.transcript; },
+    set transcript(v) { mgr.transcript = v; },
+    get openaiWs() { return mgr.openAiSocket; },
+    set openaiWs(v) { mgr.openAiSocket = v; },
+    get isActive() { return !mgr.closed; },
+    set isActive(v) { if (!v) mgr.closed = true; },
+    get startedAt() { return mgr.startedAt; },
+    get lastActivityAt() { return mgr.lastActivity; },
+    set lastActivityAt(v) { mgr.lastActivity = v; },
+    get streamSid() { return mgr.streamSid; },
+    set streamSid(v) { mgr.streamSid = v; },
     functionCalls: [],
     confirmedActions: [],
     get stopReconnect() { return mgr.stopReconnect; },
     set stopReconnect(v) { mgr.stopReconnect = v; },
+    timers: [],
   };
   ACTIVE_SESSIONS.set(callSid, legacy);
   logger.info('REALTIME_SESSION_REGISTERED', { callSid });
@@ -35,6 +43,9 @@ export function getSession(callSid) {
 }
 
 export function removeSession(callSid) {
+  // Always clean RSM first (authoritative)
+  RealtimeSessionManager.remove(callSid);
+
   const session = ACTIVE_SESSIONS.get(callSid);
   if (session) {
     session.isActive = false;
@@ -44,16 +55,16 @@ export function removeSession(callSid) {
     ACTIVE_SESSIONS.delete(callSid);
     logger.info('REALTIME_SESSION_REMOVED', { callSid });
   }
-  RealtimeSessionManager.remove(callSid);
 }
 
 export function updateSessionActivity(callSid) {
+  const mgr = RealtimeSessionManager.get(callSid);
+  if (mgr) mgr.updateActivity();
+
   const session = ACTIVE_SESSIONS.get(callSid);
   if (session) {
     session.lastActivityAt = Date.now();
   }
-  const mgr = RealtimeSessionManager.get(callSid);
-  if (mgr) mgr.updateActivity();
 }
 
 export function getActiveSessions() {
@@ -66,7 +77,7 @@ export function getActiveSessions() {
       isActive: session.isActive,
       streamSid: session.streamSid,
       metadata: session.metadata,
-      transcriptLength: session.transcript.length,
+      transcriptLength: (session._rtmSession?.transcript || []).length,
     });
   });
   return sessions;
@@ -79,48 +90,75 @@ export function getActiveSessionsCount() {
 export function addTranscriptEntry(callSid, entry) {
   const session = ACTIVE_SESSIONS.get(callSid);
   if (session) {
-    session.transcript.push({
-      ...entry,
-      timestamp: new Date().toISOString(),
-    });
-    if (session.transcript.length > 1000) {
-      session.transcript = session.transcript.slice(-500);
+    const rtm = session._rtmSession;
+    if (rtm) {
+      rtm.transcript.push({
+        ...entry,
+        timestamp: new Date().toISOString(),
+      });
+      if (rtm.transcript.length > 1000) {
+        rtm.transcript = rtm.transcript.slice(-500);
+      }
+      rtm.updateActivity();
+    } else {
+      // Fallback if no RSM (shouldn't happen)
+      session.transcript = session.transcript || [];
+      session.transcript.push({
+        ...entry,
+        timestamp: new Date().toISOString(),
+      });
+      if (session.transcript.length > 1000) {
+        session.transcript = session.transcript.slice(-500);
+      }
     }
-    session.lastActivityAt = Date.now();
   }
 }
 
 export function setStreamSid(callSid, streamSid) {
+  const mgr = RealtimeSessionManager.get(callSid);
+  if (mgr) mgr.streamSid = streamSid;
+
   const session = ACTIVE_SESSIONS.get(callSid);
   if (session) {
     session.streamSid = streamSid;
   }
-  const mgr = RealtimeSessionManager.get(callSid);
-  if (mgr) mgr.streamSid = streamSid;
 }
 
 export function setOpenaiWs(callSid, ws) {
+  const mgr = RealtimeSessionManager.get(callSid);
+  if (mgr) mgr.openAiSocket = ws;
+
   const session = ACTIVE_SESSIONS.get(callSid);
   if (session) {
     session.openaiWs = ws;
   }
-  const mgr = RealtimeSessionManager.get(callSid);
-  if (mgr) mgr.openAiSocket = ws;
 }
 
 export function cleanupStaleSessions(maxAgeMs = 600000) {
   const now = Date.now();
   let cleaned = 0;
+
+  // RSM is authoritative for stale detection
+  RealtimeSessionManager.cleanup(maxAgeMs);
+
+  // Clean legacy sessions that RSM may have already removed
+  const activeRsmSids = new Set((RealtimeSessionManager.getAll() || []).map(s => s.callSid));
   ACTIVE_SESSIONS.forEach((session, callSid) => {
-    if (now - session.lastActivityAt > maxAgeMs) {
-      removeSession(callSid);
-      cleaned++;
+    if (!activeRsmSids.has(callSid) || now - session.lastActivityAt > maxAgeMs) {
+      if (!activeRsmSids.has(callSid)) {
+        // RSM already cleaned this — just remove legacy
+        ACTIVE_SESSIONS.delete(callSid);
+        cleaned++;
+      } else if (now - session.lastActivityAt > maxAgeMs) {
+        removeSession(callSid);
+        cleaned++;
+      }
     }
   });
+
   if (cleaned > 0) {
     logger.info('STALE_SESSIONS_CLEANED', { count: cleaned });
   }
-  RealtimeSessionManager.cleanup(maxAgeMs);
   return cleaned;
 }
 

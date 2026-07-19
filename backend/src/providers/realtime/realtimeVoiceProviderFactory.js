@@ -8,14 +8,40 @@ const PROVIDER_MAP = {
   gemini: GeminiLiveProvider,
 };
 
-const FALLBACK_PROVIDER_MAP = {
-  openai: OpenAIRealtimeProvider,
-  gemini: GeminiLiveProvider,
-};
+function validateProviderConfig(providerName) {
+  const issues = [];
+
+  if (providerName === 'openai') {
+    if (!config.openai?.apiKey) {
+      issues.push('OPENAI_API_KEY not configured');
+    }
+    if (!config.realtime?.model) {
+      issues.push('AI_RECEPTIONIST_MODEL not configured');
+    }
+  }
+
+  if (providerName === 'gemini') {
+    if (!config.gemini?.apiKey) {
+      issues.push('GEMINI_API_KEY not configured');
+    }
+    if (!config.gemini?.liveModel) {
+      issues.push('GEMINI_LIVE_MODEL not configured');
+    }
+    if (!config.gemini?.voice) {
+      issues.push('GEMINI_VOICE not configured (default: Puck)');
+    }
+  }
+
+  return {
+    valid: issues.length === 0,
+    issues,
+  };
+}
 
 function getConfiguredProvider() {
   const providerName = config.realtimeProvider?.provider || 'openai';
   const ProviderClass = PROVIDER_MAP[providerName];
+
   if (!ProviderClass) {
     logger.error('REALTIME_PROVIDER_UNKNOWN', {
       provider: providerName,
@@ -23,21 +49,36 @@ function getConfiguredProvider() {
     });
     return null;
   }
-  return { name: providerName, ProviderClass };
-}
 
-function getFallbackProviderName() {
-  return config.realtimeProvider?.fallbackProvider || 'openai';
+  const validation = validateProviderConfig(providerName);
+  if (!validation.valid) {
+    logger.error('REALTIME_PROVIDER_CONFIG_INVALID', {
+      provider: providerName,
+      issues: validation.issues,
+    });
+    return { name: providerName, ProviderClass, configIssues: validation.issues };
+  }
+
+  return { name: providerName, ProviderClass, configIssues: [] };
 }
 
 export function createRealtimeVoiceProvider() {
   const primary = getConfiguredProvider();
   if (!primary) return null;
 
+  if (primary.configIssues && primary.configIssues.length > 0) {
+    logger.warn('REALTIME_PROVIDER_CONFIG_ISSUES', {
+      provider: primary.name,
+      issues: primary.configIssues,
+      action: 'Provider will be created but may not function correctly',
+    });
+  }
+
   const provider = new primary.ProviderClass();
   logger.info('REALTIME_PROVIDER_SELECTED', {
     provider: primary.name,
     enabled: config.realtimeProvider?.enabled !== false,
+    configValid: primary.configIssues.length === 0,
     fallbackProvider: getFallbackProviderName(),
   });
 
@@ -48,12 +89,20 @@ export function isRealtimeProviderEnabled() {
   return config.realtimeProvider?.enabled !== false;
 }
 
+function getFallbackProviderName() {
+  return config.realtimeProvider?.fallbackProvider || 'openai';
+}
+
 export function getRealtimeProviderHealth() {
   const providerName = config.realtimeProvider?.provider || 'openai';
+  const validation = validateProviderConfig(providerName);
+
   return {
     provider: providerName,
-    configured: Boolean(config.gemini?.apiKey || config.openai?.apiKey),
-    available: config.realtime?.configured || Boolean(config.gemini?.apiKey),
+    configured: validation.valid,
+    configIssues: validation.issues,
+    apiKeyPresent: Boolean(config.gemini?.apiKey || config.openai?.apiKey),
+    available: validation.valid,
     fallbackProvider: getFallbackProviderName(),
     enabled: config.realtimeProvider?.enabled !== false,
   };

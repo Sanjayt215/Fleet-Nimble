@@ -65,7 +65,7 @@ export class OpenAIRealtimeProvider extends RealtimeVoiceProvider {
       }
     }, WS_UPGRADE_TIMEOUT_MS);
 
-    this._ws.on('open', () => {
+    this._ws.on('open', async () => {
       clearTimeout(openTimeout);
       this._connected = true;
       logger.info('OPENAI_SOCKET_OPEN', { callSid: this._callSid, model });
@@ -74,11 +74,12 @@ export class OpenAIRealtimeProvider extends RealtimeVoiceProvider {
       const memoryContext = sessionContext.memoryContext || '';
       const tools = sessionContext.businessToolsEnabled ? buildToolDefinitions(true) : [];
 
+      const instructions = await buildSystemPrompt(config, memoryContext);
       const basePayload = {
         type: 'session.update',
         session: {
           modalities: ['text', 'audio'],
-          instructions: buildSystemPrompt(config, memoryContext),
+          instructions,
           voice,
           input_audio_format: 'g711_ulaw',
           output_audio_format: 'g711_ulaw',

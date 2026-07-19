@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import logger from '../utils/logger.js';
 import { queryKnowledgeBase } from './receptionistKnowledgeBase.service.js';
+import { getKnowledgeEngine } from '../knowledge/index.js';
 import * as callService from './receptionistCall.service.js';
 import * as appointmentService from './receptionistAppointment.service.js';
 import * as supportService from './receptionistSupport.service.js';
@@ -11,6 +12,7 @@ import * as handoffService from './receptionistHandoff.service.js';
 import * as notificationService from './receptionistNotification.service.js';
 import * as calendarService from './receptionistCalendar.service.js';
 import * as transcriptService from './receptionistTranscript.service.js';
+import * as metrics from './receptionistMetrics.service.js';
 import { config } from '../config/index.js';
 import prisma from '../utils/prisma.js';
 
@@ -22,12 +24,21 @@ const INTENTS = {
   PRICING_QUESTION: 'pricing_question',
   GENERAL_QUESTION: 'general_question',
   PRODUCT_QUESTION: 'product_question',
+  SALES_INTEREST: 'sales_interest',
   EMERGENCY: 'emergency',
   UNKNOWN: 'unknown',
 };
 
+const CONVERSATION_MODES = {
+  SALES: 'sales',
+  SUPPORT: 'support',
+  BOTH: 'both',
+};
+
 export async function processReceptionistTurn({ session, userText, channel, userContext }) {
   const { callSid, userId, callId, customerId, customerMemory, currentStage, collectedData, pendingAction } = session;
+
+  let conversationMode = session.conversationMode || CONVERSATION_MODES.BOTH;
 
   const intent = await classifyIntent(userText, session);
 
@@ -37,18 +48,37 @@ export async function processReceptionistTurn({ session, userText, channel, user
     return { reply, intent, escalate: true, department: 'emergency' };
   }
 
-  if (intent === INTENTS.PRODUCT_QUESTION) {
-    const answer = queryKnowledgeBase(userText);
-    if (answer) {
-      return { reply: answer, intent, isKnowledgeBase: true };
+  if (intent === INTENTS.PRODUCT_QUESTION || intent === INTENTS.PRICING_QUESTION || intent === INTENTS.SALES_INTEREST) {
+    if (intent === INTENTS.SALES_INTEREST || intent === INTENTS.PRICING_QUESTION) {
+      conversationMode = CONVERSATION_MODES.SALES;
     }
+
+    const engine = await getKnowledgeEngine();
+    const results = await engine.search(userText, {
+      mode: conversationMode,
+      limit: 3,
+    });
+
+    const answer = engine.getAnswer(results, conversationMode);
+    const salesTip = engine.getProactiveSalesSuggestion(results);
+
+    const response = { reply: answer, intent, isKnowledgeBase: true, results };
+
+    if (salesTip && conversationMode === CONVERSATION_MODES.SALES) {
+      response.proactiveSalesTip = salesTip;
+      response.reply = `${answer} ${salesTip}`;
+    }
+
+    return response;
   }
 
   if (intent === INTENTS.SCHEDULE_MEETING) {
+    conversationMode = CONVERSATION_MODES.SALES;
     return handleAppointmentIntent(session, userText);
   }
 
   if (intent === INTENTS.SUPPORT_REQUEST) {
+    conversationMode = CONVERSATION_MODES.SUPPORT;
     return handleSupportIntent(session, userText);
   }
 
@@ -60,6 +90,7 @@ export async function processReceptionistTurn({ session, userText, channel, user
     return {
       reply: 'How can I assist you today? I can help schedule a demo, create a support ticket, or answer questions about FleetNimble.',
       intent: 'clarifying',
+      conversationMode,
     };
   }
 
@@ -67,8 +98,15 @@ export async function processReceptionistTurn({ session, userText, channel, user
     ? `Welcome back, ${customerMemory.customer.name}. How may I help you today?`
     : 'Hello. Thank you for calling FleetNimble. How may I help you today?';
 
-  return { reply: greeting, intent: 'greeting' };
+  return { reply: greeting, intent: 'greeting', conversationMode };
 }
+
+const SALES_KEYWORDS = [
+  'interested in', 'looking for', 'want to buy', 'purchase', 'upgrade',
+  'add vehicle', 'new feature', 'capabilities', 'what can', 'offer',
+  'benefit', 'advantage', 'help my fleet', 'improve', 'reduce cost',
+  'save money', 'increase efficiency', 'grow my fleet',
+];
 
 async function classifyIntent(message, session) {
   const lower = message.toLowerCase().trim();
@@ -86,9 +124,21 @@ async function classifyIntent(message, session) {
     return INTENTS.PRICING_QUESTION;
   }
 
-  const knowledgeAnswer = queryKnowledgeBase(message);
-  if (knowledgeAnswer) {
-    return INTENTS.PRODUCT_QUESTION;
+  if (SALES_KEYWORDS.some(kw => lower.includes(kw))) {
+    return INTENTS.SALES_INTEREST;
+  }
+
+  try {
+    const engine = await getKnowledgeEngine();
+    const results = await engine.search(message, { strict: false, limit: 1 });
+    if (results.length > 0 && results[0].score >= 3) {
+      return INTENTS.PRODUCT_QUESTION;
+    }
+  } catch (err) {
+    const knowledgeAnswer = await queryKnowledgeBase(message);
+    if (knowledgeAnswer) {
+      return INTENTS.PRODUCT_QUESTION;
+    }
   }
 
   if (lower.includes('how') || lower.includes('what') || lower.includes('where') || lower.includes('tell me') || lower.includes('explain') || lower.includes('can you')) {
@@ -191,6 +241,31 @@ export async function handleConfirmation(session, userText) {
   return { reply: 'How else can I help you today?', intent: 'clarifying' };
 }
 
+async function checkSlotConflict(userId, scheduledDate, durationMinutes = 30) {
+  const startWindow = new Date(scheduledDate.getTime() - durationMinutes * 60000);
+  const endWindow = new Date(scheduledDate.getTime() + durationMinutes * 60000);
+  const conflicting = await prisma.aiReceptionistAppointment.findFirst({
+    where: {
+      userId,
+      scheduledDate: { gte: startWindow, lte: endWindow },
+      status: { in: ['SCHEDULED', 'CONFIRMED'] },
+    },
+    select: { id: true, scheduledDate: true, callerName: true },
+  });
+  return conflicting;
+}
+
+function normalizeToUtc(date) {
+  return new Date(Date.UTC(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+    date.getHours(),
+    date.getMinutes(),
+    date.getSeconds(),
+  ));
+}
+
 export async function executeAppointmentCreation(session) {
   const { userId, companyId, callId, customerId, collectedData = {} } = session;
   const executionId = `${callId}_create_appointment`;
@@ -211,6 +286,28 @@ export async function executeAppointmentCreation(session) {
       throw new Error('Invalid date/time');
     }
 
+    const durationMinutes = collectedData.durationMinutes || 30;
+
+    // Check for slot conflicts
+    const conflict = await checkSlotConflict(userId, scheduledDate, durationMinutes);
+    if (conflict) {
+      logger.warn('APPOINTMENT_SLOT_CONFLICT', {
+        callId,
+        requestedDate: scheduledDate.toISOString(),
+        conflictingAppointmentId: conflict.id,
+        conflictingCaller: conflict.callerName,
+      });
+      return {
+        reply: `I'm sorry, but there is already an appointment scheduled at that time. Please choose a different date or time.`,
+        intent: 'slot_conflict',
+        conflict: true,
+      };
+    }
+
+    // Normalize to UTC for storage
+    const utcDate = normalizeToUtc(scheduledDate);
+    const timezone = collectedData.timezone || process.env.AI_RECEPTIONIST_TIMEZONE || 'UTC';
+
     const appointment = await prisma.aiReceptionistAppointment.create({
       data: {
         userId,
@@ -222,8 +319,9 @@ export async function executeAppointmentCreation(session) {
         fleetSize: collectedData.fleetSize || null,
         meetingPurpose: collectedData.meetingPurpose || 'General inquiry',
         meetingTitle: collectedData.meetingPurpose ? `${collectedData.meetingPurpose} - FleetNimble` : 'FleetNimble Meeting',
-        scheduledDate,
-        durationMinutes: 30,
+        scheduledDate: utcDate,
+        durationMinutes,
+        timezone,
         status: 'SCHEDULED',
       },
     });
@@ -301,6 +399,8 @@ export async function executeAppointmentCreation(session) {
         },
       });
     } catch {};
+
+    metrics.recordAppointmentCreated();
 
     logger.info('APPOINTMENT_CREATED', {
       appointmentId: appointment.id,
@@ -413,6 +513,8 @@ export async function executeSupportTicketCreation(session) {
       });
     } catch {};
 
+    metrics.recordTicketCreated();
+
     logger.info('SUPPORT_TICKET_CREATED', {
       ticketId: ticket.id,
       callId,
@@ -440,22 +542,51 @@ export async function executeSupportTicketCreation(session) {
 }
 
 export async function lookupCustomerByPhone(userId, phone) {
-  if (!phone) return null;
+  return lookupCustomer(userId, { phone });
+}
+
+export async function lookupCustomerByEmail(userId, email) {
+  return lookupCustomer(userId, { email });
+}
+
+export async function lookupCustomerById(userId, customerId) {
+  if (!customerId || !userId) return null;
+  try {
+    const customer = await prisma.receptionistCustomer.findFirst({
+      where: { id: customerId, userId },
+    });
+    if (!customer) return null;
+    return memoryService.getCustomerMemory(customer.id);
+  } catch (err) {
+    logger.warn('CUSTOMER_LOOKUP_FAILED', { userId, customerId, error: err.message });
+    return null;
+  }
+}
+
+async function lookupCustomer(userId, { phone, email, name }) {
   if (!userId) {
-    logger.info('CUSTOMER_LOOKUP_SKIPPED_NO_OWNER', { phoneTail: phone.slice(-4) });
+    logger.info('CUSTOMER_LOOKUP_SKIPPED_NO_OWNER');
     return null;
   }
   try {
-    const normalized = phone.replace(/[^\d+]/g, '');
-    const customer = await prisma.receptionistCustomer.findFirst({
-      where: {
-        userId,
-        phone: normalized,
-      },
-    });
+    const where = { userId };
+    const orClauses = [];
+    if (phone) {
+      const normalized = phone.replace(/[^\d+]/g, '');
+      orClauses.push({ phone: normalized });
+    }
+    if (email) {
+      orClauses.push({ email: email.toLowerCase() });
+    }
+    if (name) {
+      orClauses.push({ name: { equals: name, mode: 'insensitive' } });
+    }
+    if (orClauses.length === 0) return null;
+    where.OR = orClauses;
+
+    const customer = await prisma.receptionistCustomer.findFirst({ where });
     if (!customer) return null;
-    const memory = await memoryService.getCustomerMemory(customer.id);
-    return memory;
+    return memoryService.getCustomerMemory(customer.id);
   } catch (err) {
     logger.warn('CUSTOMER_LOOKUP_FAILED', { userId, error: err.message });
     return null;

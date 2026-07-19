@@ -25,7 +25,11 @@ const state = {
   lastSuccessfulConnectionAt: null,
   lastErrorCode: null,
   lastErrorAt: null,
+  lastErrorReason: null,
   audioForwardingDisabled: false,
+  newSessionsAllowed: true,
+  newSessionsBlockedAt: null,
+  newSessionsBlockReason: null,
 };
 
 export function markConfigured() {
@@ -84,12 +88,16 @@ export function handleFatalError(err, callSid) {
   state.verified = false;
   state.lastErrorCode = classification.code;
   state.lastErrorAt = Date.now();
+  state.lastErrorReason = err?.message || classification.code;
   state.audioForwardingDisabled = true;
+
+  preventNewSessions(classification.code, err?.message);
 
   logger.error('PROVIDER_FATAL_ERROR', {
     code: classification.code,
     retryable: classification.retryable,
     callSid,
+    reason: err?.message?.substring(0, 200),
   });
 }
 
@@ -103,6 +111,40 @@ export function handleTransientError(err, callSid) {
     retryable: classification.retryable,
     callSid,
   });
+}
+
+export function preventNewSessions(code, reason) {
+  state.newSessionsAllowed = false;
+  state.newSessionsBlockedAt = Date.now();
+  state.newSessionsBlockReason = reason || code || 'unknown';
+  logger.warn('NEW_SESSIONS_BLOCKED', {
+    code,
+    reason: state.newSessionsBlockReason,
+    blockedAt: state.newSessionsBlockedAt,
+  });
+}
+
+export function allowNewSessions() {
+  state.newSessionsAllowed = true;
+  state.newSessionsBlockedAt = null;
+  state.newSessionsBlockReason = null;
+  logger.info('NEW_SESSIONS_ALLOWED');
+}
+
+export function areNewSessionsAllowed() {
+  return state.newSessionsAllowed;
+}
+
+export function clearState() {
+  state.configured = false;
+  state.verified = false;
+  state.available = false;
+  state.lastSuccessfulConnectionAt = null;
+  state.lastErrorCode = null;
+  state.lastErrorAt = null;
+  state.lastErrorReason = null;
+  state.audioForwardingDisabled = false;
+  allowNewSessions();
 }
 
 export function enableAudioForwarding() {
@@ -128,15 +170,11 @@ export function getPublicHealth() {
     available: state.available,
     lastRealtimeErrorCode: state.lastErrorCode,
     lastRealtimeErrorAt: state.lastErrorAt,
+    lastErrorReason: state.lastErrorReason,
+    newSessionsAllowed: state.newSessionsAllowed,
+    newSessionsBlockedAt: state.newSessionsBlockedAt,
+    newSessionsBlockReason: state.newSessionsBlockReason,
   };
 }
 
-export function clearState() {
-  state.configured = false;
-  state.verified = false;
-  state.available = false;
-  state.lastSuccessfulConnectionAt = null;
-  state.lastErrorCode = null;
-  state.lastErrorAt = null;
-  state.audioForwardingDisabled = false;
-}
+

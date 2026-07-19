@@ -18,10 +18,12 @@ import {
 } from './receptionistTranscript.service.js';
 import { mapToOpenAIVoice, buildSystemPrompt, buildToolDefinitions } from './receptionistVoice.service.js';
 import * as orchestrator from './receptionistOrchestrator.service.js';
+import * as liveTools from './receptionistLiveTools.service.js';
 import * as transcriptService from './receptionistTranscript.service.js';
 import * as callService from './receptionistCall.service.js';
-import { redirectToGreeting } from './twilioWebhook.service.js';
+import { redirectToGreeting, redirectToUnavailable } from './twilioWebhook.service.js';
 import * as providerHealth from './receptionistProviderHealth.service.js';
+import * as metrics from './receptionistMetrics.service.js';
 import { resolveTenant, isPersistenceAvailable, getResolvedOwner } from './receptionistTenantResolver.service.js';
 import { createRealtimeVoiceProvider, isRealtimeProviderEnabled } from '../providers/realtime/realtimeVoiceProviderFactory.js';
 import { validateTwilioPayload } from './audio/twilioAudioCodec.js';
@@ -38,6 +40,7 @@ const ALLOWED_TOOLS = new Set([
   'save_customer_note',
   'request_human_handoff',
   'end_call',
+  ...liveTools.getLiveToolNames(),
 ]);
 
 const COMPLETED_TOOL_CALLS = new Set();
@@ -317,8 +320,19 @@ function handleMediaStream(ws, req) {
         break;
       }
 
-      default:
-        result = { error: 'not_implemented', message: `Tool ${functionName} not implemented` };
+      default: {
+        if (liveTools.isLiveTool(functionName)) {
+          const liveResult = await liveTools.executeLiveTool(userId, functionName, args);
+          result = liveResult;
+          if (liveResult.success) {
+            const summary = liveTools.buildVoiceSummary(liveResult.data);
+            if (summary) result.voiceSummary = summary;
+          }
+        } else {
+          result = { error: 'not_implemented', message: `Tool ${functionName} not implemented` };
+        }
+        break;
+      }
     }
 
     return result;
@@ -446,6 +460,9 @@ function handleMediaStream(ws, req) {
 
       const memoryContext = customerMemory ? buildMemoryContext(customerMemory) : '';
       const businessToolsEnabled = config.realtime?.businessToolsEnabled ?? true;
+      if (!businessToolsEnabled) {
+        logger.warn('BUSINESS_TOOLS_DISABLED', { callSid, reason: 'config_flag_false', envKey: 'AI_RECEPTIONIST_BUSINESS_TOOLS_ENABLED' });
+      }
 
       if (rtmSession) rtmSession.openAiSocket = provider;
       if (legacySession) setOpenaiWs(callSid, provider);
@@ -453,6 +470,7 @@ function handleMediaStream(ws, req) {
       provider.on('connected', () => {
         logger.info('PROVIDER_SOCKET_OPEN', { callSid, provider: providerName });
         reconnectAttempts = 0;
+        metrics.recordProviderEvent({ type: 'connected' });
       });
 
       provider.on('ready', () => {
@@ -605,11 +623,13 @@ function handleMediaStream(ws, req) {
         const fakeErr = { code: err.code, message: err.message };
         if (err.fatal) {
           providerHealth.handleFatalError(fakeErr, callSid);
+          metrics.recordProviderEvent({ type: 'fatal', code: err.code });
           if (legacySession) legacySession.stopReconnect = true;
           if (rtmSession) rtmSession.stopReconnect = true;
           gracefulClose();
         } else {
           providerHealth.handleTransientError(fakeErr, callSid);
+          metrics.recordProviderEvent({ type: 'transient', code: err.code });
           if (rtmSession) {
             rtmSession.lastError = { message: err.message, code: err.code, time: Date.now() };
           }
@@ -686,11 +706,17 @@ function handleMediaStream(ws, req) {
     }
 
     const greetingNotDelivered = !greetingSent || (rtmSession && !rtmSession.greetingAudioReceived && greetingSent);
+    const providerFailed = responseCreatedSeen && !responseAudioSeen;
 
-    if (greetingNotDelivered && callSid) {
-      logger.info('FALLBACK_REDIRECT_TO_GREETING', { callSid, greetingSent, greetingAudioReceived: rtmSession?.greetingAudioReceived });
+    if (callSid && (greetingNotDelivered || providerFailed)) {
+      logger.info('FALLBACK_REDIRECT_TO_UNAVAILABLE', {
+        callSid,
+        greetingSent,
+        greetingAudioReceived: rtmSession?.greetingAudioReceived,
+        providerFailed,
+      });
       try {
-        await redirectToGreeting(callSid);
+        await redirectToUnavailable(callSid);
       } catch { /* best effort */ }
     }
 
@@ -757,12 +783,19 @@ function handleMediaStream(ws, req) {
         });
       }
 
+      const providerErrorCode = providerHealth.getInternalState().lastErrorCode;
+      metrics.recordCallEvent({
+        status: providerErrorCode ? 'failed' : 'completed',
+        error: !!providerErrorCode,
+        errorCode: providerErrorCode,
+      });
+
       logger.info('CALL_ENDED', {
         callSid,
         greetingSent,
         greetingAudioReceived: rtmSession?.greetingAudioReceived,
         totalDroppedAudioFrames: droppedFrameCount,
-        providerError: providerHealth.getInternalState().lastErrorCode,
+        providerError: providerErrorCode,
         // Phase 4 — pipeline counters
         incomingFrames: pipelineCounters.incomingFrames,
         outgoingFrames: pipelineCounters.outgoingFrames,

@@ -1,4 +1,94 @@
-const KNOWLEDGE_BASE = [
+import logger from '../utils/logger.js';
+
+class JsonKnowledgeProvider {
+  constructor(entries) {
+    this.name = 'json';
+    this.entries = entries || [];
+    logger.info('KNOWLEDGE_PROVIDER_INITIALIZED', { provider: this.name, entries: this.entries.length });
+  }
+
+  async query(message) {
+    const lower = message.toLowerCase().trim();
+    if (!lower || lower.length < 2) return null;
+
+    let bestMatch = null;
+    let bestScore = 0;
+
+    for (const entry of this.entries) {
+      let score = 0;
+      for (const keyword of entry.keywords) {
+        if (lower.includes(keyword)) {
+          score += keyword.length;
+        }
+        const words = keyword.split(' ');
+        if (words.length > 1) {
+          const matchedWords = words.filter(w => {
+            const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return new RegExp(`\\b${escaped}\\b`, 'i').test(lower);
+          });
+          score += (matchedWords.length / words.length) * keyword.length;
+        }
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = entry;
+      }
+    }
+
+    if (bestMatch && bestScore > 2) {
+      return bestMatch.answer || null;
+    }
+    return null;
+  }
+
+  async getTopics() {
+    return this.entries.map(e => e.keywords[0]);
+  }
+
+  async getAllEntries() {
+    return this.entries;
+  }
+}
+
+class DatabaseKnowledgeProvider {
+  constructor() {
+    this.name = 'database';
+    this.available = false;
+  }
+
+  async _ensureLoaded(userId) {
+    if (!userId) return [];
+    try {
+      const { default: prisma } = await import('../utils/prisma.js');
+      const config = await prisma.aiReceptionistConfig.findUnique({ where: { userId } });
+      if (config?.knowledgeBase && Array.isArray(config.knowledgeBase)) {
+        return config.knowledgeBase;
+      }
+    } catch (err) {
+      logger.warn('KNOWLEDGE_DB_LOAD_FAILED', { userId, error: err.message });
+    }
+    return [];
+  }
+
+  async query(message, userId) {
+    const entries = await this._ensureLoaded(userId);
+    if (entries.length === 0) return null;
+
+    const provider = new JsonKnowledgeProvider(entries);
+    return provider.query(message);
+  }
+
+  async getTopics(userId) {
+    const entries = await this._ensureLoaded(userId);
+    return entries.map(e => e.keywords[0]);
+  }
+
+  async getAllEntries(userId) {
+    return this._ensureLoaded(userId);
+  }
+}
+
+const HARDCODED_ENTRIES = [
   {
     keywords: ['dashboard', 'overview', 'main page', 'home', 'analytics dashboard', 'fleet dashboard'],
     answer: 'The FleetNimble Dashboard gives you a real-time overview of your entire fleet. From the Dashboard, you can see vehicle status (online/offline), active alerts, fuel levels, GPS positions, live diagnostics data, and key performance metrics. Navigate to it from the left sidebar under "Dashboard". Vehicle cards are color-coded: green for online, red for offline, yellow for idling.',
@@ -89,41 +179,35 @@ const KNOWLEDGE_BASE = [
   },
 ];
 
-export function queryKnowledgeBase(userMessage) {
-  const lower = userMessage.toLowerCase().trim();
-  if (!lower || lower.length < 2) return null;
+const providerType = process.env.KNOWLEDGE_BASE_PROVIDER || 'json';
+const jsonProvider = new JsonKnowledgeProvider(HARDCODED_ENTRIES);
+const dbProvider = new DatabaseKnowledgeProvider();
 
-  let bestMatch = null;
-  let bestScore = 0;
-
-  for (const entry of KNOWLEDGE_BASE) {
-    let score = 0;
-    for (const keyword of entry.keywords) {
-      if (lower.includes(keyword)) {
-        score += keyword.length;
-      }
-      const words = keyword.split(' ');
-      if (words.length > 1) {
-        const matchedWords = words.filter(w => {
-          const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          return new RegExp(`\\b${escaped}\\b`, 'i').test(lower);
-        });
-        score += (matchedWords.length / words.length) * keyword.length;
-      }
-    }
-    if (score > bestScore) {
-      bestScore = score;
-      bestMatch = entry;
-    }
-  }
-
-  if (bestMatch && bestScore > 2) {
-    return bestMatch.answer || null;
-  }
-
-  return null;
+let activeProvider = jsonProvider;
+if (providerType === 'database') {
+  activeProvider = dbProvider;
+  logger.info('KNOWLEDGE_BASE_PROVIDER', { provider: 'database' });
+} else {
+  logger.info('KNOWLEDGE_BASE_PROVIDER', { provider: 'json', entryCount: HARDCODED_ENTRIES.length });
 }
 
-export function getKnowledgeTopics() {
-  return KNOWLEDGE_BASE.map(e => e.keywords[0]);
+export function setKnowledgeProvider(provider) {
+  activeProvider = provider;
+  logger.info('KNOWLEDGE_BASE_PROVIDER_CHANGED', { provider: provider.name });
+}
+
+export function getKnowledgeProvider() {
+  return activeProvider;
+}
+
+export async function queryKnowledgeBase(userMessage, userId) {
+  return activeProvider.query(userMessage, userId);
+}
+
+export async function getKnowledgeTopics(userId) {
+  return activeProvider.getTopics(userId);
+}
+
+export function getAllEntries() {
+  return HARDCODED_ENTRIES;
 }
