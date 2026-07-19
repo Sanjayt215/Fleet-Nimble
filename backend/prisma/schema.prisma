@@ -66,6 +66,7 @@ model User {
   aiConversationContexts     AiConversationContext[]
   aiConversationSummaries    AiConversationSummary[]
   aiUserPreferences          AiUserPreference[]
+  knowledgeSources           KnowledgeSource[]
 
   @@index([email])
   @@index([roleId])
@@ -959,32 +960,32 @@ model AiUserPreference {
 
 /// Knowledge Source — defines a content source to crawl or import for the knowledge sync pipeline
 model KnowledgeSource {
-  id              String   @id @default(uuid())
-  userId          String
-  name            String
-  sourceType      String   /// website | sitemap | markdown-directory | json-file | local-documentation | api-documentation
-  baseUrl         String?
-  localPath       String?
-  enabled         Boolean  @default(true)
-  allowedDomains  String[]
-  allowedPaths    String[]
-  blockedPaths    String[]
-  crawlDepth      Int      @default(2)
-  maxPages        Int      @default(50)
-  rateLimitMs     Int      @default(1000)
-  requiresApproval Boolean @default(true)
-  defaultCategory String   @default("Web")
-  defaultMode     String   @default("both")
-  priority        Int      @default(5)
-  owner           String?
-  schedule        String?  /// cron expression (e.g. "0 6 * * 1" for weekly)
-  lastSyncedAt    DateTime?
-  lastSyncStatus  String?  /// SUCCESS | FAILED | RUNNING
-  metadata        Json?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id               String    @id @default(uuid())
+  userId           String
+  name             String
+  sourceType       String /// website | sitemap | markdown-directory | json-file | local-documentation | api-documentation
+  baseUrl          String?
+  localPath        String?
+  enabled          Boolean   @default(true)
+  allowedDomains   String[]
+  allowedPaths     String[]
+  blockedPaths     String[]
+  crawlDepth       Int       @default(2)
+  maxPages         Int       @default(50)
+  rateLimitMs      Int       @default(1000)
+  requiresApproval Boolean   @default(true)
+  defaultCategory  String    @default("Web")
+  defaultMode      String    @default("both")
+  priority         Int       @default(5)
+  owner            String?
+  schedule         String? /// cron expression (e.g. "0 6 * * 1" for weekly)
+  lastSyncedAt     DateTime?
+  lastSyncStatus   String? /// SUCCESS | FAILED | RUNNING
+  metadata         Json?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  user           User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
   syncRuns       KnowledgeSyncRun[]
   stagedArticles KnowledgeStagedArticle[]
 
@@ -993,55 +994,56 @@ model KnowledgeSource {
 
 /// Knowledge Sync Run — tracks each synchronization operation for a source
 model KnowledgeSyncRun {
-  id                String   @id @default(uuid())
-  sourceId          String
-  userId            String?
-  status            String   @default("PENDING") /// PENDING | RUNNING | COMPLETED | FAILED | CANCELLED
-  pagesDiscovered   Int      @default(0)
-  pagesFetched      Int      @default(0)
-  pagesSkipped      Int      @default(0)
-  pagesFailed       Int      @default(0)
-  articlesNew       Int      @default(0)
-  articlesUpdated   Int      @default(0)
-  articlesUnchanged Int      @default(0)
-  articlesConflicted Int     @default(0)
-  articlesInvalid   Int      @default(0)
-  articlesUnsafe    Int      @default(0)
-  durationMs        Int?
-  errorMessage      String?
-  startedAt         DateTime @default(now())
-  completedAt       DateTime?
+  id                 String    @id @default(uuid())
+  sourceId           String
+  userId             String?
+  status             String    @default("PENDING") /// PENDING | RUNNING | COMPLETED | FAILED | CANCELLED
+  pagesDiscovered    Int       @default(0)
+  pagesFetched       Int       @default(0)
+  pagesSkipped       Int       @default(0)
+  pagesFailed        Int       @default(0)
+  articlesNew        Int       @default(0)
+  articlesUpdated    Int       @default(0)
+  articlesUnchanged  Int       @default(0)
+  articlesConflicted Int       @default(0)
+  articlesInvalid    Int       @default(0)
+  articlesUnsafe     Int       @default(0)
+  durationMs         Int?
+  errorMessage       String?
+  startedAt          DateTime  @default(now())
+  completedAt        DateTime?
 
-  source KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  source         KnowledgeSource          @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  stagedArticles KnowledgeStagedArticle[]
 
   @@map("knowledge_sync_runs")
 }
 
 /// Knowledge Staged Article — content extracted from a source, awaiting review and approval
 model KnowledgeStagedArticle {
-  id                String   @id @default(uuid())
+  id                String    @id @default(uuid())
   sourceId          String?
   syncRunId         String?
   userId            String?
-  status            String   @default("DISCOVERED") /// DISCOVERED | EXTRACTED | VALIDATED | NEEDS_REVIEW | APPROVED | REJECTED | ACTIVE | ARCHIVED | FAILED
+  status            String    @default("DISCOVERED") /// DISCOVERED | EXTRACTED | VALIDATED | NEEDS_REVIEW | APPROVED | REJECTED | ACTIVE | ARCHIVED | FAILED
   title             String
   category          String
-  subcategory       String   @default("General")
+  subcategory       String    @default("General")
   keywords          String[]
   synonyms          String[]
-  mode              String   @default("both")
-  priority          Int      @default(5)
+  mode              String    @default("both")
+  priority          Int       @default(5)
   answer            String
   details           String?
   relatedArticles   String[]
   proactiveSalesTip String?
-  source            String   @default("web")
+  source            String    @default("web")
   sourceUrl         String?
-  sourceType        String   @default("website")
+  sourceType        String    @default("website")
   contentHash       String?
-  version           Int      @default(1)
+  version           Int       @default(1)
   diffSummary       String?
-  conflictType      String?  /// DUPLICATE | UPDATED | CONFLICT | NEW
+  conflictType      String? /// DUPLICATE | UPDATED | CONFLICT | NEW
   conflictNotes     String?
   reviewerNotes     String?
   approvedById      String?
@@ -1053,13 +1055,14 @@ model KnowledgeStagedArticle {
   archivedAt        DateTime?
   archivedReason    String?
   lastVerifiedAt    DateTime?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
-  sourceRel       KnowledgeSource?          @relation(fields: [sourceId], references: [id], onDelete: SetNull)
-  syncRun         KnowledgeSyncRun?          @relation(fields: [syncRunId], references: [id], onDelete: SetNull)
-  approvalEvents  KnowledgeApprovalEvent[]
-  versions        KnowledgeArticleVersion[]
+  sourceRel        KnowledgeSource?          @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  syncRun          KnowledgeSyncRun?         @relation(fields: [syncRunId], references: [id], onDelete: SetNull)
+  approvalEvents   KnowledgeApprovalEvent[]
+  versions         KnowledgeArticleVersion[]
+  vectorEmbeddings VectorEmbedding[]
 
   @@index([status])
   @@index([contentHash])
@@ -1096,14 +1099,14 @@ model KnowledgeArticleVersion {
 
 /// Knowledge Approval Event — audit trail for every approval action on a staged article
 model KnowledgeApprovalEvent {
-  id              String   @id @default(uuid())
-  articleId       String
-  action          String   /// APPROVED | REJECTED | ARCHIVED | RESTORED | AUTO_APPROVED
-  actorId         String?
-  notes           String?
-  previousStatus  String
-  newStatus       String
-  createdAt       DateTime @default(now())
+  id             String   @id @default(uuid())
+  articleId      String
+  action         String /// APPROVED | REJECTED | ARCHIVED | RESTORED | AUTO_APPROVED
+  actorId        String?
+  notes          String?
+  previousStatus String
+  newStatus      String
+  createdAt      DateTime @default(now())
 
   article KnowledgeStagedArticle @relation(fields: [articleId], references: [id], onDelete: Cascade)
 
@@ -1113,17 +1116,17 @@ model KnowledgeApprovalEvent {
 
 /// Vector Embedding — stores embeddings for approved knowledge articles (RAG)
 model VectorEmbedding {
-  id               String   @id @default(uuid())
+  id               String                       @id @default(uuid())
   articleId        String
-  chunkIndex       Int      @default(0)
+  chunkIndex       Int                          @default(0)
   chunkText        String
   embedding        Unsupported("vector(1536)")?
-  embeddingModel   String   @default("text-embedding-ada-002")
-  embeddingVersion Int      @default(1)
+  embeddingModel   String                       @default("text-embedding-ada-002")
+  embeddingVersion Int                          @default(1)
   contentHash      String?
-  metadata         Json     @default("{}")
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  metadata         Json                         @default("{}")
+  createdAt        DateTime                     @default(now())
+  updatedAt        DateTime                     @updatedAt
 
   article KnowledgeStagedArticle @relation(fields: [articleId], references: [id], onDelete: Cascade)
 
@@ -1134,16 +1137,16 @@ model VectorEmbedding {
 
 /// Retrieval Metric — stores evaluation results for retrieval queries
 model RetrievalMetric {
-  id            String   @id @default(uuid())
-  query         String
-  retrievedIds  String[]
-  relevantIds   String[]
-  recallAtK     Float?
-  precisionAtK  Float?
-  mrr           Float?
-  latencyMs     Int?
-  searchType    String   @default("hybrid")
-  createdAt     DateTime @default(now())
+  id           String   @id @default(uuid())
+  query        String
+  retrievedIds String[]
+  relevantIds  String[]
+  recallAtK    Float?
+  precisionAtK Float?
+  mrr          Float?
+  latencyMs    Int?
+  searchType   String   @default("hybrid")
+  createdAt    DateTime @default(now())
 
   @@index([createdAt(sort: Desc)])
   @@map("retrieval_metrics")

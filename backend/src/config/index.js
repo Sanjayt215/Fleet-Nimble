@@ -128,6 +128,9 @@ export const config = {
     defaultCompanyId: process.env.AI_RECEPTIONIST_DEFAULT_COMPANY_ID || null,
     degradedVoiceEnabled: parseBool(process.env.AI_RECEPTIONIST_DEGRADED_VOICE_ENABLED, false),
   },
+  knowledge: {
+    providerOrder: (process.env.KNOWLEDGE_PROVIDER_ORDER || 'json,markdown,synchronized,database').split(',').map(s => s.trim()),
+  },
   rag: {
     enabled: parseBool(process.env.RAG_ENABLED, true),
     embedding: {

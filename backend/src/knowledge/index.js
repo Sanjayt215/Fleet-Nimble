@@ -1,6 +1,6 @@
-import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 import { JsonKnowledgeProvider } from './providers/jsonProvider.js';
 import { MarkdownKnowledgeProvider } from './providers/markdownProvider.js';
@@ -10,7 +10,7 @@ import { SynchronizedContentProvider } from './providers/synchronizedContentProv
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const KNOWLEDGE_BASE_PATH = process.env.FLEETNIMBLE_KNOWLEDGE_PATH || join(__dirname, 'content', 'fleetnimble-knowledge.json');
 const MARKDOWN_CONTENT_DIR = process.env.FLEETNIMBLE_MD_KNOWLEDGE_DIR || null;
-const KNOWLEDGE_PROVIDER_ORDER = (process.env.KNOWLEDGE_PROVIDER_ORDER || 'json,markdown,synchronized,database').split(',').map(s => s.trim());
+const KNOWLEDGE_PROVIDER_ORDER = config.knowledge.providerOrder;
 
 const UNKNOWN_ANSWER = "I don't have verified information about that. Let me connect you with a FleetNimble specialist who can help. Would you like me to schedule a follow-up or create a support ticket?";
 const SALES_UNKNOWN_ANSWER = "I don't have specific information about that feature yet. However, I can schedule a personalized demo with our product team who can show you exactly how FleetNimble handles that. Would you like to book a demo?";

@@ -3,8 +3,8 @@ import { BaseEmbeddingProvider } from './baseProvider.js';
 export class GeminiEmbeddingProvider extends BaseEmbeddingProvider {
   constructor(config) {
     super(config);
-    this._model = 'models/text-embedding-004';
-    this._dimensions = 768;
+    this._model = config.model ? `models/${config.model}` : 'models/text-embedding-004';
+    this._dimensions = config.dimensions || 768;
     this._apiKey = config.geminiKey || '';
     this._client = null;
   }
