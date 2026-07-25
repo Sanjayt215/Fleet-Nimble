@@ -179,12 +179,6 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
       },
     };
 
-    if (this._voice) {
-      setupMessage.setup.speechConfig = {
-        voiceConfig: { prebuiltVoiceConfig: { voiceName: this._voice } },
-      };
-    }
-
     if (tools.length > 0) {
       setupMessage.setup.tools = [{
         functionDeclarations: tools.map(t => ({
@@ -195,10 +189,18 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
       }];
     }
 
+    const gc = setupMessage.setup.generationConfig;
+
+    if (this._voice) {
+      gc.speechConfig = {
+        voiceConfig: { prebuiltVoiceConfig: { voiceName: this._voice } },
+      };
+    }
+
     const serverVadEnabled = process.env.GEMINI_ENABLE_SERVER_VAD !== 'false';
     if (serverVadEnabled && config.gemini?.enableServerVad !== false) {
-      setupMessage.setup.speechConfig = setupMessage.setup.speechConfig || {};
-      setupMessage.setup.speechConfig.speechModelV2 = {
+      gc.speechConfig = gc.speechConfig || {};
+      gc.speechConfig.speechModelV2 = {
         vadType: 'SERVER_VAD',
         preSilenceMs: parseInt(process.env.GEMINI_VAD_PRE_SILENCE_MS || '300', 10),
         postSilenceMs: parseInt(process.env.GEMINI_VAD_POST_SILENCE_MS || '800', 10),
