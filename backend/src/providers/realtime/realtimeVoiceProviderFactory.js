@@ -1,12 +1,17 @@
 import logger from '../../utils/logger.js';
 import { config } from '../../config/index.js';
-import { OpenAIRealtimeProvider } from './openAIRealtime.provider.js';
 import { GeminiLiveProvider } from './geminiLive.provider.js';
+import { OpenAIRealtimeProvider } from './openAIRealtime.provider.js';
 
 const PROVIDER_MAP = {
-  openai: OpenAIRealtimeProvider,
   gemini: GeminiLiveProvider,
 };
+
+// OpenAI is only available when ENABLE_OPENAI_REALTIME=true
+if (config.realtimeProvider?.openaiEnabled) {
+  PROVIDER_MAP.openai = OpenAIRealtimeProvider;
+  logger.info('OPENAI_REALTIME_PROVIDER_LOADED', { reason: 'ENABLE_OPENAI_REALTIME=true' });
+}
 
 function validateProviderConfig(providerName) {
   const issues = [];

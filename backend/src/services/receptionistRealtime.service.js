@@ -18,8 +18,8 @@ export function registerSession(callSid, ws, metadata = {}) {
     _rtmSession: mgr,
     get transcript() { return mgr.transcript; },
     set transcript(v) { mgr.transcript = v; },
-    get openaiWs() { return mgr.openAiSocket; },
-    set openaiWs(v) { mgr.openAiSocket = v; },
+    get providerSocket() { return mgr.providerSocket; },
+    set providerSocket(v) { mgr.providerSocket = v; },
     get isActive() { return !mgr.closed; },
     set isActive(v) { if (!v) mgr.closed = true; },
     get startedAt() { return mgr.startedAt; },
@@ -49,8 +49,8 @@ export function removeSession(callSid) {
   const session = ACTIVE_SESSIONS.get(callSid);
   if (session) {
     session.isActive = false;
-    if (session.openaiWs) {
-      try { session.openaiWs.close(); } catch { }
+    if (session.providerSocket) {
+      try { session.providerSocket.close(); } catch { }
     }
     ACTIVE_SESSIONS.delete(callSid);
     logger.info('REALTIME_SESSION_REMOVED', { callSid });
@@ -124,13 +124,13 @@ export function setStreamSid(callSid, streamSid) {
   }
 }
 
-export function setOpenaiWs(callSid, ws) {
+export function setProviderWs(callSid, ws) {
   const mgr = RealtimeSessionManager.get(callSid);
-  if (mgr) mgr.openAiSocket = ws;
+  if (mgr) mgr.providerSocket = ws;
 
   const session = ACTIVE_SESSIONS.get(callSid);
   if (session) {
-    session.openaiWs = ws;
+    session.providerSocket = ws;
   }
 }
 

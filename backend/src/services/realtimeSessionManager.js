@@ -15,7 +15,7 @@ class RealtimeSession {
   constructor(callSid, twilioSocket, metadata = {}) {
     this.callSid = callSid;
     this.streamSid = null;
-    this.openAiSocket = null;
+    this.providerSocket = null;
     this.twilioSocket = twilioSocket;
     this.startedAt = Date.now();
     this.lastActivity = Date.now();
@@ -112,8 +112,8 @@ export class RealtimeSessionManager {
     if (session) {
       session.setState(STATE.CLOSED);
       session.closed = true;
-      if (session.openAiSocket) {
-        try { session.openAiSocket.close(); } catch { }
+      if (session.providerSocket) {
+        try { session.providerSocket.close(); } catch { }
       }
       sessions.delete(callSid);
       logger.info('SESSION_DESTROYED', { callSid });

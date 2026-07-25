@@ -118,6 +118,17 @@ server.listen(config.port, host, async () => {
     providerHealth.markConfigured();
   }
 
+  // ── Gemini startup validation ──
+  if (config.realtimeProvider?.provider === 'gemini' || !config.realtimeProvider?.provider) {
+    if (!config.gemini?.apiKey && !process.env.GEMINI_API_KEY && !process.env.GEMINI_LIVE_API_KEY) {
+      logger.error('GEMINI_CONFIG_ERROR', { reason: 'GEMINI_API_KEY not set. Set GEMINI_API_KEY or GEMINI_LIVE_API_KEY in .env' });
+    } else if (!config.gemini?.liveModel) {
+      logger.error('GEMINI_CONFIG_ERROR', { reason: 'GEMINI_LIVE_MODEL not set. Set GEMINI_LIVE_MODEL or GEMINI_MODEL in .env' });
+    } else {
+      logger.info('GEMINI_CONFIG_OK', { model: config.gemini.liveModel, apiKeyPresent: true });
+    }
+  }
+
   // ── DIAG: Full voice pipeline startup diagnostics ──
   const { RealtimeModelValidator: RMV } = await import('./services/realtimeModelValidator.js');
   const modelCheck = RMV.validate(config.realtime.model);
@@ -125,18 +136,23 @@ server.listen(config.port, host, async () => {
   const asstHealth = getAssistantProviderHealth();
   logger.info('DIAG_PIPELINE_CONFIG', {
     publicUrl: config.publicUrl,
-    realtimeProvider: config.realtimeProvider?.provider || 'gemini',
+    realtimeProvider: rtHealth.provider,
     realtimeProviderEnabled: config.realtimeProvider?.enabled !== false,
+    realtimeProviderGeminiEnabled: config.realtimeProvider?.geminiEnabled,
+    realtimeProviderOpenaiEnabled: config.realtimeProvider?.openaiEnabled,
+    realtimeProviderFailoverEnabled: config.realtimeProvider?.failoverEnabled,
     realtimeModel: config.realtime.model,
     realtimeVoice: config.realtime.voice,
     realtimeConfigured: config.realtime.configured,
+    realtimeProviderConfigured: rtHealth.configured,
     mediaStreamEnabled: config.realtime.mediaStreamEnabled,
     modelValid: modelCheck.valid,
     modelValidationReason: modelCheck.valid ? null : modelCheck.reason,
     maxCallSeconds: config.realtime.maxCallSeconds,
     silenceTimeoutSeconds: config.realtime.silenceTimeoutSeconds,
-    openaiApiKeyPresent: Boolean(config.openai.apiKey),
     geminiApiKeyPresent: Boolean(config.gemini?.apiKey),
+    geminiConfigured: config.gemini.configured,
+    openaiApiKeyPresent: Boolean(config.openai.apiKey),
     assistantProvider: config.assistantProvider?.provider || 'groq',
     assistantProviderEnabled: config.assistantProvider?.enabled !== false,
     groqApiKeyPresent: Boolean(config.groq?.apiKey),

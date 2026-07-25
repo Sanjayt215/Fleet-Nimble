@@ -65,15 +65,15 @@ export const config = {
     model: process.env.AI_RECEPTIONIST_MODEL || 'gpt-4o-realtime-preview',
   },
   gemini: {
-    apiKey: process.env.GEMINI_API_KEY || '',
-    liveModel: process.env.GEMINI_LIVE_MODEL || 'gemini-2.0-flash-exp',
+    apiKey: process.env.GEMINI_API_KEY || process.env.GEMINI_LIVE_API_KEY || '',
+    liveModel: process.env.GEMINI_LIVE_MODEL || process.env.GEMINI_MODEL || 'gemini-2.0-flash-exp',
     voice: process.env.GEMINI_VOICE || 'Puck',
     connectTimeoutMs: parseIntEnv(process.env.GEMINI_CONNECT_TIMEOUT_MS, 10000),
     sessionTimeoutMs: parseIntEnv(process.env.GEMINI_SESSION_TIMEOUT_MS, 10000),
     enableServerVad: process.env.GEMINI_ENABLE_SERVER_VAD !== 'false',
     maxOutputTokens: parseIntEnv(process.env.GEMINI_MAX_OUTPUT_TOKENS, 1024),
     region: process.env.GEMINI_REGION || '',
-    configured: Boolean(process.env.GEMINI_API_KEY) && Boolean(process.env.GEMINI_LIVE_MODEL),
+    configured: Boolean(process.env.GEMINI_API_KEY || process.env.GEMINI_LIVE_API_KEY) && Boolean(process.env.GEMINI_LIVE_MODEL || process.env.GEMINI_MODEL),
   },
   groq: {
     apiKey: process.env.GROQ_API_KEY || '',
@@ -84,19 +84,22 @@ export const config = {
     temperature: parseFloatEnv(process.env.GROQ_TEMPERATURE, 0.2),
   },
   realtime: {
-    model: process.env.AI_RECEPTIONIST_MODEL || 'gpt-4o-realtime-preview',
-    voice: process.env.AI_RECEPTIONIST_VOICE || 'alloy',
+    model: process.env.AI_RECEPTIONIST_MODEL || process.env.GEMINI_LIVE_MODEL || process.env.GEMINI_MODEL || 'gemini-2.0-flash-exp',
+    voice: process.env.AI_RECEPTIONIST_VOICE || 'Puck',
     maxCallSeconds: parseIntEnv(process.env.AI_RECEPTIONIST_MAX_CALL_SECONDS, 600),
     silenceTimeoutSeconds: parseIntEnv(process.env.AI_RECEPTIONIST_SILENCE_TIMEOUT_SECONDS, 30),
     mediaStreamEnabled: parseBool(process.env.AI_RECEPTIONIST_MEDIA_STREAM_ENABLED, true),
     businessToolsEnabled: parseBool(process.env.AI_RECEPTIONIST_BUSINESS_TOOLS_ENABLED, true),
-    configured: (Boolean(process.env.AI_RECEPTIONIST_MODEL) && Boolean(process.env.OPENAI_API_KEY)) ||
-                 (Boolean(process.env.GEMINI_API_KEY) && Boolean(process.env.GEMINI_LIVE_MODEL)),
+    configured: (Boolean(process.env.GEMINI_API_KEY || process.env.GEMINI_LIVE_API_KEY) && Boolean(process.env.GEMINI_LIVE_MODEL || process.env.GEMINI_MODEL))
+                || (Boolean(process.env.OPENAI_API_KEY) && Boolean(process.env.AI_RECEPTIONIST_MODEL)),
   },
   realtimeProvider: {
-    provider: process.env.AI_RECEPTIONIST_PROVIDER || 'gemini',
+    provider: process.env.AI_RECEPTIONIST_PROVIDER || process.env.REALTIME_PROVIDER || 'gemini',
     fallbackProvider: process.env.AI_RECEPTIONIST_FALLBACK_PROVIDER || '',
     enabled: parseBool(process.env.AI_RECEPTIONIST_MEDIA_STREAM_ENABLED, true),
+    geminiEnabled: parseBool(process.env.ENABLE_GEMINI_REALTIME, true),
+    openaiEnabled: parseBool(process.env.ENABLE_OPENAI_REALTIME, false),
+    failoverEnabled: parseBool(process.env.ENABLE_PROVIDER_FAILOVER, false),
   },
   assistantProvider: {
     provider: process.env.AI_ASSISTANT_PROVIDER || 'groq',

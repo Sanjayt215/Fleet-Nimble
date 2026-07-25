@@ -72,7 +72,7 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
     }
 
     const wsUrl = `${GEMINI_LIVE_BASE}?key=${this._apiKey}`;
-    logger.info('GEMINI_CONNECTING', { callSid: this._callSid, model: this._model, voice: this._voice });
+    logger.info('GEMINI_CONNECTING', { callSid: this._callSid, model: this._model, voice: this._voice, apiKeyPresent: !!this._apiKey });
 
     try {
       this._ws = new WebSocket(wsUrl);
@@ -440,7 +440,7 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
         this._rtmSession.setState(RealtimeSessionManager.STATES.CONNECTED);
       }
 
-      logger.info('GEMINI_READY', { callSid: this._callSid });
+      logger.info('GEMINI_READY', { callSid: this._callSid, model: this._model, toolsRegistered: this._sessionContext?.businessToolsEnabled ? 'yes' : 'no' });
       this._emit('ready', { provider: 'gemini' });
       return;
     }

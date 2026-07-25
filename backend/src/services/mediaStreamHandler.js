@@ -9,14 +9,14 @@ import {
   removeSession,
   updateSessionActivity,
   setStreamSid,
-  setOpenaiWs,
+  setProviderWs,
   addTranscriptEntry,
 } from './receptionistRealtime.service.js';
 import {
   bufferTranscriptEntry,
   flushPendingTranscripts,
 } from './receptionistTranscript.service.js';
-import { mapToOpenAIVoice, buildSystemPrompt, buildToolDefinitions } from './receptionistVoice.service.js';
+import { buildSystemPrompt, buildToolDefinitions } from './receptionistVoice.service.js';
 import * as orchestrator from './receptionistOrchestrator.service.js';
 import * as liveTools from './receptionistLiveTools.service.js';
 import * as transcriptService from './receptionistTranscript.service.js';
@@ -466,9 +466,12 @@ function handleMediaStream(ws, req) {
 
   function getProviderNameForIndex(index) {
     const primary = config.realtimeProvider?.provider || 'gemini';
-    const fallback = config.realtimeProvider?.fallbackProvider || '';
+    const failoverEnabled = config.realtimeProvider?.failoverEnabled === true && config.realtimeProvider?.fallbackProvider;
     if (index === 0) return primary;
-    return fallback || primary;
+    if (failoverEnabled) {
+      return config.realtimeProvider.fallbackProvider;
+    }
+    return primary;
   }
 
   function connectProvider() {
@@ -502,8 +505,8 @@ function handleMediaStream(ws, req) {
         logger.warn('BUSINESS_TOOLS_DISABLED', { callSid, reason: 'config_flag_false', envKey: 'AI_RECEPTIONIST_BUSINESS_TOOLS_ENABLED' });
       }
 
-      if (rtmSession) rtmSession.openAiSocket = provider;
-      if (legacySession) setOpenaiWs(callSid, provider);
+      if (rtmSession) rtmSession.providerSocket = provider;
+      if (legacySession) setProviderWs(callSid, provider);
 
       provider.on('connected', () => {
         logger.info('PROVIDER_SOCKET_OPEN', { callSid, provider: providerName });
@@ -691,8 +694,8 @@ function handleMediaStream(ws, req) {
       });
 
       provider.on('closed', () => {
-        if (legacySession) setOpenaiWs(callSid, null);
-        if (rtmSession) rtmSession.openAiSocket = null;
+        if (legacySession) setProviderWs(callSid, null);
+        if (rtmSession) rtmSession.providerSocket = null;
 
         if (isClosing) return;
         if (!providerHealth.getInternalState().available || legacySession?.stopReconnect || rtmSession?.stopReconnect) {
@@ -823,8 +826,8 @@ function handleMediaStream(ws, req) {
     try {
       if (provider) await provider.close('call_ended');
     } catch { }
-    if (legacySession) setOpenaiWs(callSid, null);
-    if (rtmSession) rtmSession.openAiSocket = null;
+    if (legacySession) setProviderWs(callSid, null);
+    if (rtmSession) rtmSession.providerSocket = null;
 
     try {
       if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
