@@ -118,14 +118,37 @@ server.listen(config.port, host, async () => {
     providerHealth.markConfigured();
   }
 
+  // ── GeminiLiveProvider static info (shared between validation blocks) ──
+  const { GeminiLiveProvider: GLP } = await import('./providers/realtime/geminiLive.provider.js');
+
   // ── Gemini startup validation ──
   if (config.realtimeProvider?.provider === 'gemini' || !config.realtimeProvider?.provider) {
+    const apiVersion = GLP.getApiVersion();
+    const geminiModel = config.gemini?.liveModel;
+    const baseUrl = GLP.getBaseUrl();
+    const supportedModels = GLP.getSupportedModels();
+    const modelSupported = GLP.isModelSupported(geminiModel);
+
     if (!config.gemini?.apiKey && !process.env.GEMINI_API_KEY && !process.env.GEMINI_LIVE_API_KEY) {
       logger.error('GEMINI_CONFIG_ERROR', { reason: 'GEMINI_API_KEY not set. Set GEMINI_API_KEY or GEMINI_LIVE_API_KEY in .env' });
-    } else if (!config.gemini?.liveModel) {
+    } else if (!geminiModel) {
       logger.error('GEMINI_CONFIG_ERROR', { reason: 'GEMINI_LIVE_MODEL not set. Set GEMINI_LIVE_MODEL or GEMINI_MODEL in .env' });
     } else {
-      logger.info('GEMINI_CONFIG_OK', { model: config.gemini.liveModel, apiKeyPresent: true });
+      logger.info('GEMINI_CONFIG_OK', {
+        model: geminiModel,
+        modelSupported,
+        apiVersion,
+        apiKeyPresent: true,
+        endpoint: baseUrl,
+        supportedModels,
+      });
+      if (!modelSupported) {
+        logger.error('GEMINI_MODEL_UNSUPPORTED', {
+          model: geminiModel,
+          reason: 'Model does not support bidiGenerateContent (Gemini Live API)',
+          supportedModels,
+        });
+      }
     }
   }
 
@@ -134,6 +157,7 @@ server.listen(config.port, host, async () => {
   const modelCheck = RMV.validate(config.realtime.model);
   const rtHealth = getRealtimeProviderHealth();
   const asstHealth = getAssistantProviderHealth();
+  const geminiModelSupported = GLP.isModelSupported(config.gemini?.liveModel);
   logger.info('DIAG_PIPELINE_CONFIG', {
     publicUrl: config.publicUrl,
     realtimeProvider: rtHealth.provider,
@@ -152,6 +176,11 @@ server.listen(config.port, host, async () => {
     silenceTimeoutSeconds: config.realtime.silenceTimeoutSeconds,
     geminiApiKeyPresent: Boolean(config.gemini?.apiKey),
     geminiConfigured: config.gemini.configured,
+    geminiLiveApiVersion: GLP.getApiVersion(),
+    geminiLiveModel: config.gemini?.liveModel,
+    geminiLiveModelSupported: geminiModelSupported,
+    geminiLiveEndpoint: GLP.getBaseUrl(),
+    geminiLiveSupportedModels: GLP.getSupportedModels(),
     openaiApiKeyPresent: Boolean(config.openai.apiKey),
     assistantProvider: config.assistantProvider?.provider || 'groq',
     assistantProviderEnabled: config.assistantProvider?.enabled !== false,

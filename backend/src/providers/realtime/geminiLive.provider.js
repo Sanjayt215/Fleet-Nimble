@@ -12,6 +12,12 @@ const GEMINI_LIVE_API_VERSION = 'v1beta';
 const GEMINI_LIVE_BASE = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${GEMINI_LIVE_API_VERSION}.GenerativeService.BidiGenerateContent`;
 const DEFAULT_GEMINI_LIVE_MODEL = 'gemini-3.1-flash-live-preview';
 
+const SUPPORTED_REALTIME_MODELS = new Set([
+  'gemini-3.1-flash-live-preview',
+  'gemini-live-2.5-flash-native-audio',
+  'gemini-3.5-live-translate-preview',
+]);
+
 const CONNECT_TIMEOUT_MS = 10000;
 const SETUP_ACK_TIMEOUT_MS = 10000;
 const HEARTBEAT_INTERVAL_MS = 15000;
@@ -70,6 +76,14 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
 
     if (!this._apiKey) {
       throw new Error('Gemini API key not configured');
+    }
+
+    if (!SUPPORTED_REALTIME_MODELS.has(this._model)) {
+      const supported = [...SUPPORTED_REALTIME_MODELS].join(', ');
+      throw new Error(
+        `Model "${this._model}" does not support bidiGenerateContent (Gemini Live API). `
+        + `Supported models: ${supported}`
+      );
     }
 
     const wsUrl = `${GEMINI_LIVE_BASE}?key=${this._apiKey}`;
@@ -785,6 +799,22 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
 
   getMetrics() {
     return { ...this._metrics };
+  }
+
+  static getApiVersion() {
+    return GEMINI_LIVE_API_VERSION;
+  }
+
+  static getBaseUrl() {
+    return GEMINI_LIVE_BASE;
+  }
+
+  static getSupportedModels() {
+    return [...SUPPORTED_REALTIME_MODELS];
+  }
+
+  static isModelSupported(model) {
+    return SUPPORTED_REALTIME_MODELS.has(model);
   }
 
   _logProtocolCompliance(payload) {
