@@ -585,6 +585,7 @@ function handleMediaStream(ws, req) {
       provider.on('callerTranscript', (data) => {
         logger.info('CALLER_TRANSCRIPTION', { callSid, text: data.text?.substring(0, 60) });
         pipelineCounters.transcriptionEvents++;
+        callTranscriptBuffer.push({ role: 'caller', content: data.text, timestamp: new Date().toISOString() });
         addTranscriptEntry(callSid, { role: 'caller', content: data.text });
         if (legacySession?.metadata?.callLogId) {
           bufferTranscriptEntry(legacySession.metadata.callLogId, { role: 'caller', content: data.text, timestamp: new Date().toISOString() });
@@ -604,6 +605,7 @@ function handleMediaStream(ws, req) {
 
       provider.on('assistantTranscript', (data) => {
         if (data.partial) return;
+        callTranscriptBuffer.push({ role: 'assistant', content: data.text, timestamp: new Date().toISOString() });
         addTranscriptEntry(callSid, { role: 'assistant', content: data.text });
         if (legacySession?.metadata?.callLogId) {
           bufferTranscriptEntry(legacySession.metadata.callLogId, { role: 'assistant', content: data.text, timestamp: new Date().toISOString() });
@@ -671,6 +673,19 @@ function handleMediaStream(ws, req) {
         if (provider) provider.sendToolResult(data.callId, result);
       });
 
+      provider.on('goAway', (data) => {
+        logger.warn('PROVIDER_GO_AWAY', {
+          callSid,
+          provider: providerName,
+          timeLeftMs: data.timeLeftMs,
+          hasResumptionHandle: !!data.resumptionHandle,
+        });
+        if (data.resumptionHandle) {
+          resumptionHandle = data.resumptionHandle;
+          logger.info('PROVIDER_GO_AWAY_HANDLE_SAVED', { callSid });
+        }
+      });
+
       provider.on('error', (err) => {
         logger.error('PROVIDER_ERROR', {
           callSid,
@@ -694,9 +709,23 @@ function handleMediaStream(ws, req) {
         }
       });
 
-      provider.on('closed', () => {
+      provider.on('closed', (data) => {
         if (legacySession) setProviderWs(callSid, null);
         if (rtmSession) rtmSession.providerSocket = null;
+
+        if (provider && provider.getResumptionHandle) {
+          const handle = provider.getResumptionHandle();
+          if (handle) resumptionHandle = handle;
+        }
+
+        logger.warn('PROVIDER_CLOSED', {
+          callSid,
+          provider: providerName,
+          code: data?.code,
+          reason: data?.reason,
+          reconnectAttempts,
+          hasResumptionHandle: !!resumptionHandle,
+        });
 
         if (isClosing) return;
         if (!providerHealth.getInternalState().available || legacySession?.stopReconnect || rtmSession?.stopReconnect) {
@@ -738,6 +767,7 @@ function handleMediaStream(ws, req) {
         memoryContext,
         businessToolsEnabled,
         providerName,
+        resumptionHandle,
       }).catch(err => {
         logger.error('REALTIME_CALL_FAILED', { callSid, reason: 'provider_connect_error', error: err.message });
         logger.error('PIPELINE_FAILURE', {
@@ -875,6 +905,7 @@ function handleMediaStream(ws, req) {
     providerHealth.enableAudioForwarding();
   }
 
+  let resumptionHandle = null;
   let endCallInitiated = false;
 
   function endCallGracefully(message) {

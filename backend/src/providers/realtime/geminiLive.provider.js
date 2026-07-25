@@ -48,6 +48,8 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
     this._currentTurnParts = [];
     this._accumulatedTranscript = '';
     this._turnActive = false;
+    this._resumptionHandle = null;
+    this._sessionId = null;
 
     this._connectStart = null;
     this._metrics = {
@@ -73,6 +75,14 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
     this._model = config.gemini?.liveModel || DEFAULT_GEMINI_LIVE_MODEL;
     this._voice = mapToProviderVoice('gemini', config.gemini?.voice || 'Puck');
     this._connectStart = Date.now();
+
+    if (sessionContext.resumptionHandle) {
+      this._resumptionHandle = sessionContext.resumptionHandle;
+      logger.info('GEMINI_RESUMPTION_HANDLE_SET', {
+        callSid: this._callSid,
+        handlePrefix: sessionContext.resumptionHandle.substring(0, 16),
+      });
+    }
 
     if (!this._apiKey) {
       throw new Error('Gemini API key not configured');
@@ -150,10 +160,46 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
       this._metrics.disconnectCount++;
       this._stopHeartbeat();
 
-      logger.info('GEMINI_CLOSED', {
+      const reasonStr = reason?.toString() || null;
+      const timeConnected = this._connectStart ? Date.now() - this._connectStart : null;
+
+      const CLOSE_CODE_MEANINGS = {
+        1000: 'NORMAL_CLOSURE',
+        1001: 'GOING_AWAY',
+        1002: 'PROTOCOL_ERROR',
+        1003: 'UNSUPPORTED_DATA',
+        1005: 'NO_STATUS',
+        1006: 'ABNORMAL_CLOSURE',
+        1007: 'INVALID_PAYLOAD',
+        1008: 'POLICY_VIOLATION',
+        1009: 'MESSAGE_TOO_BIG',
+        1010: 'MANDATORY_EXTENSION',
+        1011: 'INTERNAL_ERROR',
+        1012: 'SERVICE_RESTART',
+        1013: 'TRY_AGAIN_LATER',
+        1014: 'BAD_GATEWAY',
+        1015: 'TLS_HANDSHAKE_FAIL',
+        4000: 'APPLICATION_ERROR',
+        4001: 'TOKEN_EXPIRED',
+        4002: 'SESSION_EXPIRED',
+        4003: 'CONCURRENT_CHANNEL_LIMIT',
+        4004: 'AUTHENTICATION_FAILED',
+        4005: 'INVALID_REQUEST',
+        4006: 'SESSION_EXHAUSTED',
+        4007: 'RESOURCE_EXHAUSTED',
+        4008: 'QUOTA_EXCEEDED',
+        4009: 'RATE_LIMITED',
+      };
+
+      logger.warn('GEMINI_CLOSED', {
         callSid: this._callSid,
         code,
-        reason: reason?.toString() || null,
+        codeMeaning: CLOSE_CODE_MEANINGS[code] || 'UNKNOWN',
+        reason: reasonStr,
+        timeConnectedMs: timeConnected,
+        timeConnectedSeconds: timeConnected ? Math.round(timeConnected / 1000) : null,
+        hasResumptionHandle: !!this._resumptionHandle,
+        setupAcknowledged: this._setupAcknowledged,
       });
 
       this._emit('closed', { provider: 'gemini', code, reason: reason?.toString() });
@@ -227,6 +273,23 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
           silenceDurationMs: parseInt(process.env.GEMINI_VAD_POST_SILENCE_MS || '800', 10),
         },
       };
+    }
+
+    if (process.env.GEMINI_ENABLE_CONTEXT_COMPRESSION !== 'false') {
+      setupMessage.setup.contextWindowCompression = {
+        triggerTokens: parseInt(process.env.GEMINI_COMPRESSION_TRIGGER_TOKENS || '80000', 10),
+        slidingWindow: {
+          targetTokens: parseInt(process.env.GEMINI_COMPRESSION_TARGET_TOKENS || '40000', 10),
+        },
+      };
+    }
+
+    if (process.env.GEMINI_ENABLE_SESSION_RESUMPTION !== 'false') {
+      if (this._resumptionHandle) {
+        setupMessage.setup.sessionResumption = { handle: this._resumptionHandle };
+      } else {
+        setupMessage.setup.sessionResumption = {};
+      }
     }
 
     this._debugLogSend('setup', setupMessage);
@@ -410,6 +473,8 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
     this._currentTurnParts = [];
     this._accumulatedTranscript = '';
     this._metrics.conversationDuration = Date.now() - (this._connectStart || Date.now());
+    this._resumptionHandle = null;
+    this._sessionId = null;
   }
 
   _startHeartbeat() {
@@ -585,6 +650,38 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
       return;
     }
 
+    if (msg.goAway) {
+      const goAway = msg.goAway;
+      const timeLeftMs = goAway.timeLeft ? parseInt(goAway.timeLeft.replace('s', ''), 10) * 1000 : null;
+      logger.warn('GEMINI_GO_AWAY', {
+        callSid: this._callSid,
+        timeLeftSeconds: timeLeftMs ? timeLeftMs / 1000 : null,
+        hasResumptionHandle: !!this._resumptionHandle,
+        sessionId: this._sessionId,
+      });
+      this._emit('goAway', {
+        provider: 'gemini',
+        timeLeftMs,
+        resumptionHandle: this._resumptionHandle,
+      });
+      return;
+    }
+
+    if (msg.sessionResumptionUpdate) {
+      const update = msg.sessionResumptionUpdate;
+      if (update.handle) {
+        this._resumptionHandle = update.handle;
+        logger.info('GEMINI_RESUMPTION_HANDLE_RECEIVED', {
+          callSid: this._callSid,
+          expireTime: update.expireTime || null,
+        });
+      }
+      if (update.sessionId) {
+        this._sessionId = update.sessionId;
+      }
+      return;
+    }
+
     if (msg.error) {
       const err = msg.error;
       const code = err.code || 'gemini_error';
@@ -612,7 +709,7 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
       return;
     }
 
-    const knownKeys = ['setupComplete', 'serverContent', 'toolCall', 'error'];
+    const knownKeys = ['setupComplete', 'serverContent', 'toolCall', 'error', 'goAway', 'sessionResumptionUpdate'];
     const msgType = Object.keys(msg).find(k => knownKeys.includes(k)) || Object.keys(msg)[0];
     logger.info('GEMINI_EVENT', { callSid: this._callSid, type: msgType });
   }
@@ -795,6 +892,14 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
       topLevelKeys: keys,
       payloadSize: json.length,
     });
+  }
+
+  getResumptionHandle() {
+    return this._resumptionHandle;
+  }
+
+  getSessionId() {
+    return this._sessionId;
   }
 
   getMetrics() {
