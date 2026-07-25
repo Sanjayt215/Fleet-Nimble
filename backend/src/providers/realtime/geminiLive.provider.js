@@ -8,7 +8,10 @@ import { decodeUlaw, encodeUlaw } from '../../services/audio/twilioAudioCodec.js
 import { convertSampleRate } from '../../services/audio/audioResampler.js';
 import * as metrics from '../../services/receptionistMetrics.service.js';
 
-const GEMINI_LIVE_BASE = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
+const GEMINI_LIVE_API_VERSION = 'v1beta';
+const GEMINI_LIVE_BASE = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${GEMINI_LIVE_API_VERSION}.GenerativeService.BidiGenerateContent`;
+const DEFAULT_GEMINI_LIVE_MODEL = 'gemini-3.1-flash-live-preview';
+
 const CONNECT_TIMEOUT_MS = 10000;
 const SETUP_ACK_TIMEOUT_MS = 10000;
 const HEARTBEAT_INTERVAL_MS = 15000;
@@ -40,7 +43,6 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
     this._accumulatedTranscript = '';
     this._turnActive = false;
 
-    // Metrics
     this._connectStart = null;
     this._metrics = {
       connectTime: null,
@@ -62,7 +64,7 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
     this._callSid = sessionContext.callSid;
     this._rtmSession = sessionContext.rtmSession;
     this._apiKey = config.gemini?.apiKey || process.env.GEMINI_API_KEY;
-    this._model = config.gemini?.liveModel || 'gemini-2.0-flash-exp';
+    this._model = config.gemini?.liveModel || DEFAULT_GEMINI_LIVE_MODEL;
     this._voice = mapToProviderVoice('gemini', config.gemini?.voice || 'Puck');
     this._connectStart = Date.now();
 
@@ -71,7 +73,7 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
     }
 
     const wsUrl = `${GEMINI_LIVE_BASE}?key=${this._apiKey}`;
-    logger.info('GEMINI_CONNECTING', { callSid: this._callSid, model: this._model, voice: this._voice, apiKeyPresent: !!this._apiKey });
+    logger.info('GEMINI_CONNECTING', { callSid: this._callSid, model: this._model, voice: this._voice, apiKeyPresent: !!this._apiKey, apiVersion: GEMINI_LIVE_API_VERSION });
 
     try {
       this._ws = new WebSocket(wsUrl);
@@ -299,10 +301,10 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
 
     const message = {
       realtimeInput: {
-        mediaChunks: [{
+        audio: {
           data: audioBase64,
           mimeType: `audio/pcm;rate=${GEMINI_INPUT_RATE}`,
-        }],
+        },
       },
     };
 
@@ -429,7 +431,6 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
   }
 
   _handleMessage(msg) {
-    // Setup complete
     if (msg.setupComplete) {
       this._setupAcknowledged = true;
       if (this._setupTimer) {
@@ -448,7 +449,6 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
       return;
     }
 
-    // Server content (model turn)
     if (msg.serverContent) {
       const sc = msg.serverContent;
 
@@ -538,7 +538,6 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
       return;
     }
 
-    // Tool call from Gemini
     if (msg.toolCall) {
       const tc = msg.toolCall;
       if (tc.functionCalls) {
@@ -572,7 +571,6 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
       return;
     }
 
-    // Error from Gemini
     if (msg.error) {
       const err = msg.error;
       const code = err.code || 'gemini_error';
@@ -600,7 +598,6 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
       return;
     }
 
-    // Unknown message type — log for debugging
     const knownKeys = ['setupComplete', 'serverContent', 'toolCall', 'error'];
     const msgType = Object.keys(msg).find(k => knownKeys.includes(k)) || Object.keys(msg)[0];
     logger.info('GEMINI_EVENT', { callSid: this._callSid, type: msgType });
@@ -660,57 +657,42 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
     const reasons = [];
     const setup = msg.setup || {};
 
-    // BidiGenerateContentSetup — allowed top-level fields (from ai.google.dev/api/live)
     const VALID_SETUP_FIELDS = new Set([
       'model', 'generationConfig', 'systemInstruction', 'tools',
       'realtimeInputConfig', 'sessionResumption', 'contextWindowCompression',
       'inputAudioTranscription', 'outputAudioTranscription', 'proactivity', 'historyConfig',
     ]);
 
-    // GenerationConfig — allowed fields for Live (responseLogprobs, responseMimeType, logprobs,
-    // responseSchema, stopSequence, routingConfig, audioTimestamp are NOT supported)
     const VALID_GC_FIELDS = new Set([
       'candidateCount', 'maxOutputTokens', 'temperature', 'topP', 'topK',
       'presencePenalty', 'frequencyPenalty', 'responseModalities',
       'speechConfig', 'mediaResolution',
     ]);
 
-    // SpeechConfig — only voiceConfig is supported in Live
     const VALID_SPEECH_CONFIG_FIELDS = new Set(['voiceConfig']);
-
-    // VoiceConfig — must be prebuiltVoiceConfig with voiceName
     const VALID_VOICE_CONFIG_FIELDS = new Set(['prebuiltVoiceConfig']);
-
-    // PrebuiltVoiceConfig — must have voiceName
     const VALID_PREBUILT_VOICE_FIELDS = new Set(['voiceName']);
-
-    // RealtimeInputConfig
     const VALID_REALTIME_INPUT_CONFIG_FIELDS = new Set(['automaticActivityDetection']);
 
-    // AutomaticActivityDetection
     const VALID_AAD_FIELDS = new Set([
       'disabled', 'startOfSpeechSensitivity', 'endOfSpeechSensitivity',
       'prefixPaddingMs', 'silenceDurationMs',
     ]);
 
-    // StartSensitivity enum — must be full protobuf enum name
     const VALID_START_SENSITIVITY = new Set([
       'START_SENSITIVITY_UNSPECIFIED',
       'START_SENSITIVITY_HIGH',
       'START_SENSITIVITY_LOW',
     ]);
 
-    // EndSensitivity enum
     const VALID_END_SENSITIVITY = new Set([
       'END_SENSITIVITY_UNSPECIFIED',
       'END_SENSITIVITY_HIGH',
       'END_SENSITIVITY_LOW',
     ]);
 
-    // Modality enum for responseModalities
     const VALID_MODALITIES = new Set(['AUDIO', 'TEXT']);
 
-    // --- field presence checks ---
     const invalidSetup = Object.keys(setup).filter(k => !VALID_SETUP_FIELDS.has(k));
     for (const f of invalidSetup) {
       reasons.push(`UNSUPPORTED_FIELD: setup.${f} is not a documented BidiGenerateContentSetup field`);
@@ -757,7 +739,6 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
         reasons.push(`UNSUPPORTED_FIELD: setup.realtimeInputConfig.automaticActivityDetection.${f} is not a documented field`);
       }
 
-      // --- enum value validation ---
       const aad = setup.realtimeInputConfig.automaticActivityDetection;
       if (aad.startOfSpeechSensitivity !== undefined) {
         if (!VALID_START_SENSITIVITY.has(aad.startOfSpeechSensitivity)) {
@@ -777,7 +758,6 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
       }
     }
 
-    // Validate responseModalities values
     if (setup.generationConfig?.responseModalities && Array.isArray(setup.generationConfig.responseModalities)) {
       for (const m of setup.generationConfig.responseModalities) {
         if (!VALID_MODALITIES.has(m)) {
@@ -810,7 +790,6 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
   _logProtocolCompliance(payload) {
     const report = [];
 
-    // --- Check all removed/changed fields from previous iterations ---
     const json = JSON.stringify(payload);
     const removedOrChanged = [];
 
@@ -819,7 +798,7 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
     }
 
     if (json.includes('speechModelV2')) {
-      removedOrChanged.push('REMOVED_FIELD_OK: speechModelV2 no longer in payload');
+      removedOrChanged.push('REMOVED_FIELD: speechModelV2 should not be present');
     }
 
     const setup = payload.setup || {};

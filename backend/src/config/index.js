@@ -66,14 +66,14 @@ export const config = {
   },
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || process.env.GEMINI_LIVE_API_KEY || '',
-    liveModel: process.env.GEMINI_LIVE_MODEL || process.env.GEMINI_MODEL || 'gemini-2.0-flash-exp',
+    liveModel: process.env.GEMINI_LIVE_MODEL || process.env.GEMINI_MODEL || 'gemini-3.1-flash-live-preview',
     voice: process.env.GEMINI_VOICE || 'Puck',
     connectTimeoutMs: parseIntEnv(process.env.GEMINI_CONNECT_TIMEOUT_MS, 10000),
     sessionTimeoutMs: parseIntEnv(process.env.GEMINI_SESSION_TIMEOUT_MS, 10000),
     enableServerVad: process.env.GEMINI_ENABLE_SERVER_VAD !== 'false',
     maxOutputTokens: parseIntEnv(process.env.GEMINI_MAX_OUTPUT_TOKENS, 1024),
     region: process.env.GEMINI_REGION || '',
-    configured: Boolean(process.env.GEMINI_API_KEY || process.env.GEMINI_LIVE_API_KEY) && Boolean(process.env.GEMINI_LIVE_MODEL || process.env.GEMINI_MODEL || 'gemini-2.0-flash-exp'),
+    configured: Boolean(process.env.GEMINI_API_KEY || process.env.GEMINI_LIVE_API_KEY) && Boolean(process.env.GEMINI_LIVE_MODEL || process.env.GEMINI_MODEL || 'gemini-3.1-flash-live-preview'),
   },
   groq: {
     apiKey: process.env.GROQ_API_KEY || '',
@@ -84,13 +84,13 @@ export const config = {
     temperature: parseFloatEnv(process.env.GROQ_TEMPERATURE, 0.2),
   },
   realtime: {
-    model: process.env.AI_RECEPTIONIST_MODEL || process.env.GEMINI_LIVE_MODEL || process.env.GEMINI_MODEL || 'gemini-2.0-flash-exp',
+    model: process.env.AI_RECEPTIONIST_MODEL || process.env.GEMINI_LIVE_MODEL || process.env.GEMINI_MODEL || 'gemini-3.1-flash-live-preview',
     voice: process.env.AI_RECEPTIONIST_VOICE || 'Puck',
     maxCallSeconds: parseIntEnv(process.env.AI_RECEPTIONIST_MAX_CALL_SECONDS, 600),
     silenceTimeoutSeconds: parseIntEnv(process.env.AI_RECEPTIONIST_SILENCE_TIMEOUT_SECONDS, 30),
     mediaStreamEnabled: parseBool(process.env.AI_RECEPTIONIST_MEDIA_STREAM_ENABLED, true),
     businessToolsEnabled: parseBool(process.env.AI_RECEPTIONIST_BUSINESS_TOOLS_ENABLED, true),
-    configured: (Boolean(process.env.GEMINI_API_KEY || process.env.GEMINI_LIVE_API_KEY) && Boolean(process.env.GEMINI_LIVE_MODEL || process.env.GEMINI_MODEL || 'gemini-2.0-flash-exp'))
+    configured: (Boolean(process.env.GEMINI_API_KEY || process.env.GEMINI_LIVE_API_KEY) && Boolean(process.env.GEMINI_LIVE_MODEL || process.env.GEMINI_MODEL || 'gemini-3.1-flash-live-preview'))
                 || (Boolean(process.env.OPENAI_API_KEY) && Boolean(process.env.AI_RECEPTIONIST_MODEL)),
   },
   realtimeProvider: {
