@@ -28,45 +28,37 @@ export function mapToProviderVoice(provider, voiceId) {
   return mapToOpenAIVoice(voiceId);
 }
 
-export async function buildSystemPrompt(config, memoryContext = '') {
+const BASE_PROMPT_CACHE = new Map();
+
+export function buildSystemPrompt(config, memoryContext = '') {
+  const cacheKey = `${config.businessName || 'FleetNimble'}_${config.realtime?.businessToolsEnabled ?? true}`;
+  if (BASE_PROMPT_CACHE.has(cacheKey) && !memoryContext) {
+    return BASE_PROMPT_CACHE.get(cacheKey);
+  }
+
   const businessToolsEnabled = config.realtime?.businessToolsEnabled ?? true;
 
-  const toolsIntro = businessToolsEnabled ? `Use tools via function calling as needed. Never describe tools to the caller. Never reveal tool names or internal details.` : `Business tools are disabled. Only answer general questions. Do not perform actions.`;
+  const toolsIntro = businessToolsEnabled
+    ? 'Use tools via function calling when needed. Never describe tools to the caller.'
+    : 'Business tools disabled. General questions only.';
 
   const memorySection = memoryContext
-    ? `\n\nCALLER CONTEXT:\n${memoryContext}`
+    ? `\nCaller: ${memoryContext}`
     : '';
-
-  const knowledgeSection = await buildKnowledgeContext();
 
   const prompt = `You are ${config.businessName || 'FleetNimble'}'s AI Receptionist.
 
-PERSONALITY: Professional, warm, conversational. Sound like a human, not a robot.
+Speak naturally, 1-2 sentences. One question at a time. If interrupted, stop.
 
-VOICE RULES:
-- Speak naturally, 1-2 sentences per turn.
-- ONE question at a time when collecting info.
-- Use fillers naturally: "Let me check...", "One moment..."
-- If interrupted, stop and listen.
+Use retrieve_knowledge for product/pricing/feature questions before answering.
 
-RETURNING CALLERS: Acknowledge them naturally ("Welcome back!"). Never say "according to our records."
+${toolsIntro}${memorySection}`;
 
-${knowledgeSection}
-
-${toolsIntro}
-${memorySection}`;
+  if (!memoryContext) {
+    BASE_PROMPT_CACHE.set(cacheKey, prompt);
+  }
 
   return prompt;
-}
-
-async function buildKnowledgeContext() {
-  return `KNOWLEDGE RETRIEVAL:
-You have access to the FleetNimble knowledge base via the retrieve_knowledge tool.
-- ALWAYS use retrieve_knowledge before answering factual questions about products, features, pricing, or troubleshooting.
-- Never answer from your training data — only from retrieved knowledge.
-- Speak naturally: "Let me look that up for you..." before calling the tool.
-- If retrieval returns nothing: "I don't have verified information on that. Let me connect you with a specialist who can help."
-- Keep answers concise for voice output — 2-3 sentences maximum.`;
 }
 
 export function buildToolDefinitions(businessToolsEnabled = true) {
