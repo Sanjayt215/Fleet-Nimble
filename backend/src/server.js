@@ -125,7 +125,7 @@ server.listen(config.port, host, async () => {
   const asstHealth = getAssistantProviderHealth();
   logger.info('DIAG_PIPELINE_CONFIG', {
     publicUrl: config.publicUrl,
-    realtimeProvider: config.realtimeProvider?.provider || 'openai',
+    realtimeProvider: config.realtimeProvider?.provider || 'gemini',
     realtimeProviderEnabled: config.realtimeProvider?.enabled !== false,
     realtimeModel: config.realtime.model,
     realtimeVoice: config.realtime.voice,

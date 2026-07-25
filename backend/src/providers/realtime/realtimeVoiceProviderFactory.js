@@ -39,7 +39,7 @@ function validateProviderConfig(providerName) {
 }
 
 function getConfiguredProvider() {
-  const providerName = config.realtimeProvider?.provider || 'openai';
+  const providerName = config.realtimeProvider?.provider || 'gemini';
   const ProviderClass = PROVIDER_MAP[providerName];
 
   if (!ProviderClass) {
@@ -90,11 +90,11 @@ export function isRealtimeProviderEnabled() {
 }
 
 function getFallbackProviderName() {
-  return config.realtimeProvider?.fallbackProvider || 'openai';
+  return config.realtimeProvider?.fallbackProvider || '';
 }
 
 export function getRealtimeProviderHealth() {
-  const providerName = config.realtimeProvider?.provider || 'openai';
+  const providerName = config.realtimeProvider?.provider || 'gemini';
   const validation = validateProviderConfig(providerName);
 
   return {

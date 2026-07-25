@@ -94,8 +94,8 @@ export const config = {
                  (Boolean(process.env.GEMINI_API_KEY) && Boolean(process.env.GEMINI_LIVE_MODEL)),
   },
   realtimeProvider: {
-    provider: process.env.AI_RECEPTIONIST_PROVIDER || 'openai',
-    fallbackProvider: process.env.AI_RECEPTIONIST_FALLBACK_PROVIDER || 'openai',
+    provider: process.env.AI_RECEPTIONIST_PROVIDER || 'gemini',
+    fallbackProvider: process.env.AI_RECEPTIONIST_FALLBACK_PROVIDER || '',
     enabled: parseBool(process.env.AI_RECEPTIONIST_MEDIA_STREAM_ENABLED, true),
   },
   assistantProvider: {

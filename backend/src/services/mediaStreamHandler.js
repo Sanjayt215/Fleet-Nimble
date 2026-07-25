@@ -465,10 +465,10 @@ function handleMediaStream(ws, req) {
   }
 
   function getProviderNameForIndex(index) {
-    const primary = config.realtimeProvider?.provider || 'openai';
-    const fallback = config.realtimeProvider?.fallbackProvider || (primary === 'openai' ? 'gemini' : 'openai');
+    const primary = config.realtimeProvider?.provider || 'gemini';
+    const fallback = config.realtimeProvider?.fallbackProvider || '';
     if (index === 0) return primary;
-    return fallback;
+    return fallback || primary;
   }
 
   function connectProvider() {
