@@ -164,6 +164,9 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
     const tools = businessToolsEnabled ? buildToolDefinitions(true) : [];
     const systemPrompt = await buildSystemPrompt(config, memoryContext);
 
+    const serverVadEnabled = process.env.GEMINI_ENABLE_SERVER_VAD !== 'false';
+    const vadDisabled = serverVadEnabled === false || config.gemini?.enableServerVad === false;
+
     const setupMessage = {
       setup: {
         model: `models/${this._model}`,
@@ -179,6 +182,14 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
       },
     };
 
+    const gc = setupMessage.setup.generationConfig;
+
+    if (this._voice) {
+      gc.speechConfig = {
+        voiceConfig: { prebuiltVoiceConfig: { voiceName: this._voice } },
+      };
+    }
+
     if (tools.length > 0) {
       setupMessage.setup.tools = [{
         functionDeclarations: tools.map(t => ({
@@ -189,26 +200,34 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
       }];
     }
 
-    const gc = setupMessage.setup.generationConfig;
-
-    if (this._voice) {
-      gc.speechConfig = {
-        voiceConfig: { prebuiltVoiceConfig: { voiceName: this._voice } },
-      };
-    }
-
-    const serverVadEnabled = process.env.GEMINI_ENABLE_SERVER_VAD !== 'false';
-    if (serverVadEnabled && config.gemini?.enableServerVad !== false) {
-      gc.speechConfig = gc.speechConfig || {};
-      gc.speechConfig.speechModelV2 = {
-        vadType: 'SERVER_VAD',
-        preSilenceMs: parseInt(process.env.GEMINI_VAD_PRE_SILENCE_MS || '300', 10),
-        postSilenceMs: parseInt(process.env.GEMINI_VAD_POST_SILENCE_MS || '800', 10),
-        threshold: parseFloat(process.env.GEMINI_VAD_THRESHOLD || '0.6'),
+    if (!vadDisabled) {
+      setupMessage.setup.realtimeInputConfig = {
+        automaticActivityDetection: {
+          disabled: false,
+          startOfSpeechSensitivity: 'low',
+          endOfSpeechSensitivity: 'low',
+          prefixPaddingMs: parseInt(process.env.GEMINI_VAD_PRE_SILENCE_MS || '300', 10),
+          silenceDurationMs: parseInt(process.env.GEMINI_VAD_POST_SILENCE_MS || '800', 10),
+        },
       };
     }
 
     this._debugLogSend('setup', setupMessage);
+    const validation = this._validateSetupPayload(setupMessage);
+    if (!validation.valid) {
+      logger.error('GEMINI_SETUP_VALIDATION_FAILED', {
+        callSid: this._callSid,
+        reasons: validation.reasons,
+      });
+      this._emit('error', {
+        provider: 'gemini',
+        code: 'setup_validation_error',
+        message: `Setup payload validation failed: ${validation.reasons.join('; ')}`,
+        retryable: false,
+        fatal: true,
+      });
+      return;
+    }
     this._ws.send(JSON.stringify(setupMessage));
     this._setupSent = true;
 
@@ -622,6 +641,67 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
     } catch {
       return { valid: false, reason: 'invalid_base64' };
     }
+  }
+
+  _validateSetupPayload(msg) {
+    const reasons = [];
+    const setup = msg.setup || {};
+
+    const VALID_SETUP_FIELDS = new Set([
+      'model', 'generationConfig', 'systemInstruction', 'tools',
+      'realtimeInputConfig', 'sessionResumption', 'contextWindowCompression',
+      'inputAudioTranscription', 'outputAudioTranscription', 'proactivity', 'historyConfig',
+    ]);
+
+    const VALID_GC_FIELDS = new Set([
+      'candidateCount', 'maxOutputTokens', 'temperature', 'topP', 'topK',
+      'presencePenalty', 'frequencyPenalty', 'responseModalities',
+      'speechConfig', 'mediaResolution',
+    ]);
+
+    const VALID_SPEECH_CONFIG_FIELDS = new Set(['voiceConfig']);
+
+    const VALID_REALTIME_INPUT_CONFIG_FIELDS = new Set(['automaticActivityDetection']);
+
+    const VALID_AAD_FIELDS = new Set([
+      'disabled', 'startOfSpeechSensitivity', 'endOfSpeechSensitivity',
+      'prefixPaddingMs', 'silenceDurationMs',
+    ]);
+
+    const invalidSetup = Object.keys(setup).filter(k => !VALID_SETUP_FIELDS.has(k));
+    for (const f of invalidSetup) {
+      reasons.push(`setup.${f} is not a supported BidiGenerateContentSetup field`);
+    }
+
+    if (setup.generationConfig && typeof setup.generationConfig === 'object') {
+      const invalidGc = Object.keys(setup.generationConfig).filter(k => !VALID_GC_FIELDS.has(k));
+      for (const f of invalidGc) {
+        reasons.push(`setup.generationConfig.${f} is not a supported GenerationConfig field for Live`);
+      }
+    }
+
+    if (setup.generationConfig?.speechConfig && typeof setup.generationConfig.speechConfig === 'object') {
+      const invalidSc = Object.keys(setup.generationConfig.speechConfig).filter(k => !VALID_SPEECH_CONFIG_FIELDS.has(k));
+      for (const f of invalidSc) {
+        reasons.push(`setup.generationConfig.speechConfig.${f} is not a supported SpeechConfig field`);
+      }
+    }
+
+    if (setup.realtimeInputConfig && typeof setup.realtimeInputConfig === 'object') {
+      const invalidRic = Object.keys(setup.realtimeInputConfig).filter(k => !VALID_REALTIME_INPUT_CONFIG_FIELDS.has(k));
+      for (const f of invalidRic) {
+        reasons.push(`setup.realtimeInputConfig.${f} is not a supported RealtimeInputConfig field`);
+      }
+    }
+
+    if (setup.realtimeInputConfig?.automaticActivityDetection && typeof setup.realtimeInputConfig.automaticActivityDetection === 'object') {
+      const invalidAad = Object.keys(setup.realtimeInputConfig.automaticActivityDetection).filter(k => !VALID_AAD_FIELDS.has(k));
+      for (const f of invalidAad) {
+        reasons.push(`setup.realtimeInputConfig.automaticActivityDetection.${f} is not a supported field`);
+      }
+    }
+
+    return { valid: reasons.length === 0, reasons };
   }
 
   _debugLogSend(type, payload) {
