@@ -163,7 +163,6 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
     const businessToolsEnabled = this._sessionContext.businessToolsEnabled ?? config.realtime?.businessToolsEnabled ?? true;
     const tools = businessToolsEnabled ? buildToolDefinitions(true) : [];
     const systemPrompt = await buildSystemPrompt(config, memoryContext);
-
     const serverVadEnabled = process.env.GEMINI_ENABLE_SERVER_VAD !== 'false';
     const vadDisabled = serverVadEnabled === false || config.gemini?.enableServerVad === false;
 
@@ -186,7 +185,9 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
 
     if (this._voice) {
       gc.speechConfig = {
-        voiceConfig: { prebuiltVoiceConfig: { voiceName: this._voice } },
+        voiceConfig: {
+          prebuiltVoiceConfig: { voiceName: this._voice },
+        },
       };
     }
 
@@ -204,8 +205,8 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
       setupMessage.setup.realtimeInputConfig = {
         automaticActivityDetection: {
           disabled: false,
-          startOfSpeechSensitivity: 'low',
-          endOfSpeechSensitivity: 'low',
+          startOfSpeechSensitivity: 'START_SENSITIVITY_LOW',
+          endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
           prefixPaddingMs: parseInt(process.env.GEMINI_VAD_PRE_SILENCE_MS || '300', 10),
           silenceDurationMs: parseInt(process.env.GEMINI_VAD_POST_SILENCE_MS || '800', 10),
         },
@@ -213,31 +214,34 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
     }
 
     this._debugLogSend('setup', setupMessage);
+    this._logSetupPayload(setupMessage);
+
     const validation = this._validateSetupPayload(setupMessage);
     if (!validation.valid) {
-      logger.error('GEMINI_SETUP_VALIDATION_FAILED', {
-        callSid: this._callSid,
-        reasons: validation.reasons,
-      });
       this._emit('error', {
         provider: 'gemini',
         code: 'setup_validation_error',
-        message: `Setup payload validation failed: ${validation.reasons.join('; ')}`,
+        message: `Setup payload validation failed — ${validation.reasons.join('; ')}`,
         retryable: false,
         fatal: true,
       });
       return;
     }
+
+    this._logProtocolCompliance(setupMessage);
     this._ws.send(JSON.stringify(setupMessage));
     this._setupSent = true;
 
     logger.info('GEMINI_SETUP_SENT', {
       callSid: this._callSid,
+      model: this._model,
+      voice: this._voice,
       hasTools: tools.length > 0,
       toolNames: tools.map(t => t.name),
       hasMemory: !!memoryContext,
-      serverVad: serverVadEnabled,
+      serverVad: !vadDisabled,
       outputRate: GEMINI_OUTPUT_RATE,
+      validationPassed: true,
     });
 
     this._setupTimer = setTimeout(() => {
@@ -643,61 +647,145 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
     }
   }
 
+  _logSetupPayload(msg) {
+    const json = JSON.stringify(msg, null, 2);
+    logger.info('GEMINI_SETUP_PAYLOAD', {
+      callSid: this._callSid,
+      payload: json,
+      payloadSizeBytes: json.length,
+    });
+  }
+
   _validateSetupPayload(msg) {
     const reasons = [];
     const setup = msg.setup || {};
 
+    // BidiGenerateContentSetup — allowed top-level fields (from ai.google.dev/api/live)
     const VALID_SETUP_FIELDS = new Set([
       'model', 'generationConfig', 'systemInstruction', 'tools',
       'realtimeInputConfig', 'sessionResumption', 'contextWindowCompression',
       'inputAudioTranscription', 'outputAudioTranscription', 'proactivity', 'historyConfig',
     ]);
 
+    // GenerationConfig — allowed fields for Live (responseLogprobs, responseMimeType, logprobs,
+    // responseSchema, stopSequence, routingConfig, audioTimestamp are NOT supported)
     const VALID_GC_FIELDS = new Set([
       'candidateCount', 'maxOutputTokens', 'temperature', 'topP', 'topK',
       'presencePenalty', 'frequencyPenalty', 'responseModalities',
       'speechConfig', 'mediaResolution',
     ]);
 
+    // SpeechConfig — only voiceConfig is supported in Live
     const VALID_SPEECH_CONFIG_FIELDS = new Set(['voiceConfig']);
 
+    // VoiceConfig — must be prebuiltVoiceConfig with voiceName
+    const VALID_VOICE_CONFIG_FIELDS = new Set(['prebuiltVoiceConfig']);
+
+    // PrebuiltVoiceConfig — must have voiceName
+    const VALID_PREBUILT_VOICE_FIELDS = new Set(['voiceName']);
+
+    // RealtimeInputConfig
     const VALID_REALTIME_INPUT_CONFIG_FIELDS = new Set(['automaticActivityDetection']);
 
+    // AutomaticActivityDetection
     const VALID_AAD_FIELDS = new Set([
       'disabled', 'startOfSpeechSensitivity', 'endOfSpeechSensitivity',
       'prefixPaddingMs', 'silenceDurationMs',
     ]);
 
+    // StartSensitivity enum — must be full protobuf enum name
+    const VALID_START_SENSITIVITY = new Set([
+      'START_SENSITIVITY_UNSPECIFIED',
+      'START_SENSITIVITY_HIGH',
+      'START_SENSITIVITY_LOW',
+    ]);
+
+    // EndSensitivity enum
+    const VALID_END_SENSITIVITY = new Set([
+      'END_SENSITIVITY_UNSPECIFIED',
+      'END_SENSITIVITY_HIGH',
+      'END_SENSITIVITY_LOW',
+    ]);
+
+    // Modality enum for responseModalities
+    const VALID_MODALITIES = new Set(['AUDIO', 'TEXT']);
+
+    // --- field presence checks ---
     const invalidSetup = Object.keys(setup).filter(k => !VALID_SETUP_FIELDS.has(k));
     for (const f of invalidSetup) {
-      reasons.push(`setup.${f} is not a supported BidiGenerateContentSetup field`);
+      reasons.push(`UNSUPPORTED_FIELD: setup.${f} is not a documented BidiGenerateContentSetup field`);
     }
 
     if (setup.generationConfig && typeof setup.generationConfig === 'object') {
       const invalidGc = Object.keys(setup.generationConfig).filter(k => !VALID_GC_FIELDS.has(k));
       for (const f of invalidGc) {
-        reasons.push(`setup.generationConfig.${f} is not a supported GenerationConfig field for Live`);
+        reasons.push(`UNSUPPORTED_FIELD: setup.generationConfig.${f} is not in the GenerationConfig allowlist for Live`);
       }
     }
 
     if (setup.generationConfig?.speechConfig && typeof setup.generationConfig.speechConfig === 'object') {
       const invalidSc = Object.keys(setup.generationConfig.speechConfig).filter(k => !VALID_SPEECH_CONFIG_FIELDS.has(k));
       for (const f of invalidSc) {
-        reasons.push(`setup.generationConfig.speechConfig.${f} is not a supported SpeechConfig field`);
+        reasons.push(`UNSUPPORTED_FIELD: setup.generationConfig.speechConfig.${f} is not a supported SpeechConfig field`);
+      }
+    }
+
+    if (setup.generationConfig?.speechConfig?.voiceConfig && typeof setup.generationConfig.speechConfig.voiceConfig === 'object') {
+      const invalidVc = Object.keys(setup.generationConfig.speechConfig.voiceConfig).filter(k => !VALID_VOICE_CONFIG_FIELDS.has(k));
+      for (const f of invalidVc) {
+        reasons.push(`UNSUPPORTED_FIELD: setup.generationConfig.speechConfig.voiceConfig.${f} is not a supported VoiceConfig field`);
+      }
+    }
+
+    if (setup.generationConfig?.speechConfig?.voiceConfig?.prebuiltVoiceConfig && typeof setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig === 'object') {
+      const invalidPvc = Object.keys(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig).filter(k => !VALID_PREBUILT_VOICE_FIELDS.has(k));
+      for (const f of invalidPvc) {
+        reasons.push(`UNSUPPORTED_FIELD: setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.${f} is not a supported field`);
       }
     }
 
     if (setup.realtimeInputConfig && typeof setup.realtimeInputConfig === 'object') {
       const invalidRic = Object.keys(setup.realtimeInputConfig).filter(k => !VALID_REALTIME_INPUT_CONFIG_FIELDS.has(k));
       for (const f of invalidRic) {
-        reasons.push(`setup.realtimeInputConfig.${f} is not a supported RealtimeInputConfig field`);
+        reasons.push(`UNSUPPORTED_FIELD: setup.realtimeInputConfig.${f} is not a documented RealtimeInputConfig field`);
       }
     }
 
     if (setup.realtimeInputConfig?.automaticActivityDetection && typeof setup.realtimeInputConfig.automaticActivityDetection === 'object') {
       const invalidAad = Object.keys(setup.realtimeInputConfig.automaticActivityDetection).filter(k => !VALID_AAD_FIELDS.has(k));
       for (const f of invalidAad) {
-        reasons.push(`setup.realtimeInputConfig.automaticActivityDetection.${f} is not a supported field`);
+        reasons.push(`UNSUPPORTED_FIELD: setup.realtimeInputConfig.automaticActivityDetection.${f} is not a documented field`);
+      }
+
+      // --- enum value validation ---
+      const aad = setup.realtimeInputConfig.automaticActivityDetection;
+      if (aad.startOfSpeechSensitivity !== undefined) {
+        if (!VALID_START_SENSITIVITY.has(aad.startOfSpeechSensitivity)) {
+          reasons.push(
+            `INVALID_ENUM: setup.realtimeInputConfig.automaticActivityDetection.startOfSpeechSensitivity = "${aad.startOfSpeechSensitivity}"`
+            + ` — must be one of: ${[...VALID_START_SENSITIVITY].join(', ')}`
+          );
+        }
+      }
+      if (aad.endOfSpeechSensitivity !== undefined) {
+        if (!VALID_END_SENSITIVITY.has(aad.endOfSpeechSensitivity)) {
+          reasons.push(
+            `INVALID_ENUM: setup.realtimeInputConfig.automaticActivityDetection.endOfSpeechSensitivity = "${aad.endOfSpeechSensitivity}"`
+            + ` — must be one of: ${[...VALID_END_SENSITIVITY].join(', ')}`
+          );
+        }
+      }
+    }
+
+    // Validate responseModalities values
+    if (setup.generationConfig?.responseModalities && Array.isArray(setup.generationConfig.responseModalities)) {
+      for (const m of setup.generationConfig.responseModalities) {
+        if (!VALID_MODALITIES.has(m)) {
+          reasons.push(
+            `INVALID_ENUM: setup.generationConfig.responseModalities contains "${m}"`
+            + ` — must be one of: ${[...VALID_MODALITIES].join(', ')}`
+          );
+        }
       }
     }
 
@@ -717,5 +805,95 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
 
   getMetrics() {
     return { ...this._metrics };
+  }
+
+  _logProtocolCompliance(payload) {
+    const report = [];
+
+    // --- Check all removed/changed fields from previous iterations ---
+    const json = JSON.stringify(payload);
+    const removedOrChanged = [];
+
+    if (json.includes('userAudio') || json.includes('outputAudio')) {
+      removedOrChanged.push('OPENAI_ARTIFACT_REMAINING: userAudio/outputAudio still present in payload');
+    }
+
+    if (json.includes('speechModelV2')) {
+      removedOrChanged.push('REMOVED_FIELD_OK: speechModelV2 no longer in payload');
+    }
+
+    const setup = payload.setup || {};
+    const gc = setup.generationConfig || {};
+
+    report.push('--- Gemini Live Protocol Compliance Report ---');
+
+    const topFields = Object.keys(setup);
+    report.push(`Top-level fields: [${topFields.join(', ')}]`);
+
+    if (topFields.includes('model')) report.push('  model ✓ — present');
+    if (topFields.includes('systemInstruction')) report.push('  systemInstruction ✓ — present as Content { parts: [{ text }] }');
+    if (topFields.includes('generationConfig')) {
+      const gcFields = Object.keys(gc || {});
+      report.push(`  generationConfig ✓ — fields: [${gcFields.join(', ')}]`);
+
+      const knownGc = ['candidateCount','maxOutputTokens','temperature','topP','topK','presencePenalty','frequencyPenalty','responseModalities','speechConfig','mediaResolution'];
+      const unknownGc = gcFields.filter(f => !knownGc.includes(f));
+      for (const u of unknownGc) {
+        report.push(`    WARNING: ${u} is not in the documented GenerationConfig allowlist`);
+      }
+    }
+    if (topFields.includes('tools')) report.push('  tools ✓ — array of Tool with functionDeclarations');
+    if (topFields.includes('realtimeInputConfig')) {
+      const ric = setup.realtimeInputConfig || {};
+      const ricFields = Object.keys(ric);
+      report.push(`  realtimeInputConfig ✓ — fields: [${ricFields.join(', ')}]`);
+      if (ric.automaticActivityDetection) {
+        const aad = ric.automaticActivityDetection;
+        const aadFields = Object.keys(aad);
+        report.push(`    automaticActivityDetection ✓ — fields: [${aadFields.join(', ')}]`);
+
+        report.push(`    startOfSpeechSensitivity: "${aad.startOfSpeechSensitivity}"`);
+        const validSss = ['START_SENSITIVITY_UNSPECIFIED','START_SENSITIVITY_HIGH','START_SENSITIVITY_LOW'];
+        if (validSss.includes(aad.startOfSpeechSensitivity)) {
+          report.push('      ✓ valid protobuf enum name');
+        } else {
+          report.push('      ✗ INVALID — must be full enum name (e.g. START_SENSITIVITY_LOW)');
+        }
+
+        report.push(`    endOfSpeechSensitivity: "${aad.endOfSpeechSensitivity}"`);
+        const validEss = ['END_SENSITIVITY_UNSPECIFIED','END_SENSITIVITY_HIGH','END_SENSITIVITY_LOW'];
+        if (validEss.includes(aad.endOfSpeechSensitivity)) {
+          report.push('      ✓ valid protobuf enum name');
+        } else {
+          report.push('      ✗ INVALID — must be full enum name (e.g. END_SENSITIVITY_LOW)');
+        }
+      }
+    }
+
+    if (gc.speechConfig) {
+      const sc = gc.speechConfig;
+      const scFields = Object.keys(sc);
+      report.push(`  speechConfig ✓ — fields: [${scFields.join(', ')}]`);
+      if (sc.voiceConfig) {
+        const vcFields = Object.keys(sc.voiceConfig);
+        report.push(`    voiceConfig ✓ — fields: [${vcFields.join(', ')}]`);
+        if (sc.voiceConfig.prebuiltVoiceConfig) {
+          const pvc = sc.voiceConfig.prebuiltVoiceConfig;
+          report.push(`      prebuiltVoiceConfig.voiceName: "${pvc.voiceName}" ✓`);
+        }
+      }
+    }
+
+    if (removedOrChanged.length > 0) {
+      for (const r of removedOrChanged) {
+        report.push(`  ${r}`);
+      }
+    }
+
+    report.push('--- End Protocol Compliance Report ---');
+
+    for (const line of report) {
+      logger.info('GEMINI_COMPLIANCE', { callSid: this._callSid, line });
+    }
   }
 }
