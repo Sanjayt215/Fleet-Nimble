@@ -1,5 +1,4 @@
 import WebSocket from 'ws';
-import { v4 as uuidv4 } from 'uuid';
 import { config } from '../../config/index.js';
 import logger from '../../utils/logger.js';
 import { RealtimeSessionManager } from '../../services/realtimeSessionManager.js';
@@ -177,14 +176,6 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
           topK: 40,
           responseModalities: ['AUDIO'],
         },
-        userAudio: {
-          encoding: 'LINEAR16',
-          sampleRateHertz: GEMINI_INPUT_RATE,
-        },
-        outputAudio: {
-          encoding: 'LINEAR16',
-          sampleRateHertz: GEMINI_OUTPUT_RATE,
-        },
       },
     };
 
@@ -215,6 +206,7 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
       };
     }
 
+    this._debugLogSend('setup', setupMessage);
     this._ws.send(JSON.stringify(setupMessage));
     this._setupSent = true;
 
@@ -289,6 +281,7 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
       },
     };
 
+    this._debugLogSend('realtimeInput', message);
     this._ws.send(JSON.stringify(message));
     this._metrics.audioBytesSent += audioChunk.length;
   }
@@ -297,6 +290,7 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
     if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return false;
     try {
       const message = { realtimeInput: { text } };
+      this._debugLogSend('realtimeInput', message);
       this._ws.send(JSON.stringify(message));
       return true;
     } catch {
@@ -305,21 +299,12 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
   }
 
   async updateInstructions(instructions) {
-    if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return false;
-    try {
-      const update = {
-        setup: {
-          systemInstruction: {
-            parts: [{ text: instructions }],
-          },
-        },
-      };
-      this._ws.send(JSON.stringify(update));
-      logger.info('GEMINI_INSTRUCTIONS_UPDATED', { callSid: this._callSid });
-      return true;
-    } catch {
-      return false;
-    }
+    logger.warn('GEMINI_INSTRUCTIONS_UNSUPPORTED', {
+      callSid: this._callSid,
+      message: 'Gemini Live does not support dynamic instruction updates after setup. '
+        + 'The setup message is only valid as the first message in the session.',
+    });
+    return false;
   }
 
   async sendToolResult(toolCallId, result) {
@@ -333,14 +318,12 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
           functionResponses: [{
             id: toolCallId,
             name,
-            response: {
-              name,
-              response: result,
-            },
+            response: result,
           }],
         },
       };
 
+      this._debugLogSend('toolResponse', response);
       this._ws.send(JSON.stringify(response));
       this._functionCallsInFlight.delete(toolCallId);
       this._metrics.toolExecutionCount++;
@@ -365,14 +348,9 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
 
   async cancelResponse() {
     if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return false;
-    try {
-      this._ws.send(JSON.stringify({ realtimeInput: { interruption: true } }));
-      this._currentTurnParts = [];
-      this._turnActive = false;
-      return true;
-    } catch {
-      return false;
-    }
+    this._currentTurnParts = [];
+    this._turnActive = false;
+    return true;
   }
 
   async close(reason) {
@@ -642,6 +620,17 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
     } catch {
       return { valid: false, reason: 'invalid_base64' };
     }
+  }
+
+  _debugLogSend(type, payload) {
+    const json = JSON.stringify(payload);
+    const keys = Object.keys(payload);
+    logger.info('GEMINI_WS_SEND', {
+      callSid: this._callSid,
+      type,
+      topLevelKeys: keys,
+      payloadSize: json.length,
+    });
   }
 
   getMetrics() {
