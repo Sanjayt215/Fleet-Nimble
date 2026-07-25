@@ -498,6 +498,7 @@ function handleMediaStream(ws, req) {
         gracefulClose();
         return;
       }
+      logger.info('GEMINI_PROVIDER_CREATED', { callSid, providerType: provider.constructor?.name });
 
       const memoryContext = customerMemory ? buildMemoryContext(customerMemory) : '';
       const businessToolsEnabled = config.realtime?.businessToolsEnabled ?? true;
