@@ -378,6 +378,9 @@ export class OpenAIRealtimeProvider extends RealtimeVoiceProvider {
         errorCode: err.code,
         errorMessage: err.message?.substring(0, 200),
       });
+      if (err.code === 'insufficient_quota') {
+        import('./realtimeVoiceProviderFactory.js').then(mod => mod.markOpenaiQuotaExhausted()).catch(() => {});
+      }
       this._emit('error', {
         provider: 'openai',
         code: err.code || 'openai_error',

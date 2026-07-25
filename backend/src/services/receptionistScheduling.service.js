@@ -248,7 +248,7 @@ export function resolveSchedulingText(details, parsed) {
     if (!isNaN(d.getTime())) {
       dateStr = d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
     }
-  } catch {}
+  } catch (err) { logger.warn('DATE_FORMAT_FAILED', { date, error: err.message }); }
 
   let timeStr = time;
   try {
@@ -260,7 +260,7 @@ export function resolveSchedulingText(details, parsed) {
       const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
       timeStr = `${h12}:${m} ${ampm}`;
     }
-  } catch {}
+  } catch (err) { logger.warn('TIME_FORMAT_FAILED', { time, error: err.message }); }
 
   return { resolvedDate: dateStr, resolvedTime: timeStr, timezone: tz };
 }
@@ -276,7 +276,7 @@ export function assembleSchedulingPayload(collectedData, parsed) {
     if (!isNaN(dt.getTime())) {
       return { scheduledDate: dt.toISOString(), dateSource: 'parsed' };
     }
-  } catch {}
+  } catch (err) { logger.warn('DATE_PARSE_FAILED', { date, time, error: err.message }); }
   return { scheduledDate: new Date(Date.now() + 86400000).toISOString(), dateSource: 'fallback' };
 }
 

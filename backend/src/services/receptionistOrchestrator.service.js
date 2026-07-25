@@ -266,279 +266,353 @@ function normalizeToUtc(date) {
   ));
 }
 
+function computeLeadScore(data) {
+  let score = 0;
+  if (data.fleetSize) {
+    if (data.fleetSize >= 100) score += 40;
+    else if (data.fleetSize >= 20) score += 25;
+    else if (data.fleetSize >= 5) score += 10;
+    else score += 5;
+  }
+  if (data.company) score += 15;
+  if (data.email) score += 5;
+  if (data.phone) score += 5;
+  return Math.min(score, 100);
+}
+
 export async function executeAppointmentCreation(session) {
-  const { userId, companyId, callId, customerId, collectedData = {} } = session;
+  const { userId, companyId, callId, collectedData = {}, callerPhone } = session;
   const executionId = `${callId}_create_appointment`;
+
+  logger.info('TOOL_STARTED', { tool: 'create_appointment', callId, userId });
+  logger.info('TOOL_ARGUMENTS', { tool: 'create_appointment', callId, args: collectedData });
+
   if (PENDING_ACTIONS.has(executionId)) {
-    return { reply: 'The appointment has already been created. Is there anything else?', intent: 'completed' };
+    logger.info('TOOL_COMPLETED', { tool: 'create_appointment', callId, result: 'duplicate_prevented' });
+    return { success: false, duplicate: true, reply: 'The appointment has already been created. Is there anything else?', intent: 'completed' };
   }
 
   if (!userId || !companyId) {
-    logger.error('APPOINTMENT_CREATION_SKIPPED_NO_OWNER', { callId });
-    return { reply: 'I apologize, but our system is unable to create appointments at this time. Our team has been notified.', intent: 'error', error: 'missing_owner' };
+    logger.error('TOOL_FAILED', { tool: 'create_appointment', callId, reason: 'missing_owner' });
+    return { success: false, reply: 'I apologize, but our system is unable to create appointments at this time. Our team has been notified.', intent: 'error', error: 'missing_owner' };
   }
 
-  try {
-    const scheduledDate = collectedData.preferredDate && collectedData.preferredTime
-      ? new Date(`${collectedData.preferredDate}T${collectedData.preferredTime}:00`)
-      : new Date(Date.now() + 86400000);
-    if (isNaN(scheduledDate.getTime())) {
-      throw new Error('Invalid date/time');
-    }
+  const scheduledDate = collectedData.preferredDate && collectedData.preferredTime
+    ? new Date(`${collectedData.preferredDate}T${collectedData.preferredTime}:00`)
+    : new Date(Date.now() + 86400000);
+  if (isNaN(scheduledDate.getTime())) {
+    logger.error('TOOL_FAILED', { tool: 'create_appointment', callId, reason: 'invalid_date', date: collectedData.preferredDate, time: collectedData.preferredTime });
+    return { success: false, reply: 'I apologize, but we need a valid date and time to schedule. Could you please provide both?', intent: 'error', error: 'invalid_date' };
+  }
 
-    const durationMinutes = collectedData.durationMinutes || 30;
+  const durationMinutes = collectedData.durationMinutes || 30;
 
-    // Check for slot conflicts
-    const conflict = await checkSlotConflict(userId, scheduledDate, durationMinutes);
-    if (conflict) {
-      logger.warn('APPOINTMENT_SLOT_CONFLICT', {
-        callId,
-        requestedDate: scheduledDate.toISOString(),
-        conflictingAppointmentId: conflict.id,
-        conflictingCaller: conflict.callerName,
-      });
-      return {
-        reply: `I'm sorry, but there is already an appointment scheduled at that time. Please choose a different date or time.`,
-        intent: 'slot_conflict',
-        conflict: true,
-      };
-    }
-
-    // Normalize to UTC for storage
-    const utcDate = normalizeToUtc(scheduledDate);
-    const timezone = collectedData.timezone || process.env.AI_RECEPTIONIST_TIMEZONE || 'UTC';
-
-    const appointment = await prisma.aiReceptionistAppointment.create({
-      data: {
-        userId,
-        companyId,
-        callerName: collectedData.callerName || 'Caller',
-        callerPhone: collectedData.phone || null,
-        callerEmail: collectedData.email || null,
-        companyName: collectedData.company || null,
-        fleetSize: collectedData.fleetSize || null,
-        meetingPurpose: collectedData.meetingPurpose || 'General inquiry',
-        meetingTitle: collectedData.meetingPurpose ? `${collectedData.meetingPurpose} - FleetNimble` : 'FleetNimble Meeting',
-        scheduledDate: utcDate,
-        durationMinutes,
-        timezone,
-        status: 'SCHEDULED',
-      },
+  const conflict = await checkSlotConflict(userId, scheduledDate, durationMinutes);
+  if (conflict) {
+    logger.warn('TOOL_SLOT_CONFLICT', {
+      callId, requestedDate: scheduledDate.toISOString(),
+      conflictingAppointmentId: conflict.id, conflictingCaller: conflict.callerName,
     });
+    return { success: false, conflict: true, reply: `I'm sorry, but there is already an appointment scheduled at that time. Please choose a different date or time.`, intent: 'slot_conflict' };
+  }
+
+  const utcDate = normalizeToUtc(scheduledDate);
+  const timezone = collectedData.timezone || process.env.AI_RECEPTIONIST_TIMEZONE || 'UTC';
+
+  let customer = null;
+  let appointment = null;
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      logger.info('DATABASE_WRITE', { tool: 'create_appointment', callId, operation: 'transaction_start' });
+
+      const normalizedPhone = callerPhone || collectedData.phone || null;
+      const customerEmail = collectedData.email || null;
+
+      let txCustomer = null;
+      if (normalizedPhone || customerEmail) {
+        const customerWhere = { userId };
+        const customerOrClauses = [];
+        if (normalizedPhone) customerOrClauses.push({ phone: normalizedPhone });
+        if (customerEmail) customerOrClauses.push({ email: customerEmail });
+        if (customerOrClauses.length > 0) {
+          customerWhere.OR = customerOrClauses;
+          txCustomer = await tx.receptionistCustomer.findFirst({ where: customerWhere });
+        }
+
+        if (!txCustomer) {
+          txCustomer = await tx.receptionistCustomer.create({
+            data: {
+              userId,
+              companyId,
+              phone: normalizedPhone,
+              email: customerEmail,
+              name: collectedData.callerName || 'Caller',
+              companyName: collectedData.company || null,
+              fleetSize: collectedData.fleetSize || null,
+              status: 'LEAD',
+              leadScore: computeLeadScore(collectedData),
+              salesStage: 'LEAD',
+              lastContactAt: new Date(),
+            },
+          });
+          logger.info('DATABASE_SUCCESS', { tool: 'create_appointment', callId, operation: 'customer_create', customerId: txCustomer.id });
+        } else {
+          const custUpdates = { lastContactAt: new Date(), totalCalls: { increment: 1 } };
+          if (collectedData.callerName && !txCustomer.name) custUpdates.name = collectedData.callerName;
+          if (collectedData.company && !txCustomer.companyName) custUpdates.companyName = collectedData.company;
+          if (collectedData.fleetSize != null) custUpdates.fleetSize = collectedData.fleetSize;
+          txCustomer = await tx.receptionistCustomer.update({
+            where: { id: txCustomer.id },
+            data: custUpdates,
+          });
+          logger.info('DATABASE_SUCCESS', { tool: 'create_appointment', callId, operation: 'customer_update', customerId: txCustomer.id });
+        }
+      }
+
+      const txAppointment = await tx.aiReceptionistAppointment.create({
+        data: {
+          userId,
+          companyId,
+          callerName: collectedData.callerName || 'Caller',
+          callerPhone: normalizedPhone,
+          callerEmail: customerEmail,
+          companyName: collectedData.company || null,
+          fleetSize: collectedData.fleetSize || null,
+          meetingPurpose: collectedData.meetingPurpose || 'Demo',
+          meetingTitle: collectedData.meetingPurpose ? `${collectedData.meetingPurpose} - FleetNimble` : 'FleetNimble Demo',
+          scheduledDate: utcDate,
+          durationMinutes,
+          timezone,
+          status: 'SCHEDULED',
+        },
+      });
+      logger.info('DATABASE_SUCCESS', { tool: 'create_appointment', callId, operation: 'appointment_create', appointmentId: txAppointment.id });
+
+      if (callId) {
+        const callUpdateData = {
+          appointmentId: txAppointment.id,
+          callType: 'DEMO',
+          customerId: txCustomer?.id || undefined,
+          callerEmail: customerEmail || undefined,
+          fleetSize: collectedData.fleetSize || undefined,
+          companyName: collectedData.company || undefined,
+        };
+        Object.keys(callUpdateData).forEach(k => { if (callUpdateData[k] === undefined) delete callUpdateData[k]; });
+        await tx.aiReceptionistCall.update({ where: { id: callId }, data: callUpdateData });
+        logger.info('DATABASE_SUCCESS', { tool: 'create_appointment', callId, operation: 'call_update' });
+      }
+
+      if (txCustomer && txAppointment) {
+        const sentimentHistory = Array.isArray(txCustomer.sentimentHistory) ? txCustomer.sentimentHistory : [];
+        sentimentHistory.push({ sentiment: 'positive', date: new Date().toISOString(), callId });
+        await tx.receptionistCustomer.update({
+          where: { id: txCustomer.id },
+          data: {
+            totalAppointments: { increment: 1 },
+            lastIntent: 'schedule_meeting',
+            lastSummary: `Scheduled: ${collectedData.meetingPurpose || 'Demo'} on ${collectedData.preferredDate}`,
+            salesStage: 'DEMO',
+            sentimentHistory: sentimentHistory.slice(-20),
+          },
+        });
+        logger.info('DATABASE_SUCCESS', { tool: 'create_appointment', callId, operation: 'customer_appointment_link' });
+      }
+
+      logger.info('DATABASE_WRITE', { tool: 'create_appointment', callId, operation: 'transaction_commit' });
+
+      return { customer: txCustomer, appointment: txAppointment };
+    });
+
+    customer = result.customer;
+    appointment = result.appointment;
 
     PENDING_ACTIONS.set(executionId, { id: appointment.id, timestamp: Date.now() });
 
-    if (callId) {
-      try {
-        await prisma.aiReceptionistCall.update({
-          where: { id: callId },
-          data: { appointmentId: appointment.id, callType: 'DEMO' },
-        });
-      } catch (e) {
-        logger.warn('CALL_APPOINTMENT_LINK_FAILED', { callId, error: e.message });
-      }
-    }
-
-    let calResult;
-    try {
-      calResult = await calendarService.createCalendarEvent(userId, appointment);
-    } catch {
-      calResult = { provider: 'internal', eventId: null };
-    }
-    if (calResult.provider !== 'internal') {
-      try {
-        await prisma.aiReceptionistAppointment.update({
-          where: { id: appointment.id },
-          data: {
-            calendarProvider: calResult.provider,
-            calendarEventId: calResult.eventId,
-            meetingLink: calResult.meetingLink || null,
-          },
-        });
-      } catch {}
-    }
-
-    try { await notificationService.sendConfirmationEmail(userId, appointment); } catch {}
-    if (collectedData.phone) {
-      try {
-        await notificationService.sendSmsNotification(userId, collectedData.phone,
-          `Your FleetNimble meeting has been scheduled for ${scheduledDate.toLocaleString()}. Confirmation: ${appointment.id.substring(0, 8)}`
-        );
-      } catch {}
-    }
-    try {
-      await notificationService.notifyAdmin(userId, 'appointment_booked', {
-        appointmentId: appointment.id,
-        callerName: collectedData.callerName,
-        company: collectedData.company,
-        date: collectedData.preferredDate,
-      });
-    } catch {}
-
-    if (customerId) {
-      try {
-        await memoryService.updateCustomerAfterCall(customerId, {
-          appointmentId: appointment.id,
-          intent: 'schedule_meeting',
-          summary: `Scheduled: ${collectedData.meetingPurpose || 'General'} on ${collectedData.preferredDate}`,
-          sentiment: 'positive',
-        });
-      } catch {}
-    }
-
-    try {
-      await prisma.aiReceptionistAuditLog.create({
-        data: {
-          userId,
-          eventType: 'appointment_created',
-          metadata: {
-            appointmentId: appointment.id,
-            callerName: collectedData.callerName,
-            company: collectedData.company,
-          },
-        },
-      });
-    } catch {};
-
     metrics.recordAppointmentCreated();
-
-    logger.info('APPOINTMENT_CREATED', {
-      appointmentId: appointment.id,
-      callId,
-      userId,
-      companyId,
-    });
-
-    const reply = `Perfect! Your meeting has been scheduled.\n\n- Purpose: ${collectedData.meetingPurpose || 'General'}\n- Date: ${collectedData.preferredDate}\n- Time: ${collectedData.preferredTime || '10:00'}\n- Confirmation: ${appointment.id.substring(0, 8)}\n\nIs there anything else I can help you with?`;
-
-    return { reply, intent: 'appointment_created', isComplete: true, actionResult: { type: 'appointment', id: appointment.id }, collectedData };
+    logger.info('APPOINTMENT_CREATED', { appointmentId: appointment.id, callId, userId, companyId, customerId: customer?.id });
   } catch (err) {
-    logger.error('VOICE_AGENT_TOOL_FAILED', {
-      tool: 'create_appointment',
-      error: err.message,
-      stack: err.stack,
-      userId,
-      callId,
-      customerId,
-      payload: collectedData,
-      prismaError: err.code || null,
-      constraint: err.meta?.constraint || null,
-      field: err.meta?.field_name || null,
+    logger.error('TOOL_FAILED', {
+      tool: 'create_appointment', callId, userId, error: err.message, stack: err.stack,
+      prismaError: err.code || null, constraint: err.meta?.constraint || null, field: err.meta?.field_name || null,
     });
-    return { reply: 'I apologize, but I encountered an issue creating the appointment. Our team has been notified and will follow up. Is there anything else?', intent: 'error', error: err.message };
-  }
-}
-
-export async function executeSupportTicketCreation(session) {
-  const { userId, companyId, callId, customerId, collectedData = {} } = session;
-  const executionId = `${callId}_create_support_ticket`;
-  if (PENDING_ACTIONS.has(executionId)) {
-    return { reply: 'The support ticket has already been created. Is there anything else?', intent: 'completed' };
-  }
-
-  if (!userId || !companyId) {
-    logger.error('SUPPORT_TICKET_CREATION_SKIPPED_NO_OWNER', { callId });
-    return { reply: 'I apologize, but our system is unable to create support tickets at this time. Our team has been notified.', intent: 'error', error: 'missing_owner' };
+    metrics.recordAppointmentFailed();
+    return { success: false, reply: 'I apologize, but I encountered an issue creating the appointment. Our team has been notified. Is there anything else?', intent: 'error', error: err.message };
   }
 
   try {
-    const ticket = await prisma.aiReceptionistSupportTicket.create({
-      data: {
-        userId,
-        companyId,
-        callerName: collectedData.callerName || 'Caller',
-        callerPhone: collectedData.phone || null,
-        callerEmail: collectedData.email || null,
-        companyName: collectedData.company || null,
-        issueTitle: collectedData.issue?.substring(0, 200) || 'Support request',
-        issueDescription: collectedData.issue || null,
-        urgency: collectedData.urgency || 'MEDIUM',
-        status: 'OPEN',
-        relatedVehicleId: collectedData.vehicleReference || null,
-      },
+    const emailResult = await notificationService.sendConfirmationEmail(userId, appointment);
+    logger.info('EMAIL_SENT', { appointmentId: appointment.id, sent: emailResult?.sent, provider: emailResult?.provider });
+  } catch (err) {
+    logger.warn('EMAIL_FAILED', { appointmentId: appointment.id, error: err.message });
+  }
+
+  if (collectedData.phone || callerPhone) {
+    try {
+      const smsPhone = collectedData.phone || callerPhone;
+      const smsResult = await notificationService.sendSmsNotification(userId, smsPhone,
+        `Your FleetNimble demo is scheduled. Confirmation: ${appointment.id.substring(0, 8)}. We look forward to speaking with you!`
+      );
+      logger.info('SMS_SENT', { appointmentId: appointment.id, sent: smsResult?.sent });
+    } catch (err) {
+      logger.warn('SMS_FAILED', { appointmentId: appointment.id, error: err.message });
+    }
+  }
+
+  try {
+    await notificationService.notifyAdmin(userId, 'appointment_booked', {
+      appointmentId: appointment.id, callerName: collectedData.callerName,
+      company: collectedData.company, date: collectedData.preferredDate,
+    });
+    logger.info('ADMIN_NOTIFIED', { appointmentId: appointment.id });
+  } catch (err) {
+    logger.warn('ADMIN_NOTIFY_FAILED', { appointmentId: appointment.id, error: err.message });
+  }
+
+  try {
+    await prisma.aiReceptionistAuditLog.create({
+      data: { userId, eventType: 'appointment_created', metadata: { appointmentId: appointment.id, callerName: collectedData.callerName, company: collectedData.company } },
+    });
+    logger.info('AUDIT_LOG_CREATED', { appointmentId: appointment.id });
+  } catch (err) {
+    logger.warn('AUDIT_LOG_FAILED', { appointmentId: appointment.id, error: err.message });
+  }
+
+  let calResult;
+  try {
+    calResult = await calendarService.createCalendarEvent(userId, appointment);
+    logger.info('CALENDAR_EVENT_CREATED', { appointmentId: appointment.id, provider: calResult?.provider, eventId: calResult?.eventId });
+    if (calResult?.provider !== 'internal' && calResult?.eventId) {
+      await prisma.aiReceptionistAppointment.update({
+        where: { id: appointment.id },
+        data: { calendarProvider: calResult.provider, calendarEventId: calResult.eventId, meetingLink: calResult.meetingLink || null },
+      });
+      logger.info('CALENDAR_PROVIDER_UPDATED', { appointmentId: appointment.id, provider: calResult.provider });
+    }
+  } catch (err) {
+    logger.warn('CALENDAR_EVENT_FAILED', { appointmentId: appointment.id, error: err.message });
+  }
+
+  try {
+    const { refreshOnAppointmentCreated } = await import('./receptionistCacheRefresh.service.js');
+    await refreshOnAppointmentCreated(userId, appointment.id);
+    logger.info('DASHBOARD_UPDATED', { appointmentId: appointment.id });
+  } catch (err) {
+    logger.warn('DASHBOARD_UPDATE_FAILED', { appointmentId: appointment.id, error: err.message });
+  }
+
+  logger.info('TOOL_COMPLETED', { tool: 'create_appointment', callId, appointmentId: appointment.id, customerId: customer?.id });
+
+  const reply = `Perfect! Your demo has been scheduled.\n\n- Purpose: ${collectedData.meetingPurpose || 'Demo'}\n- Date: ${collectedData.preferredDate}\n- Time: ${collectedData.preferredTime || '10:00'}\n- Confirmation: ${appointment.id.substring(0, 8)}\n\nIs there anything else I can help you with?`;
+
+  return { success: true, reply, intent: 'appointment_created', isComplete: true, actionResult: { type: 'appointment', id: appointment.id }, collectedData, customerId: customer?.id };
+}
+
+export async function executeSupportTicketCreation(session) {
+  const { userId, companyId, callId, collectedData = {} } = session;
+  const executionId = `${callId}_create_support_ticket`;
+
+  logger.info('TOOL_STARTED', { tool: 'create_support_ticket', callId, userId });
+  logger.info('TOOL_ARGUMENTS', { tool: 'create_support_ticket', callId, args: collectedData });
+
+  if (PENDING_ACTIONS.has(executionId)) {
+    logger.info('TOOL_COMPLETED', { tool: 'create_support_ticket', callId, result: 'duplicate_prevented' });
+    return { success: false, duplicate: true, reply: 'The support ticket has already been created. Is there anything else?', intent: 'completed' };
+  }
+
+  if (!userId || !companyId) {
+    logger.error('TOOL_FAILED', { tool: 'create_support_ticket', callId, reason: 'missing_owner' });
+    return { success: false, reply: 'I apologize, but our system is unable to create support tickets at this time.', intent: 'error', error: 'missing_owner' };
+  }
+
+  let ticket;
+  try {
+    ticket = await prisma.$transaction(async (tx) => {
+      logger.info('DATABASE_WRITE', { tool: 'create_support_ticket', callId, operation: 'transaction_start' });
+
+      const txTicket = await tx.aiReceptionistSupportTicket.create({
+        data: {
+          userId, companyId,
+          callerName: collectedData.callerName || 'Caller',
+          callerPhone: collectedData.phone || null,
+          callerEmail: collectedData.email || null,
+          companyName: collectedData.company || null,
+          issueTitle: collectedData.issue?.substring(0, 200) || 'Support request',
+          issueDescription: collectedData.issue || null,
+          urgency: collectedData.urgency || 'MEDIUM',
+          status: 'OPEN',
+          relatedVehicleId: collectedData.vehicleReference || null,
+        },
+      });
+      logger.info('DATABASE_SUCCESS', { tool: 'create_support_ticket', callId, operation: 'ticket_create', ticketId: txTicket.id });
+
+      if (callId) {
+        await tx.aiReceptionistCall.update({
+          where: { id: callId },
+          data: { supportTicketId: txTicket.id, callType: 'SUPPORT' },
+        });
+        logger.info('DATABASE_SUCCESS', { tool: 'create_support_ticket', callId, operation: 'call_update' });
+      }
+
+      logger.info('DATABASE_WRITE', { tool: 'create_support_ticket', callId, operation: 'transaction_commit' });
+      return txTicket;
     });
 
     PENDING_ACTIONS.set(executionId, { id: ticket.id, timestamp: Date.now() });
-
-    if (callId) {
-      try {
-        await prisma.aiReceptionistCall.update({
-          where: { id: callId },
-          data: { supportTicketId: ticket.id, callType: 'SUPPORT' },
-        });
-      } catch (e) {
-        logger.warn('CALL_TICKET_LINK_FAILED', { callId, error: e.message });
-      }
-    }
-
-    try {
-      await notificationService.notifyAdmin(userId, 'support_ticket_created', {
-        ticketId: ticket.id,
-        issue: collectedData.issue?.substring(0, 100),
-        caller: collectedData.callerName,
-        urgency: collectedData.urgency || 'MEDIUM',
-      });
-    } catch {}
-
-    if (collectedData.phone) {
-      try {
-        await notificationService.sendSmsNotification(userId, collectedData.phone,
-          `Your support ticket has been created (Ref: ${ticket.id.substring(0, 8)}). Our team will follow up soon.`
-        );
-      } catch {}
-    }
-
-    if (customerId) {
-      try {
-        await memoryService.updateCustomerAfterCall(customerId, {
-          ticketId: ticket.id,
-          intent: 'support_request',
-          summary: `Support ticket: ${collectedData.issue?.substring(0, 100)}`,
-          sentiment: 'neutral',
-        });
-      } catch {}
-    }
-
-    try {
-      await prisma.aiReceptionistAuditLog.create({
-        data: {
-          userId,
-          eventType: 'support_ticket_created',
-          metadata: {
-            ticketId: ticket.id,
-            issue: collectedData.issue?.substring(0, 100),
-            urgency: collectedData.urgency,
-          },
-        },
-      });
-    } catch {};
-
     metrics.recordTicketCreated();
-
-    logger.info('SUPPORT_TICKET_CREATED', {
-      ticketId: ticket.id,
-      callId,
-      userId,
-      companyId,
-    });
-
-    const reply = `Done! I have created a support ticket for your issue.\n\n- Reference: ${ticket.id.substring(0, 8)}\n- Issue: ${collectedData.issue}\n- Urgency: ${collectedData.urgency || 'MEDIUM'}\n\nOur support team will follow up with you soon. Is there anything else I can help you with?`;
-
-    return { reply, intent: 'support_ticket_created', isComplete: true, actionResult: { type: 'support_ticket', id: ticket.id }, collectedData };
+    logger.info('SUPPORT_TICKET_CREATED', { ticketId: ticket.id, callId, userId, companyId });
   } catch (err) {
-    logger.error('VOICE_AGENT_TOOL_FAILED', {
-      tool: 'create_support_ticket',
-      error: err.message,
-      stack: err.stack,
-      userId,
-      callId,
-      customerId,
-      payload: collectedData,
-      prismaError: err.code || null,
-      constraint: err.meta?.constraint || null,
+    logger.error('TOOL_FAILED', {
+      tool: 'create_support_ticket', callId, userId, error: err.message, stack: err.stack,
+      prismaError: err.code || null, constraint: err.meta?.constraint || null,
     });
-    return { reply: 'I apologize, but I encountered an issue creating the support ticket. Our team has been notified. Is there anything else?', intent: 'error', error: err.message };
+    metrics.recordTicketFailed();
+    return { success: false, reply: 'I apologize, but I encountered an issue creating the support ticket. Our team has been notified.', intent: 'error', error: err.message };
   }
+
+  try {
+    await notificationService.notifyAdmin(userId, 'support_ticket_created', {
+      ticketId: ticket.id, issue: collectedData.issue?.substring(0, 100),
+      caller: collectedData.callerName, urgency: collectedData.urgency || 'MEDIUM',
+    });
+    logger.info('ADMIN_NOTIFIED', { ticketId: ticket.id });
+  } catch (err) {
+    logger.warn('ADMIN_NOTIFY_FAILED', { ticketId: ticket.id, error: err.message });
+  }
+
+  if (collectedData.phone) {
+    try {
+      const smsResult = await notificationService.sendSmsNotification(userId, collectedData.phone,
+        `Your support ticket has been created (Ref: ${ticket.id.substring(0, 8)}). Our team will follow up soon.`
+      );
+      logger.info('SMS_SENT', { ticketId: ticket.id, sent: smsResult?.sent });
+    } catch (err) {
+      logger.warn('SMS_FAILED', { ticketId: ticket.id, error: err.message });
+    }
+  }
+
+  try {
+    await prisma.aiReceptionistAuditLog.create({
+      data: { userId, eventType: 'support_ticket_created', metadata: { ticketId: ticket.id, issue: collectedData.issue?.substring(0, 100), urgency: collectedData.urgency } },
+    });
+    logger.info('AUDIT_LOG_CREATED', { ticketId: ticket.id });
+  } catch (err) {
+    logger.warn('AUDIT_LOG_FAILED', { ticketId: ticket.id, error: err.message });
+  }
+
+  try {
+    const { refreshOnTicketCreated } = await import('./receptionistCacheRefresh.service.js');
+    await refreshOnTicketCreated(userId, ticket.id);
+    logger.info('DASHBOARD_UPDATED', { ticketId: ticket.id });
+  } catch (err) {
+    logger.warn('DASHBOARD_UPDATE_FAILED', { ticketId: ticket.id, error: err.message });
+  }
+
+  logger.info('TOOL_COMPLETED', { tool: 'create_support_ticket', callId, ticketId: ticket.id });
+
+  const reply = `I have created a support ticket for your issue.\n\n- Reference: ${ticket.id.substring(0, 8)}\n- Issue: ${collectedData.issue}\n- Urgency: ${collectedData.urgency || 'MEDIUM'}\n\nOur support team will follow up with you soon. Is there anything else I can help you with?`;
+
+  return { success: true, reply, intent: 'support_ticket_created', isComplete: true, actionResult: { type: 'support_ticket', id: ticket.id }, collectedData };
 }
 
 export async function lookupCustomerByPhone(userId, phone) {
@@ -662,7 +736,7 @@ export async function updateCallRecordAtEnd({ callId, callSid, userId, intent, s
         logger.info('CALL_RECORD_ENDED', { callSid, callId: existing.id, status: updates.callStatus });
       }
     } else if (callId) {
-      await callService.updateCall(userId, callId, updates).catch(() => {});
+      await callService.updateCall(userId, callId, updates).catch(err => logger.warn('CALL_UPDATE_FAILED', { callId, error: err.message }));
     }
   } catch (err) {
     logger.error('CALL_RECORD_UPDATE_FAILED', { callSid, error: err.message });

@@ -82,6 +82,7 @@ function handleMediaStream(ws, req) {
   let companyId = null;
   let customerMemory = null;
   let customerId = null;
+  let callerPhone = null;
   let collectedData = {};
   let currentIntent = null;
   let currentStage = 'greeting';
@@ -123,7 +124,7 @@ function handleMediaStream(ws, req) {
       try {
         clearTimeout(handle);
         clearInterval(handle);
-      } catch { }
+      } catch (err) { logger.warn('TIMER_CLEAR_FAILED', { error: err.message }); }
     }
   }
 
@@ -201,7 +202,7 @@ function handleMediaStream(ws, req) {
 
         const session = {
           userId, companyId, callId: callRecordId, customerId, collectedData,
-          currentStage, pendingAction,
+          currentStage, pendingAction, callerPhone,
         };
 
         let orchestratorResult;
@@ -257,7 +258,7 @@ function handleMediaStream(ws, req) {
 
         const session = {
           userId, companyId, callId: callRecordId, customerId, collectedData,
-          currentStage, pendingAction,
+          currentStage, pendingAction, callerPhone,
         };
 
         let orchestratorResult;
@@ -856,13 +857,13 @@ function handleMediaStream(ws, req) {
 
     try {
       if (provider) await provider.close('call_ended');
-    } catch { }
+    } catch (err) { logger.warn('PROVIDER_CLOSE_FAILED', { callSid, error: err.message }); }
     if (legacySession) setProviderWs(callSid, null);
     if (rtmSession) rtmSession.providerSocket = null;
 
     try {
       if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
-    } catch { }
+    } catch (err) { logger.warn('WS_CLOSE_FAILED', { callSid, error: err.message }); }
 
     if (callSid) {
       if (legacySession) removeSession(callSid);
@@ -917,7 +918,7 @@ function handleMediaStream(ws, req) {
     }
     try {
       provider.sendText(message);
-    } catch { }
+    } catch (err) { logger.warn('SEND_TEXT_FAILED', { callSid, error: err.message }); }
     scheduleTimer(gracefulClose, 3000);
   }
 
@@ -948,7 +949,7 @@ function handleMediaStream(ws, req) {
 
         if (!callSid) {
           logger.error('REALTIME_CALL_FAILED', { reason: 'missing_callSid' });
-          try { ws.close(4000, 'Missing callSid'); } catch { }
+          try { ws.close(4000, 'Missing callSid'); } catch (err) { logger.warn('WS_CLOSE_FAILED', { error: err.message }); }
           return;
         }
 
@@ -958,7 +959,7 @@ function handleMediaStream(ws, req) {
         }
 
         // Resolve tenant owner for this call — trusted server-side only
-        const callerPhone = params.from || start.from || null;
+        callerPhone = params.from || start.from || null;
         const calledNumber = params.to || start.to || null;
         const twilioAccountSid = params.AccountSid || null;
 
@@ -1003,7 +1004,7 @@ function handleMediaStream(ws, req) {
                 customerId = memory.customer?.id;
                 logger.info('CUSTOMER_IDENTIFIED', { callSid, name: memory.customer?.name });
               }
-            }).catch(() => {});
+            }).catch(err => logger.warn('CUSTOMER_LOOKUP_FAILED', { callSid, error: err.message }));
           }
         }
 

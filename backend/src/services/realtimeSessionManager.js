@@ -113,7 +113,7 @@ export class RealtimeSessionManager {
       session.setState(STATE.CLOSED);
       session.closed = true;
       if (session.providerSocket) {
-        try { session.providerSocket.close(); } catch { }
+        try { session.providerSocket.close(); } catch (err) { logger.warn('SESSION_PROVIDER_CLOSE_FAILED', { callSid, error: err.message }); }
       }
       sessions.delete(callSid);
       logger.info('SESSION_DESTROYED', { callSid });

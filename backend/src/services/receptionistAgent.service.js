@@ -732,7 +732,7 @@ async function handleConfirmation(session) {
           intent: 'schedule_meeting',
           summary: `Scheduled meeting: ${session.details.meetingPurpose || 'General'}`,
           sentiment: 'positive',
-        }).catch(() => {});
+        }).catch(err => logger.warn('MEMORY_UPDATE_FAILED', { customerId: customer.id, error: err.message }));
       }
 
       session.stage = STAGES.COMPLETED;
@@ -789,7 +789,7 @@ async function handleConfirmation(session) {
           intent: 'support_request',
           summary: `Support ticket: ${session.details.issue?.substring(0, 100)}`,
           sentiment: 'neutral',
-        }).catch(() => {});
+        }).catch(err => logger.warn('MEMORY_UPDATE_FAILED', { customerId: customer.id, error: err.message }));
       }
 
       session.stage = STAGES.COMPLETED;

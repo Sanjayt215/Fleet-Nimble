@@ -50,7 +50,7 @@ export function removeSession(callSid) {
   if (session) {
     session.isActive = false;
     if (session.providerSocket) {
-      try { session.providerSocket.close(); } catch { }
+      try { session.providerSocket.close(); } catch (err) { logger.warn('REALTIME_PROVIDER_CLOSE_FAILED', { callSid, error: err.message }); }
     }
     ACTIVE_SESSIONS.delete(callSid);
     logger.info('REALTIME_SESSION_REMOVED', { callSid });

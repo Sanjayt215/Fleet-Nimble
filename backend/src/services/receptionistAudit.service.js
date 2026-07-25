@@ -21,7 +21,7 @@ export async function logCallEvent(userId, eventType, data = {}) {
         ipAddress: data.ipAddress || null,
         userAgent: data.userAgent || null,
       },
-    }).catch(() => {});
+    }).catch(err => logger.warn('AUDIT_LOG_WRITE_FAILED_DETAIL', { error: err.message }));
   } catch (err) {
     logger.warn('AUDIT_LOG_WRITE_FAILED', { error: err.message });
   }

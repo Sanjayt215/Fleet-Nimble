@@ -2,6 +2,7 @@ import logger from '../../utils/logger.js';
 import { config } from '../../config/index.js';
 import { GeminiLiveProvider } from './geminiLive.provider.js';
 import { OpenAIRealtimeProvider } from './openAIRealtime.provider.js';
+import * as providerHealth from '../../services/receptionistProviderHealth.service.js';
 
 const PROVIDER_MAP = {
   gemini: GeminiLiveProvider,
@@ -12,6 +13,9 @@ if (config.realtimeProvider?.openaiEnabled) {
   PROVIDER_MAP.openai = OpenAIRealtimeProvider;
   logger.info('OPENAI_REALTIME_PROVIDER_LOADED', { reason: 'ENABLE_OPENAI_REALTIME=true' });
 }
+
+const OPENAI_QUOTA_COOLDOWN_MS = 300_000; // 5 min cooldown after quota exhaustion
+let openaiQuotaExhaustedAt = null;
 
 function validateProviderConfig(providerName) {
   const issues = [];
@@ -68,6 +72,14 @@ function getConfiguredProvider() {
 }
 
 export function createRealtimeVoiceProvider() {
+  if (!providerHealth.areNewSessionsAllowed()) {
+    logger.warn('REALTIME_PROVIDER_SESSIONS_BLOCKED', {
+      reason: providerHealth.getInternalState().newSessionsBlockReason,
+      blockedAt: providerHealth.getInternalState().newSessionsBlockedAt,
+    });
+    return null;
+  }
+
   const primary = getConfiguredProvider();
   if (!primary) return null;
 
@@ -77,6 +89,33 @@ export function createRealtimeVoiceProvider() {
       issues: primary.configIssues,
       action: 'Provider will be created but may not function correctly',
     });
+  }
+
+  if (primary.name === 'gemini') {
+    const health = providerHealth.getInternalState();
+    if (health.lastErrorCode && !health.available) {
+      const fallbackName = getFallbackProviderName();
+      if (fallbackName && PROVIDER_MAP[fallbackName]) {
+        const fallbackValidation = validateProviderConfig(fallbackName);
+        if (fallbackValidation.valid && isOpenaiQuotaAvailable(fallbackName)) {
+          logger.info('REALTIME_PROVIDER_FAILOVER', { from: 'gemini', to: fallbackName });
+          const provider = new PROVIDER_MAP[fallbackName]();
+          logger.info('REALTIME_PROVIDER_SELECTED', {
+            provider: fallbackName,
+            enabled: config.realtimeProvider?.enabled !== false,
+            configValid: true,
+            failover: true,
+            fallbackProvider: '',
+          });
+          return provider;
+        }
+      }
+      logger.warn('REALTIME_PROVIDER_FAILOVER_UNAVAILABLE', {
+        from: 'gemini',
+        fallback: fallbackName,
+        reason: 'fallback not configured or quota exhausted',
+      });
+    }
   }
 
   const provider = new primary.ProviderClass();
@@ -90,8 +129,26 @@ export function createRealtimeVoiceProvider() {
   return provider;
 }
 
+export function markOpenaiQuotaExhausted() {
+  openaiQuotaExhaustedAt = Date.now();
+  logger.warn('OPENAI_QUOTA_EXHAUSTED', { cooldownMs: OPENAI_QUOTA_COOLDOWN_MS });
+}
+
+function isOpenaiQuotaAvailable(providerName) {
+  if (providerName !== 'openai') return true;
+  if (!openaiQuotaExhaustedAt) return true;
+  if (Date.now() - openaiQuotaExhaustedAt > OPENAI_QUOTA_COOLDOWN_MS) {
+    openaiQuotaExhaustedAt = null;
+    logger.info('OPENAI_QUOTA_COOLDOWN_EXPIRED');
+    return true;
+  }
+  return false;
+}
+
 export function isRealtimeProviderEnabled() {
-  return config.realtimeProvider?.enabled !== false;
+  if (config.realtimeProvider?.enabled === false) return false;
+  if (!providerHealth.areNewSessionsAllowed()) return false;
+  return true;
 }
 
 function getFallbackProviderName() {
