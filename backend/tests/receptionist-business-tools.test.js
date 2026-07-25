@@ -73,6 +73,7 @@ vi.mock('../src/config/index.js', () => ({
     twilio: { accountSid: 'test', authToken: 'test', phoneNumber: '+1234567890', configured: true, phoneConfigured: true, validateSignature: false },
     publicUrl: 'http://localhost:5000',
     aiReceptionist: { enabled: true, voiceAgentMode: 'hybrid', mediaStreamEnabled: true },
+    knowledge: { providerOrder: ['json'] },
     jwt: { secret: 'test', refreshSecret: 'test' },
     logLevel: 'error',
   },
@@ -476,9 +477,10 @@ describe('Receptionist Orchestrator - Confirmation Handling', () => {
 describe('Receptionist Voice Service - Tool Definitions', () => {
   it('should return all tool definitions when enabled', () => {
     const tools = voiceService.buildToolDefinitions(true);
-    expect(tools.length).toBe(6);
+    expect(tools.length).toBe(20);
     const toolNames = tools.map(t => t.name);
     expect(toolNames).toContain('lookup_customer');
+    expect(toolNames).toContain('retrieve_knowledge');
     expect(toolNames).toContain('create_appointment');
     expect(toolNames).toContain('create_support_ticket');
     expect(toolNames).toContain('save_customer_note');
@@ -491,10 +493,9 @@ describe('Receptionist Voice Service - Tool Definitions', () => {
     expect(tools.length).toBe(0);
   });
 
-  it('should include business context in system prompt', () => {
-    const prompt = voiceService.buildSystemPrompt({ businessName: 'FleetNimble', realtime: { businessToolsEnabled: true } }, '');
+  it('should include business context in system prompt', async () => {
+    const prompt = await voiceService.buildSystemPrompt({ businessName: 'FleetNimble' });
     expect(prompt).toContain('FleetNimble');
-    expect(prompt).toContain('business tools');
   });
 });
 

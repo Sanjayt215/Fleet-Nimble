@@ -40,6 +40,8 @@ const ALLOWED_TOOLS = new Set([
   'save_customer_note',
   'request_human_handoff',
   'end_call',
+  'retrieve_knowledge',
+  'update_conversation_memory',
   ...liveTools.getLiveToolNames(),
 ]);
 
@@ -59,6 +61,7 @@ function handleMediaStream(ws, req) {
   let legacySession = null;
   let provider = null;
   let reconnectAttempts = 0;
+  let providerIndex = 0;
   let isClosing = false;
   let audioBridgeActive = false;
   let greetingSent = false;
@@ -83,6 +86,9 @@ function handleMediaStream(ws, req) {
   let currentIntent = null;
   let currentStage = 'greeting';
   let pendingAction = null;
+  let currentToolCallId = null;
+  let currentToolCallKey = null;
+  let toolCallInterrupted = false;
   let callTranscriptBuffer = [];
 
   // Phase 4 — audio pipeline counters
@@ -312,6 +318,31 @@ function handleMediaStream(ws, req) {
         break;
       }
 
+      case 'retrieve_knowledge': {
+        const { queryKnowledgeBase } = await import('./receptionistKnowledgeBase.service.js');
+        const answer = await queryKnowledgeBase(args?.query || '', userId);
+        result = { found: !!answer, answer: answer || null, query: args?.query };
+        if (answer) {
+          collectedData.lastKnowledgeQuery = args?.query;
+        }
+        break;
+      }
+
+      case 'update_conversation_memory': {
+        if (args?.key && args?.value && userId) {
+          const { default: prisma } = await import('../prisma/index.js');
+          await prisma.aiUserPreference.upsert({
+            where: { userId_key: { userId, key: `call_memory_${args.key}` } },
+            create: { userId, key: `call_memory_${args.key}`, value: args.value },
+            update: { value: args.value },
+          });
+          result = { success: true, memorySaved: args.key };
+        } else {
+          result = { success: false, reason: 'missing_key_value_or_user' };
+        }
+        break;
+      }
+
       case 'end_call': {
         result = { success: true, message: 'Ending call' };
         scheduleTimer(() => {
@@ -433,6 +464,13 @@ function handleMediaStream(ws, req) {
     return { success: false, message: 'Unable to complete that action after multiple attempts.', error: lastError || 'max_retries_exceeded' };
   }
 
+  function getProviderNameForIndex(index) {
+    const primary = config.realtimeProvider?.provider || 'openai';
+    const fallback = config.realtimeProvider?.fallbackProvider || (primary === 'openai' ? 'gemini' : 'openai');
+    if (index === 0) return primary;
+    return fallback;
+  }
+
   function connectProvider() {
     if (isClosing || !callSid) return;
 
@@ -447,8 +485,8 @@ function handleMediaStream(ws, req) {
 
     if (rtmSession) rtmSession.setState(RealtimeSessionManager.STATES.CONNECTING);
 
-    const providerName = config.realtimeProvider?.provider || 'openai';
-    logger.info('PROVIDER_CONNECTING', { callSid, provider: providerName });
+    const providerName = getProviderNameForIndex(providerIndex);
+    logger.info('PROVIDER_CONNECTING', { callSid, provider: providerName, attempt: reconnectAttempts, providerIndex });
 
     try {
       provider = createRealtimeVoiceProvider();
@@ -581,7 +619,12 @@ function handleMediaStream(ws, req) {
 
       provider.on('speechStarted', () => {
         pipelineCounters.speechEvents++;
+        if (rtmSession) rtmSession.updateActivity();
         if (provider) provider.cancelResponse();
+        if (currentToolCallId) {
+          toolCallInterrupted = true;
+          logger.info('TOOL_CALL_INTERRUPTED', { callSid, toolCallId: currentToolCallId });
+        }
         if (rtmSession && rtmSession.state !== RealtimeSessionManager.STATES.LISTENING) {
           rtmSession.setState(RealtimeSessionManager.STATES.LISTENING);
         }
@@ -609,7 +652,18 @@ function handleMediaStream(ws, req) {
       });
 
       provider.on('toolCall', async (data) => {
+        currentToolCallId = data.callId;
+        currentToolCallKey = `${data.name}_${data.callId}`;
+        toolCallInterrupted = false;
         const result = await handleToolCall(data.name, data.arguments || {}, data.callId);
+        if (toolCallInterrupted) {
+          logger.info('TOOL_RESULT_DISCARDED_INTERRUPTED', { callSid, tool: data.name, callId: data.callId });
+          currentToolCallId = null;
+          currentToolCallKey = null;
+          return;
+        }
+        currentToolCallId = null;
+        currentToolCallKey = null;
         if (provider) provider.sendToolResult(data.callId, result);
       });
 
@@ -645,18 +699,27 @@ function handleMediaStream(ws, req) {
           gracefulClose();
           return;
         }
+        const totalProviders = 2;
         if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
           reconnectAttempts++;
           if (rtmSession) rtmSession.reconnectCount = reconnectAttempts;
           logger.info('PROVIDER_RECONNECT_ATTEMPT', {
-            callSid, attempt: reconnectAttempts, maxRetries: MAX_RECONNECT_ATTEMPTS, provider: providerName,
+            callSid, attempt: reconnectAttempts, maxRetries: MAX_RECONNECT_ATTEMPTS, provider: providerName, providerIndex,
           });
           scheduleTimer(connectProvider, 2000 * reconnectAttempts);
+        } else if (providerIndex < totalProviders - 1) {
+          providerIndex++;
+          reconnectAttempts = 0;
+          providerHealth.markVerified();
+          logger.info('PROVIDER_FAILOVER', {
+            callSid, fromProvider: providerName, toProvider: getProviderNameForIndex(providerIndex),
+          });
+          scheduleTimer(connectProvider, 1000);
         } else {
           logger.info('PIPELINE_FAILURE', {
             callSid,
             stage: 'provider_connection',
-            reason: 'max_reconnect_exceeded',
+            reason: 'all_providers_exhausted',
             reconnectAttempt: reconnectAttempts,
             maxRetries: MAX_RECONNECT_ATTEMPTS,
             providerError: providerHealth.getInternalState().lastErrorCode,
@@ -670,6 +733,7 @@ function handleMediaStream(ws, req) {
         rtmSession,
         memoryContext,
         businessToolsEnabled,
+        providerName,
       }).catch(err => {
         logger.error('REALTIME_CALL_FAILED', { callSid, reason: 'provider_connect_error', error: err.message });
         logger.error('PIPELINE_FAILURE', {
@@ -807,8 +871,11 @@ function handleMediaStream(ws, req) {
     providerHealth.enableAudioForwarding();
   }
 
+  let endCallInitiated = false;
+
   function endCallGracefully(message) {
-    if (isClosing) return;
+    if (isClosing || endCallInitiated) return;
+    endCallInitiated = true;
     if (!provider || !provider.isConnected) {
       gracefulClose();
       return;
@@ -816,7 +883,7 @@ function handleMediaStream(ws, req) {
     try {
       provider.sendText(message);
     } catch { }
-    scheduleTimer(gracefulClose, 4000);
+    scheduleTimer(gracefulClose, 3000);
   }
 
   ws.on('message', (raw) => {
@@ -944,13 +1011,21 @@ function handleMediaStream(ws, req) {
           endCallGracefully('Thank you for calling FleetNimble. Please contact us again if you need further help. Goodbye.');
         }, (config.realtime?.maxCallSeconds || 600) * 1000);
 
-        const silenceMs = Math.max(5000, (config.realtime?.silenceTimeoutSeconds || 30) * 1000);
+        const silenceTimeoutMs = (config.realtime?.silenceTimeoutSeconds || 60) * 1000;
+        const silenceCheckMs = Math.min(silenceTimeoutMs / 2, 15000);
+        let lastActivitySnapshot = Date.now();
         const silenceInterval = setInterval(() => {
           if (isClosing || !rtmSession) return;
-          if (Date.now() - rtmSession.lastActivity > (config.realtime?.silenceTimeoutSeconds || 30) * 1000) {
-            endCallGracefully('Thank you for calling FleetNimble. Please contact us again if you need further help. Goodbye.');
+          const now = Date.now();
+          const inactiveTime = now - rtmSession.lastActivity;
+          if (inactiveTime > silenceTimeoutMs) {
+            const silenceAfterQuestion = currentStage !== 'greeting' && inactiveTime > 90000;
+            if (silenceAfterQuestion || inactiveTime > 120000) {
+              endCallGracefully('Thank you for calling FleetNimble. Please contact us again if you need further help. Goodbye.');
+            }
           }
-        }, silenceMs);
+          lastActivitySnapshot = rtmSession.lastActivity;
+        }, silenceCheckMs);
         timers.push(silenceInterval);
 
         connectProvider();
@@ -963,6 +1038,12 @@ function handleMediaStream(ws, req) {
           logger.warn('TWILIO_MEDIA_MESSAGE_ERROR', { callSid, error: 'missing_audio_payload' });
           if (rtmSession) rtmSession.droppedPackets++;
           break;
+        }
+
+        if (rtmSession) {
+          rtmSession.updateActivity();
+          rtmSession.audioBytesReceived += (payload?.length || 0);
+          rtmSession.packetsReceived++;
         }
 
         const validation = validateTwilioPayload(payload);

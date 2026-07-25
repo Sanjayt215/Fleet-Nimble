@@ -63,6 +63,9 @@ const mockConfig = {
     defaultUserId: 'e8191a8a-26bd-4cdf-b967-475c313a25a7',
     defaultCompanyId: '00000000-0000-0000-0000-000000000010',
   },
+  knowledge: {
+    providerOrder: ['json'],
+  },
 };
 
 vi.mock('../src/config/index.js', () => ({

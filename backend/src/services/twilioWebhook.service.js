@@ -85,12 +85,16 @@ export function buildIncomingTwiML(callSid, from, to, cfg = {}) {
   const wsPath = new URL(streamUrl).pathname;
   const statusCallbackUrl = buildStreamStatusUrl(publicUrl);
 
-  // PRE-STREAM GREETING — caller always hears this before media stream connects
-  twiml.say(
-    { voice: 'alice', language: 'en-US' },
-    'Hello. You have reached the FleetNimble AI Receptionist. Please wait while I connect your call.'
-  );
-
+  // No pre-stream greeting — AI greeting plays immediately through the stream
+  // (saves ~4 seconds of latency per call)
+  if (config.twilio.recordCalls) {
+    twiml.record({
+      recordingStatusCallback: `${publicUrl}/api/ai-receptionist/twilio/recording-status`,
+      recordingStatusCallbackMethod: 'POST',
+      recordingStatusCallbackEvent: ['completed'],
+      trim: 'trim-silence',
+    });
+  }
   const connect = twiml.connect();
   const stream = connect.stream({
     url: streamUrl,
@@ -108,7 +112,7 @@ export function buildIncomingTwiML(callSid, from, to, cfg = {}) {
   logger.info('STREAMING_TWIML_RETURNED', {
     wsHost,
     wsPath,
-    hasPreStreamSay: true,
+    hasPreStreamSay: false,
     hasConnect: true,
     hasStream: true,
     hasTrackAttribute: false,

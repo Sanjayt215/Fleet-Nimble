@@ -28,6 +28,7 @@ vi.mock('../src/config/index.js', () => ({
     env: 'test',
     twilio: { accountSid: 'test', authToken: 'test', phoneNumber: '+1234567890' },
     openai: { apiKey: 'test-key', voice: 'alloy', model: 'gpt-4o-realtime-preview' },
+    knowledge: { providerOrder: ['json'] },
     publicUrl: 'http://localhost:5000',
   },
 }));
@@ -227,7 +228,7 @@ describe('Voice Service Config', () => {
 
   it('should build system prompt with context', async () => {
     const { buildSystemPrompt } = await import('../src/services/receptionistVoice.service.js');
-    const prompt = buildSystemPrompt({ businessName: 'TestCo' }, 'Returning caller: John');
+    const prompt = await buildSystemPrompt({ businessName: 'TestCo' }, 'Returning caller: John');
     expect(prompt).toContain('TestCo');
     expect(prompt).toContain('John');
   });
@@ -235,9 +236,13 @@ describe('Voice Service Config', () => {
   it('should build tool definitions', async () => {
     const { buildToolDefinitions } = await import('../src/services/receptionistVoice.service.js');
     const tools = buildToolDefinitions();
-    expect(tools.length).toBe(4);
-    expect(tools[0].name).toBe('schedule_appointment');
-    expect(tools[3].name).toBe('escalate_to_human');
+    expect(tools.length).toBe(20);
+    expect(tools[0].name).toBe('retrieve_knowledge');
+    const toolNames = tools.map(t => t.name);
+    expect(toolNames).toContain('lookup_customer');
+    expect(toolNames).toContain('create_appointment');
+    expect(toolNames).toContain('create_support_ticket');
+    expect(toolNames).toContain('update_conversation_memory');
   });
 });
 

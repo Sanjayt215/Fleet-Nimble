@@ -56,6 +56,7 @@ export const config = {
     validateSignature: parseBool(process.env.TWILIO_VALIDATE_SIGNATURE, env === 'production'),
     configured: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN),
     phoneConfigured: Boolean(process.env.TWILIO_PHONE_NUMBER),
+    recordCalls: parseBool(process.env.TWILIO_RECORD_CALLS, false),
     publicUrl,
   },
   openai: {

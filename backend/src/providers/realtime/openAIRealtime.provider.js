@@ -75,7 +75,7 @@ export class OpenAIRealtimeProvider extends RealtimeVoiceProvider {
       const tools = sessionContext.businessToolsEnabled ? buildToolDefinitions(true) : [];
 
       const instructions = await buildSystemPrompt(config, memoryContext);
-      const basePayload = {
+      const sessionPayload = {
         type: 'session.update',
         session: {
           modalities: ['text', 'audio'],
@@ -91,22 +91,18 @@ export class OpenAIRealtimeProvider extends RealtimeVoiceProvider {
           },
         },
       };
-      this._ws.send(JSON.stringify(basePayload));
+      if (tools.length > 0) {
+        sessionPayload.session.tools = tools;
+        sessionPayload.session.tool_choice = 'auto';
+      }
+      this._ws.send(JSON.stringify(sessionPayload));
+      this._toolsSent = tools.length > 0;
       logger.info('SESSION_UPDATE_SENT', {
         callSid: this._callSid,
-        keys: Object.keys(basePayload.session),
+        keys: Object.keys(sessionPayload.session),
         hasTools: tools.length > 0,
+        toolCount: tools.length,
       });
-
-      if (tools.length > 0) {
-        setTimeout(() => {
-          if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-            const toolsPayload = { type: 'session.update', session: { tools, tool_choice: 'auto' } };
-            this._ws.send(JSON.stringify(toolsPayload));
-            this._toolsSent = true;
-          }
-        }, 2000);
-      }
 
       this._sessionCreatedTimer = setTimeout(() => {
         logger.error('SESSION_CREATED_TIMEOUT', {

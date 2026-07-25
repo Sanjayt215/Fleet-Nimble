@@ -109,7 +109,7 @@ describe('Streaming TwiML creation', () => {
     expect(twiml).toContain('<Parameter name="callSid" value="CA123"');
     expect(twiml).toContain('<Parameter name="from" value="+919876543210"');
     expect(twiml).toContain('<Parameter name="to" value="+1XXXXXXXXXX"');
-    expect(twiml).toContain('<Say');  // pre-stream greeting
+    expect(twiml).not.toContain('<Say');  // pre-stream greeting removed (VOICE-004)
     expect(twiml).not.toContain('<Hangup');
   });
 });
@@ -121,7 +121,7 @@ describe('Twilio media events', () => {
     expect(() => ws.emit('message', JSON.stringify({ event: 'connected' }))).not.toThrow();
   });
 
-  it('handles start event and connects to OpenAI with greeting + g711 format', () => {
+  it('handles start event and connects to OpenAI with greeting + g711 format', async () => {
     const ws = makeFakeTwilioWs();
     handleMediaStream(ws, { url: '/api/ai-receptionist/twilio/media-stream?callSid=CA123' });
     ws.emit('message', JSON.stringify({
@@ -136,6 +136,8 @@ describe('Twilio media events', () => {
     expect(openaiSockets.length).toBe(1);
     const openai = openaiSockets[0];
     openai.emit('open');
+    // Flush microtask queue to let async buildSystemPrompt complete
+    await new Promise(resolve => setImmediate(resolve));
 
     const sessionUpdate = openai.sent.find((m) => m.includes('session.update'));
     expect(sessionUpdate).toBeDefined();
