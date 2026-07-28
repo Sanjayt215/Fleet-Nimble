@@ -9,6 +9,16 @@ export default function CallDetailModal({ call, onClose, onRefresh }) {
   } catch { transcript = []; }
 
   const extractedData = call.extractedData || {};
+  const sentimentColor = call.sentiment === 'positive' ? 'text-green-400' :
+    call.sentiment === 'negative' ? 'text-red-400' :
+    'text-slate-400';
+
+  const formatDuration = (seconds) => {
+    if (!seconds) return '-';
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return m > 0 ? `${m}m ${s}s` : `${seconds}s`;
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
@@ -22,8 +32,12 @@ export default function CallDetailModal({ call, onClose, onRefresh }) {
           {/* Caller Info */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <p className="text-xs text-slate-500">Caller Name</p>
-              <p className="text-sm text-white">{call.callerName}</p>
+              <p className="text-xs text-slate-500">Name</p>
+              <p className="text-sm text-white">{call.callerName || '-'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Company</p>
+              <p className="text-sm text-white">{call.companyName || '-'}</p>
             </div>
             <div>
               <p className="text-xs text-slate-500">Phone</p>
@@ -33,10 +47,6 @@ export default function CallDetailModal({ call, onClose, onRefresh }) {
               <p className="text-xs text-slate-500">Email</p>
               <p className="text-sm text-white">{call.callerEmail || '-'}</p>
             </div>
-            <div>
-              <p className="text-xs text-slate-500">Company</p>
-              <p className="text-sm text-white">{call.companyName || '-'}</p>
-            </div>
             {call.fleetSize != null && (
               <div>
                 <p className="text-xs text-slate-500">Fleet Size</p>
@@ -45,12 +55,22 @@ export default function CallDetailModal({ call, onClose, onRefresh }) {
             )}
             <div>
               <p className="text-xs text-slate-500">Duration</p>
-              <p className="text-sm text-white">{call.durationSeconds ? `${call.durationSeconds}s` : '-'}</p>
+              <p className="text-sm text-white">{formatDuration(call.durationSeconds)}</p>
+            </div>
+            {call.customer?.leadScore != null && (
+              <div>
+                <p className="text-xs text-slate-500">Lead Score</p>
+                <p className="text-sm font-semibold text-amber-400">{call.customer.leadScore}/100</p>
+              </div>
+            )}
+            <div>
+              <p className="text-xs text-slate-500">Sentiment</p>
+              <p className={`text-sm capitalize ${sentimentColor}`}>{call.sentiment || 'neutral'}</p>
             </div>
           </div>
 
           {/* Status & Type */}
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-2">
             <span className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${
               call.callStatus === 'COMPLETED' ? 'bg-green-900/50 text-green-300' :
               call.callStatus === 'ESCALATED' ? 'bg-red-900/50 text-red-300' :
@@ -58,6 +78,11 @@ export default function CallDetailModal({ call, onClose, onRefresh }) {
               'bg-blue-900/50 text-blue-300'
             }`}>{call.callStatus}</span>
             <span className="inline-flex rounded-full bg-slate-700 px-3 py-1 text-xs font-medium text-slate-300">{call.callType}</span>
+            {call.appointment && (
+              <span className="inline-flex rounded-full bg-blue-900/50 px-3 py-1 text-xs font-medium text-blue-300">
+                Appointment: {call.appointment.status}
+              </span>
+            )}
           </div>
 
           {/* Summary */}
@@ -65,6 +90,19 @@ export default function CallDetailModal({ call, onClose, onRefresh }) {
             <div>
               <p className="mb-1 text-xs font-semibold text-slate-500">AI Summary</p>
               <p className="rounded-lg bg-slate-800 p-3 text-sm text-slate-200">{call.summary}</p>
+            </div>
+          )}
+
+          {/* Recording */}
+          {call.recordingUrl && (
+            <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-3">
+              <p className="mb-2 text-xs font-semibold text-slate-500">Call Recording</p>
+              <audio controls className="w-full" src={call.recordingUrl}>
+                Your browser does not support the audio element.
+              </audio>
+              {call.recordingDuration && (
+                <p className="mt-1 text-xs text-slate-500">Duration: {formatDuration(call.recordingDuration)}</p>
+              )}
             </div>
           )}
 
@@ -86,8 +124,8 @@ export default function CallDetailModal({ call, onClose, onRefresh }) {
               <p className="mb-1 text-xs font-semibold text-slate-500">Transcript</p>
               <div className="max-h-48 space-y-2 overflow-y-auto rounded-lg bg-slate-800 p-3">
                 {transcript.map((msg, i) => (
-                  <div key={i} className={`text-sm ${msg.role === 'user' ? 'text-cyan-300' : 'text-slate-300'}`}>
-                    <span className="text-xs text-slate-500">{msg.role === 'user' ? 'Caller' : 'AI'}:</span> {msg.content}
+                  <div key={i} className={`text-sm ${msg.role === 'caller' || msg.role === 'user' ? 'text-cyan-300' : 'text-slate-300'}`}>
+                    <span className="text-xs text-slate-500">{msg.role === 'caller' || msg.role === 'user' ? 'Caller' : 'AI'}:</span> {msg.content}
                   </div>
                 ))}
               </div>
@@ -98,7 +136,14 @@ export default function CallDetailModal({ call, onClose, onRefresh }) {
           {call.appointment && (
             <div className="rounded-lg border border-blue-700 bg-blue-900/20 p-3">
               <p className="text-sm font-medium text-blue-300">Related Appointment</p>
-              <p className="text-xs text-blue-400">{call.appointment.meetingTitle} - {new Date(call.appointment.scheduledDate).toLocaleString()} ({call.appointment.status})</p>
+              <div className="mt-1 space-y-1 text-xs text-blue-400">
+                <p>Title: {call.appointment.meetingTitle}</p>
+                <p>Time: {new Date(call.appointment.scheduledDate).toLocaleString()}</p>
+                <p>Status: {call.appointment.status}</p>
+                {call.appointment.meetingLink && (
+                  <a href={call.appointment.meetingLink} target="_blank" rel="noopener noreferrer" className="text-cyan-400 underline">Join Meeting</a>
+                )}
+              </div>
             </div>
           )}
 

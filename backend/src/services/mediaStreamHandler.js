@@ -56,6 +56,8 @@ function handleMediaStream(ws, req) {
 
   logger.info('TWILIO_WS_CONNECTION_OPEN', { pathname: req.url, urlCallSid });
 
+  const ioInstance = req.app?.get('io');
+
   let callSid = urlCallSid;
   let rtmSession = null;
   let legacySession = null;
@@ -105,6 +107,13 @@ function handleMediaStream(ws, req) {
   let responseAudioSeen = false;
   let pipelineFailStage = null;
   let pipelineFailReason = null;
+
+  function emitSocketEvent(event, data) {
+    if (ioInstance && userId) {
+      ioInstance.to(`user:${userId}`).emit(event, data);
+      logger.debug('SOCKET_EVENT_SENT', { event, userId, callSid });
+    }
+  }
 
   function scheduleTimer(fn, ms) {
     const handle = setTimeout(() => {
@@ -227,7 +236,7 @@ function handleMediaStream(ws, req) {
           collectedData.appointmentCreated = true;
           pendingAction = null;
           currentStage = 'completed';
-          result = { success: true, appointmentId: orchestratorResult.actionResult.id, message: orchestratorResult.reply };
+          result = { success: true, appointmentId: orchestratorResult.actionResult.id, customerId: orchestratorResult.customerId, message: orchestratorResult.reply };
         } else {
           logger.error('VOICE_AGENT_TOOL_FAILED', {
             tool: 'create_appointment',
@@ -410,7 +419,7 @@ function handleMediaStream(ws, req) {
       );
 
       try {
-        const result = await Promise.race([
+                const result = await Promise.race([
           executeToolCall(functionName, args),
           timeoutPromise,
         ]);
@@ -425,6 +434,32 @@ function handleMediaStream(ws, req) {
         }
 
         COMPLETED_TOOL_CALLS.add(toolCallKey);
+
+        if (result && functionName === 'create_appointment' && result.success) {
+          emitSocketEvent('appointment.created', {
+            appointmentId: result.appointmentId,
+            callerName: collectedData.callerName,
+            company: collectedData.company,
+            preferredDate: collectedData.preferredDate,
+            preferredTime: collectedData.preferredTime,
+            timestamp: new Date().toISOString(),
+          });
+          emitSocketEvent('crm.updated', {
+            customerId: result.customerId,
+            appointmentId: result.appointmentId,
+            timestamp: new Date().toISOString(),
+          });
+          emitSocketEvent('dashboard.refresh', {
+            type: 'appointment_created',
+            timestamp: new Date().toISOString(),
+          });
+          emitSocketEvent('analytics.refresh', {
+            type: 'appointment_created',
+            timestamp: new Date().toISOString(),
+          });
+          logger.info('SOCKET_EVENT_SENT', { events: ['appointment.created', 'crm.updated', 'dashboard.refresh', 'analytics.refresh'], callSid });
+        }
+
         return result;
       } catch (err) {
         lastError = err.message;
@@ -591,9 +626,8 @@ function handleMediaStream(ws, req) {
         if (legacySession?.metadata?.callLogId) {
           bufferTranscriptEntry(legacySession.metadata.callLogId, { role: 'caller', content: data.text, timestamp: new Date().toISOString() });
         }
-        const io = legacySession?.ws?.app?.get('io');
-        if (io) {
-          io.to(`user:${legacySession?.metadata?.userId}`).emit('transcript.final', {
+        if (ioInstance && userId) {
+          ioInstance.to(`user:${userId}`).emit('transcript.final', {
             callSid, role: 'caller', text: data.text, timestamp: new Date().toISOString(),
           });
         }
@@ -611,9 +645,8 @@ function handleMediaStream(ws, req) {
         if (legacySession?.metadata?.callLogId) {
           bufferTranscriptEntry(legacySession.metadata.callLogId, { role: 'assistant', content: data.text, timestamp: new Date().toISOString() });
         }
-        const io = legacySession?.ws?.app?.get('io');
-        if (io) {
-          io.to(`user:${legacySession?.metadata?.userId}`).emit('transcript.final', {
+        if (ioInstance && userId) {
+          ioInstance.to(`user:${userId}`).emit('transcript.final', {
             callSid, role: 'assistant', text: data.text, timestamp: new Date().toISOString(),
           });
         }
@@ -635,9 +668,8 @@ function handleMediaStream(ws, req) {
         if (rtmSession && rtmSession.state !== RealtimeSessionManager.STATES.LISTENING) {
           rtmSession.setState(RealtimeSessionManager.STATES.LISTENING);
         }
-        const io = legacySession?.ws?.app?.get('io');
-        if (io) {
-          io.to(`user:${legacySession?.metadata?.userId}`).emit('transcript.partial', {
+        if (ioInstance && userId) {
+          ioInstance.to(`user:${userId}`).emit('transcript.partial', {
             callSid, text: '...', isSpeaking: true,
           });
         }
@@ -822,12 +854,29 @@ function handleMediaStream(ws, req) {
     try {
       if (callRecordId || callSid) {
         await flushPendingTranscripts();
-        const summaryText = callTranscriptBuffer
-          .filter(t => t.role === 'assistant')
-          .slice(-3)
-          .map(t => t.content?.substring(0, 100))
-          .join(' | ') || 'Call completed';
+
         const transcriptJson = JSON.stringify(callTranscriptBuffer.slice(-500));
+
+        let summaryText = null;
+        try {
+          summaryText = await orchestrator.generateAISummary(callTranscriptBuffer, collectedData);
+        } catch (e) {
+          logger.warn('AI_SUMMARY_GENERATION_FAILED', { callSid, error: e.message });
+        }
+        if (!summaryText) {
+          const lastMsgs = callTranscriptBuffer
+            .filter(t => t.role === 'assistant')
+            .slice(-3)
+            .map(t => t.content?.substring(0, 100))
+            .join(' | ');
+          summaryText = lastMsgs || 'Call completed';
+        }
+        if (summaryText) logger.info('SUMMARY_GENERATED', { callSid, summaryLength: summaryText.length });
+
+        const callName = collectedData.callerName || null;
+        const callCompany = collectedData.company || null;
+        const callEmail = collectedData.email || null;
+        const callPhone = collectedData.phone || callerPhone || null;
 
         await orchestrator.updateCallRecordAtEnd({
           callId: callRecordId,
@@ -836,7 +885,7 @@ function handleMediaStream(ws, req) {
           intent: currentIntent,
           summary: summaryText,
           transcript: transcriptJson,
-          sentiment: 'neutral',
+          sentiment: collectedData.sentiment || 'neutral',
           customerId,
         }).catch(e => logger.warn('CALL_END_UPDATE_FAILED', { error: e.message }));
 
@@ -847,9 +896,50 @@ function handleMediaStream(ws, req) {
             collectedData,
             intent: currentIntent,
             summary: summaryText,
-            sentiment: 'neutral',
+            sentiment: collectedData.sentiment || 'neutral',
           }).catch(e => logger.warn('CRM_END_UPDATE_FAILED', { error: e.message }));
         }
+
+        emitSocketEvent('call.completed', {
+          callId: callRecordId,
+          callSid,
+          callerName: callName,
+          company: callCompany,
+          email: callEmail,
+          phone: callPhone,
+          summary: summaryText,
+          duration: pipelineCounters.duration,
+          appointmentCreated: !!collectedData.appointmentCreated,
+          timestamp: new Date().toISOString(),
+        });
+        emitSocketEvent('contact.updated', {
+          customerId,
+          name: callName,
+          company: callCompany,
+          email: callEmail,
+          phone: callPhone,
+          timestamp: new Date().toISOString(),
+        });
+        emitSocketEvent('dashboard.refresh', {
+          type: 'call_completed',
+          callId: callRecordId,
+          timestamp: new Date().toISOString(),
+        });
+        emitSocketEvent('analytics.refresh', {
+          type: 'call_completed',
+          timestamp: new Date().toISOString(),
+        });
+        if (customerId) {
+          emitSocketEvent('crm.updated', {
+            customerId,
+            callId: callRecordId,
+            timestamp: new Date().toISOString(),
+          });
+        }
+        logger.info('SOCKET_EVENT_SENT', {
+          events: ['call.completed', 'contact.updated', 'dashboard.refresh', 'analytics.refresh', 'crm.updated'],
+          callSid, callRecordId,
+        });
       }
     } catch (err) {
       logger.warn('CALL_END_CLEANUP_ERROR', { callSid, error: err.message });
@@ -891,11 +981,17 @@ function handleMediaStream(ws, req) {
 
       logger.info('CALL_ENDED', {
         callSid,
+        callRecordId,
+        callerName: collectedData.callerName || null,
+        companyName: collectedData.company || null,
+        customerId,
+        appointmentCreated: !!collectedData.appointmentCreated,
+        ticketCreated: !!collectedData.supportTicketCreated,
+        duration: pipelineCounters.duration,
         greetingSent,
         greetingAudioReceived: rtmSession?.greetingAudioReceived,
         totalDroppedAudioFrames: droppedFrameCount,
         providerError: providerErrorCode,
-        // Phase 4 — pipeline counters
         incomingFrames: pipelineCounters.incomingFrames,
         outgoingFrames: pipelineCounters.outgoingFrames,
         audioBytes: pipelineCounters.audioBytes,

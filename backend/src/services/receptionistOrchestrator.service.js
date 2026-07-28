@@ -15,6 +15,7 @@ import * as transcriptService from './receptionistTranscript.service.js';
 import * as metrics from './receptionistMetrics.service.js';
 import { config } from '../config/index.js';
 import prisma from '../utils/prisma.js';
+import { createAssistantProvider } from '../providers/assistant/assistantProviderFactory.js';
 
 const PENDING_ACTIONS = new Map();
 
@@ -280,6 +281,35 @@ function computeLeadScore(data) {
   return Math.min(score, 100);
 }
 
+export async function generateAISummary(transcriptEntries, collectedData) {
+  if (!transcriptEntries || transcriptEntries.length === 0) return null;
+  try {
+    const provider = createAssistantProvider();
+    if (!provider) {
+      logger.warn('SUMMARY_GENERATION_SKIPPED', { reason: 'no_assistant_provider' });
+      return null;
+    }
+    const transcriptText = transcriptEntries
+      .map(t => `${t.role === 'caller' ? 'Customer' : 'AI'}: ${t.content}`)
+      .join('\n')
+      .substring(0, 3000);
+    const messages = [
+      { role: 'system', content: 'You are a summarization assistant. Summarize the following customer support/sales call conversation in 2-3 concise sentences. Include the caller name, company, purpose, and outcome.' },
+      { role: 'user', content: `Conversation:\n${transcriptText}\n\nSummary:` },
+    ];
+    const response = await provider.sendMessage(messages);
+    const summary = (typeof response === 'string' ? response : response?.content || response?.text || '').trim();
+    if (summary && summary.length > 10) {
+      logger.info('SUMMARY_GENERATED', { summaryLength: summary.length });
+      return summary;
+    }
+    return null;
+  } catch (err) {
+    logger.warn('SUMMARY_GENERATION_FAILED', { error: err.message });
+    return null;
+  }
+}
+
 export async function executeAppointmentCreation(session) {
   const { userId, companyId, callId, collectedData = {}, callerPhone } = session;
   const executionId = `${callId}_create_appointment`;
@@ -357,6 +387,7 @@ export async function executeAppointmentCreation(session) {
             },
           });
           logger.info('DATABASE_SUCCESS', { tool: 'create_appointment', callId, operation: 'customer_create', customerId: txCustomer.id });
+          logger.info('LEAD_CREATED', { customerId: txCustomer.id, name: collectedData.callerName, company: collectedData.company, leadScore: computeLeadScore(collectedData), callId, userId });
         } else {
           const custUpdates = { lastContactAt: new Date(), totalCalls: { increment: 1 } };
           if (collectedData.callerName && !txCustomer.name) custUpdates.name = collectedData.callerName;
@@ -374,7 +405,7 @@ export async function executeAppointmentCreation(session) {
         data: {
           userId,
           companyId,
-          callerName: collectedData.callerName || 'Caller',
+          callerName: collectedData.callerName || null,
           callerPhone: normalizedPhone,
           callerEmail: customerEmail,
           companyName: collectedData.company || null,
@@ -397,6 +428,7 @@ export async function executeAppointmentCreation(session) {
           callerEmail: customerEmail || undefined,
           fleetSize: collectedData.fleetSize || undefined,
           companyName: collectedData.company || undefined,
+          callerName: collectedData.callerName || undefined,
         };
         Object.keys(callUpdateData).forEach(k => { if (callUpdateData[k] === undefined) delete callUpdateData[k]; });
         await tx.aiReceptionistCall.update({ where: { id: callId }, data: callUpdateData });
@@ -419,6 +451,11 @@ export async function executeAppointmentCreation(session) {
         logger.info('DATABASE_SUCCESS', { tool: 'create_appointment', callId, operation: 'customer_appointment_link' });
       }
 
+      await tx.aiReceptionistAuditLog.create({
+        data: { userId, eventType: 'appointment_created', metadata: { appointmentId: txAppointment.id, callerName: collectedData.callerName, company: collectedData.company, callId } },
+      });
+      logger.info('AUDIT_LOG_CREATED', { appointmentId: txAppointment.id });
+
       logger.info('DATABASE_WRITE', { tool: 'create_appointment', callId, operation: 'transaction_commit' });
 
       return { customer: txCustomer, appointment: txAppointment };
@@ -426,11 +463,12 @@ export async function executeAppointmentCreation(session) {
 
     customer = result.customer;
     appointment = result.appointment;
+    logger.info('APPOINTMENT_CREATED', { appointmentId: appointment.id, callId, userId, companyId, customerId: customer?.id });
+    logger.info('CRM_UPDATED', { customerId: customer?.id, appointmentId: appointment.id, operation: 'lead_created_or_updated' });
+    logger.info('TRANSCRIPT_SAVED', { context: 'appointment_creation', callId });
 
     PENDING_ACTIONS.set(executionId, { id: appointment.id, timestamp: Date.now() });
-
     metrics.recordAppointmentCreated();
-    logger.info('APPOINTMENT_CREATED', { appointmentId: appointment.id, callId, userId, companyId, customerId: customer?.id });
   } catch (err) {
     logger.error('TOOL_FAILED', {
       tool: 'create_appointment', callId, userId, error: err.message, stack: err.stack,
@@ -469,15 +507,6 @@ export async function executeAppointmentCreation(session) {
     logger.warn('ADMIN_NOTIFY_FAILED', { appointmentId: appointment.id, error: err.message });
   }
 
-  try {
-    await prisma.aiReceptionistAuditLog.create({
-      data: { userId, eventType: 'appointment_created', metadata: { appointmentId: appointment.id, callerName: collectedData.callerName, company: collectedData.company } },
-    });
-    logger.info('AUDIT_LOG_CREATED', { appointmentId: appointment.id });
-  } catch (err) {
-    logger.warn('AUDIT_LOG_FAILED', { appointmentId: appointment.id, error: err.message });
-  }
-
   let calResult;
   try {
     calResult = await calendarService.createCalendarEvent(userId, appointment);
@@ -496,7 +525,7 @@ export async function executeAppointmentCreation(session) {
   try {
     const { refreshOnAppointmentCreated } = await import('./receptionistCacheRefresh.service.js');
     await refreshOnAppointmentCreated(userId, appointment.id);
-    logger.info('DASHBOARD_UPDATED', { appointmentId: appointment.id });
+    logger.info('DASHBOARD_REFRESHED', { appointmentId: appointment.id });
   } catch (err) {
     logger.warn('DASHBOARD_UPDATE_FAILED', { appointmentId: appointment.id, error: err.message });
   }
@@ -694,12 +723,12 @@ export async function createCallRecord({ userId, companyId, callSid, from, to, t
         twilioTo: to ? to.replace(/[^\d+]/g, '') : null,
         callStatus: 'IN_PROGRESS',
         callStartedAt: new Date(),
-        callerName: 'Caller',
+        callerName: normalizedFrom ? `Caller (${normalizedFrom.slice(-4)})` : 'Caller',
         detectedLanguage: 'en',
       },
     });
 
-    logger.info('CALL_RECORD_CREATED', { callSid, callId: call.id });
+    logger.info('CALL_STARTED', { callSid, callId: call.id, userId, companyId });
     return call;
   } catch (err) {
     logger.error('CALL_RECORD_CREATE_FAILED', { callSid, error: err.message, userId });
@@ -710,36 +739,53 @@ export async function createCallRecord({ userId, companyId, callSid, from, to, t
 export async function updateCallRecordAtEnd({ callId, callSid, userId, intent, summary, transcript, sentiment, customerId, appointmentId, supportTicketId, handoffReason, aiConfidence }) {
   if (!callId && !callSid) return;
   try {
-    const updates = {
-      callEndedAt: new Date(),
-      callStatus: handoffReason ? 'ESCALATED' : 'COMPLETED',
-    };
-    if (summary) updates.summary = summary;
-    if (transcript) updates.transcript = transcript;
-    if (sentiment) updates.sentiment = sentiment;
-    if (appointmentId) updates.appointmentId = appointmentId;
-    if (supportTicketId) updates.supportTicketId = supportTicketId;
-    if (customerId) updates.customerId = customerId;
-    if (handoffReason) {
-      updates.handoffReason = handoffReason;
-      updates.escalatedAt = new Date();
-    }
-    if (aiConfidence != null) updates.aiConfidence = aiConfidence;
+    const callEndedAt = new Date();
+    const callStatus = handoffReason ? 'ESCALATED' : 'COMPLETED';
 
-    if (callSid) {
-      const existing = await prisma.aiReceptionistCall.findFirst({ where: { twilioCallSid: callSid } });
-      if (existing) {
-        if (updates.callEndedAt && existing.callStartedAt) {
-          updates.durationSeconds = Math.round((updates.callEndedAt.getTime() - new Date(existing.callStartedAt).getTime()) / 1000);
+    await prisma.$transaction(async (tx) => {
+      let targetCallId = callId;
+
+      if (callSid) {
+        const existing = await tx.aiReceptionistCall.findFirst({ where: { twilioCallSid: callSid } });
+        if (!existing) return;
+        targetCallId = existing.id;
+
+        const updates = {
+          callEndedAt,
+          callStatus,
+        };
+        if (summary) updates.summary = summary;
+        if (transcript) updates.transcript = transcript;
+        if (sentiment) updates.sentiment = sentiment;
+        if (appointmentId) updates.appointmentId = appointmentId;
+        if (supportTicketId) updates.supportTicketId = supportTicketId;
+        if (customerId) updates.customerId = customerId;
+        if (handoffReason) {
+          updates.handoffReason = handoffReason;
+          updates.escalatedAt = new Date();
         }
-        await prisma.aiReceptionistCall.update({ where: { id: existing.id }, data: updates });
-        logger.info('CALL_RECORD_ENDED', { callSid, callId: existing.id, status: updates.callStatus });
+        if (aiConfidence != null) updates.aiConfidence = aiConfidence;
+        if (callEndedAt && existing.callStartedAt) {
+          updates.durationSeconds = Math.round((callEndedAt.getTime() - new Date(existing.callStartedAt).getTime()) / 1000);
+        }
+
+        await tx.aiReceptionistCall.update({ where: { id: existing.id }, data: updates });
+        logger.info('TRANSCRIPT_SAVED', { callId: existing.id, transcriptLength: transcript?.length || 0 });
+        logger.info('CALL_RECORD_ENDED', { callSid, callId: existing.id, status: callStatus });
       }
-    } else if (callId) {
-      await callService.updateCall(userId, callId, updates).catch(err => logger.warn('CALL_UPDATE_FAILED', { callId, error: err.message }));
-    }
+
+      if (customerId) {
+        const custUpdates = {
+          lastContactAt: callEndedAt,
+        };
+        if (intent) custUpdates.lastIntent = intent;
+        if (summary) custUpdates.lastSummary = summary?.substring(0, 500);
+        await tx.receptionistCustomer.update({ where: { id: customerId }, data: custUpdates });
+        logger.info('CRM_UPDATED', { customerId, callId: targetCallId });
+      }
+    });
   } catch (err) {
-    logger.error('CALL_RECORD_UPDATE_FAILED', { callSid, error: err.message });
+    logger.error('CALL_RECORD_UPDATE_FAILED', { callSid, callId, error: err.message });
   }
 }
 
@@ -761,24 +807,24 @@ export async function generateCallSummary(session) {
 export async function updateCRMAfterCall({ userId, customerId, collectedData, intent, summary, sentiment, appointmentId, ticketId }) {
   if (!customerId) return;
   try {
-    const updates = {
-      lastIntent: intent,
-      lastSummary: summary?.substring(0, 500),
-      lastContactAt: new Date(),
-    };
-    if (collectedData?.company) updates.companyName = collectedData.company;
-    if (collectedData?.fleetSize != null) updates.fleetSize = collectedData.fleetSize;
-    if (collectedData?.callerName) updates.name = collectedData.callerName;
-    if (collectedData?.phone) {
-      const existing = await prisma.receptionistCustomer.findUnique({ where: { id: customerId }, select: { phone: true } });
-      if (!existing?.phone) updates.phone = collectedData.phone;
-    }
-    if (collectedData?.email) {
-      const existing = await prisma.receptionistCustomer.findUnique({ where: { id: customerId }, select: { email: true } });
-      if (!existing?.email) updates.email = collectedData.email;
-    }
+    await prisma.$transaction(async (tx) => {
+      const existing = await tx.receptionistCustomer.findUnique({ where: { id: customerId }, select: { phone: true, email: true, name: true } });
+      if (!existing) return;
 
-    await prisma.receptionistCustomer.update({ where: { id: customerId }, data: updates });
+      const updates = {
+        lastIntent: intent,
+        lastSummary: summary?.substring(0, 500),
+        lastContactAt: new Date(),
+      };
+      if (collectedData?.company) updates.companyName = collectedData.company;
+      if (collectedData?.fleetSize != null) updates.fleetSize = collectedData.fleetSize;
+      if (collectedData?.callerName && !existing.name) updates.name = collectedData.callerName;
+      if (collectedData?.phone && !existing.phone) updates.phone = collectedData.phone;
+      if (collectedData?.email && !existing.email) updates.email = collectedData.email;
+
+      await tx.receptionistCustomer.update({ where: { id: customerId }, data: updates });
+      logger.info('CRM_UPDATED', { customerId });
+    });
   } catch (err) {
     logger.warn('CRM_UPDATE_FAILED', { customerId, error: err.message });
   }

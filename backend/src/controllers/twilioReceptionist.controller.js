@@ -171,6 +171,22 @@ export async function handleStatusCallback(req, res) {
 
         await transcriptService.flushPendingTranscripts().catch(() => {});
 
+        const io2 = req.app?.get('io');
+        if (io2) {
+          io2.to(`user:${callRecord.userId}`).emit('call.completed', {
+            callId: callRecord.id,
+            callSid: CallSid,
+            status: updates.callStatus,
+            timestamp: new Date().toISOString(),
+          });
+          io2.to(`user:${callRecord.userId}`).emit('dashboard.refresh', {
+            type: 'call_status_update',
+            callId: callRecord.id,
+            timestamp: new Date().toISOString(),
+          });
+          logger.info('SOCKET_EVENT_SENT', { events: ['call.completed', 'dashboard.refresh'], callSid: CallSid });
+        }
+
         logger.info('CALL_STATUS_UPDATED_FROM_CALLBACK', {
           CallSid,
           callId: callRecord.id,

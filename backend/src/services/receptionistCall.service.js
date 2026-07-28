@@ -20,6 +20,7 @@ export async function getCallLogs(userId, { page = 1, limit = 20, status, type, 
       include: {
         appointment: { select: { id: true, meetingTitle: true, scheduledDate: true, status: true } },
         supportTicket: { select: { id: true, issueTitle: true, status: true, urgency: true } },
+        customer: { select: { id: true, name: true, leadScore: true } },
       },
     }),
   ]);
@@ -33,6 +34,7 @@ export async function getCallById(userId, id) {
     include: {
       appointment: true,
       supportTicket: true,
+      customer: { select: { id: true, name: true, leadScore: true, companyName: true, fleetSize: true, status: true } },
     },
   });
 }

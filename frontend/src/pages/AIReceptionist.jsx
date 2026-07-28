@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { useSocket } from '../hooks/useSocket';
 import AIPhoneConsole from './AIPhoneConsole';
 import AppointmentModal from './AppointmentModal';
 import SupportTicketModal from './SupportTicketModal';
@@ -105,6 +106,28 @@ export default function AIReceptionist() {
   }, [isAuthLoading]);
 
   useEffect(() => { if (!isAuthLoading && isAuthenticated) fetchData(); }, [fetchData, isAuthLoading, isAuthenticated]);
+
+  useSocket({
+    'appointment.created': useCallback(() => {
+      fetchData();
+      showToast('New appointment created by AI Receptionist');
+    }, [fetchData, showToast]),
+    'call.completed': useCallback(() => {
+      fetchData();
+    }, [fetchData]),
+    'crm.updated': useCallback(() => {
+      fetchData();
+    }, [fetchData]),
+    'dashboard.refresh': useCallback(() => {
+      fetchData();
+    }, [fetchData]),
+    'analytics.refresh': useCallback(() => {
+      fetchData();
+    }, [fetchData]),
+    'contact.updated': useCallback(() => {
+      fetchData();
+    }, [fetchData]),
+  });
 
   const loadCalls = useCallback(async (page) => {
     try {
@@ -358,36 +381,53 @@ export default function AIReceptionist() {
                 <table className="w-full">
                   <thead className="border-b border-slate-700 bg-slate-800">
                     <tr>
-                      <th className="table-th">Caller</th>
+                      <th className="table-th">Name</th>
+                      <th className="table-th">Company</th>
                       <th className="table-th">Phone</th>
-                      <th className="table-th">Type</th>
-                      <th className="table-th">Status</th>
+                      <th className="table-th">Email</th>
+                      <th className="table-th">Duration</th>
                       <th className="table-th">Summary</th>
-                      <th className="table-th">Time</th>
+                      <th className="table-th">Lead Score</th>
+                      <th className="table-th">Sentiment</th>
+                      <th className="table-th">Appointment</th>
                       <th className="table-th">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
                     {calls.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="px-4 py-12 text-center text-slate-500">No calls recorded yet.</td>
+                        <td colSpan={10} className="px-4 py-12 text-center text-slate-500">No calls recorded yet.</td>
                       </tr>
                     ) : (
                       calls.map((call) => (
                         <tr key={call.id} className="hover:bg-slate-800/50">
                           <td className="table-td font-medium">{call.callerName || '-'}</td>
+                          <td className="table-td">{call.companyName || '-'}</td>
                           <td className="table-td">{call.callerPhone || '-'}</td>
-                          <td className="table-td">
-                            <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
-                              call.callType === 'EMERGENCY' ? 'bg-red-900/50 text-red-300' :
-                              call.callType === 'SUPPORT' ? 'bg-amber-900/50 text-amber-300' :
-                              call.callType === 'DEMO' ? 'bg-blue-900/50 text-blue-300' :
-                              'bg-slate-700 text-slate-300'
-                            }`}>{call.callType}</span>
+                          <td className="table-td">{call.callerEmail || '-'}</td>
+                          <td className="table-td text-xs">
+                            {call.durationSeconds
+                              ? `${Math.floor(call.durationSeconds / 60)}m ${call.durationSeconds % 60}s`
+                              : (call.callStatus === 'IN_PROGRESS' ? 'Live' : '-')}
                           </td>
-                          <td className="table-td"><StatusBadge status={call.callStatus} /></td>
                           <td className="table-td max-w-xs truncate">{call.summary || '-'}</td>
-                          <td className="table-td text-xs">{call.callStartedAt ? new Date(call.callStartedAt).toLocaleString() : '-'}</td>
+                          <td className="table-td">
+                            {call.customer?.leadScore != null
+                              ? <span className="text-amber-400 font-medium">{call.customer.leadScore}</span>
+                              : '-'}
+                          </td>
+                          <td className="table-td">
+                            <span className={`text-xs capitalize ${
+                              call.sentiment === 'positive' ? 'text-green-400' :
+                              call.sentiment === 'negative' ? 'text-red-400' :
+                              'text-slate-500'
+                            }`}>{call.sentiment || 'neutral'}</span>
+                          </td>
+                          <td className="table-td">
+                            {call.appointment
+                              ? <span className="inline-flex rounded-full bg-blue-900/30 px-2 py-0.5 text-xs text-blue-300">{call.appointment.status}</span>
+                              : '-'}
+                          </td>
                           <td className="table-td">
                             <button onClick={() => handleViewCall(call.id)} className="text-sm text-cyan-400 hover:text-cyan-300">View</button>
                           </td>
@@ -414,17 +454,39 @@ export default function AIReceptionist() {
               {appointments.length === 0 ? (
                 <p className="text-sm text-slate-500">No appointments yet.</p>
               ) : (
-                <div className="space-y-3">
-                  {appointments.map((apt) => (
-                    <div key={apt.id} className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/50 p-3">
-                      <div>
-                        <p className="text-sm font-medium text-white">{apt.callerName}</p>
-                        <p className="text-xs text-slate-400">{apt.meetingPurpose || apt.meetingTitle}</p>
-                        <p className="text-xs text-slate-500">{apt.scheduledDate ? new Date(apt.scheduledDate).toLocaleString() : ''}</p>
-                      </div>
-                      <StatusBadge status={apt.status} />
-                    </div>
-                  ))}
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="border-b border-slate-700 bg-slate-800">
+                      <tr>
+                        <th className="table-th">Customer</th>
+                        <th className="table-th">Company</th>
+                        <th className="table-th">Email</th>
+                        <th className="table-th">Phone</th>
+                        <th className="table-th">Meeting Time</th>
+                        <th className="table-th">Status</th>
+                        <th className="table-th">Salesperson</th>
+                        <th className="table-th">Source</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800">
+                      {appointments.map((apt) => (
+                        <tr key={apt.id} className="hover:bg-slate-800/50">
+                          <td className="table-td font-medium">{apt.callerName || '-'}</td>
+                          <td className="table-td">{apt.companyName || '-'}</td>
+                          <td className="table-td">{apt.callerEmail || '-'}</td>
+                          <td className="table-td">{apt.callerPhone || '-'}</td>
+                          <td className="table-td text-xs">{apt.scheduledDate ? new Date(apt.scheduledDate).toLocaleString() : '-'}</td>
+                          <td className="table-td"><StatusBadge status={apt.status} /></td>
+                          <td className="table-td">{apt.assignedTo || 'Unassigned'}</td>
+                          <td className="table-td">
+                            <span className="inline-flex rounded-full bg-cyan-900/30 px-2 py-0.5 text-xs font-medium text-cyan-300">
+                              AI Receptionist
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
               {apptTotalPages > 1 && (
