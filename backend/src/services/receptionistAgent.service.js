@@ -2,11 +2,11 @@ import { config } from '../config/index.js';
 import { v4 as uuidv4 } from 'uuid';
 import logger from '../utils/logger.js';
 import { queryKnowledgeBase } from './receptionistKnowledgeBase.service.js';
-import * as appointmentService from './receptionistAppointment.service.js';
-import * as supportService from './receptionistSupport.service.js';
-import * as callService from './receptionistCall.service.js';
-import * as memoryService from './receptionistMemory.service.js';
-import * as crmService from './receptionistCRM.service.js';
+import * as appointmentService from '../services/receptionistAppointment.service.js';
+import * as memoryService from '../services/receptionistMemory.service.js';
+import * as crmService from '../services/receptionistCRM.service.js';
+import * as callService from '../services/receptionistCall.service.js';
+import * as bookingWorkflow from '../services/receptionistBookingWorkflow.service.js';
 import { parseDateTime, assembleSchedulingPayload, formatSchedulingSummary } from './receptionistScheduling.service.js';
 
 const SESSIONS = new Map();
@@ -118,6 +118,10 @@ function extractDetails(message, existing = {}) {
   const companyMatch = message.match(/(?:from|at|for|work at|work for)\s+(\w+(?:\s+\w+)?)\s*(?:company|fleet|logistics|transport|corp|inc|llc|ltd|solutions|group|technologies|tech)?/i)
     || message.match(/(?:company|company name|organization|business)\s*(?:is|name)?\s*['"]?(\w+(?:\s+\w+)?)['"]?/i);
   if (companyMatch) extracted.company = companyMatch[1].trim();
+
+  const industryMatch = message.match(/(?:industry|sector|field|business type)\s*(?:is|:)?\s*(\w+(?:\s+\w+)?)\s*(?:company|business)?/i)
+    || message.match(/(?:in|working in)\s+(?:the\s+)?(\w+(?:\s+\w+)?)\s*(?:industry|sector|field)/i);
+  if (industryMatch) extracted.industry = industryMatch[1].trim();
 
   const fleetMatch = message.match(/(\d+)\s*(?:vehicle|truck|car|van|bus|fleet|units)/i)
     || message.match(/(?:fleet|have|operate|manage|about|around)\s*(?:of|about|around)?\s*(\d+)/i);
@@ -697,48 +701,22 @@ async function handleConfirmation(session) {
 
   if (session.pendingAction === 'create_appointment') {
     try {
-      const parsed = parseDateTime(
-        `${session.details.preferredDate || ''} ${session.details.preferredTime || ''}`,
-        session.details.timezone || null
-      );
-      const payload = assembleSchedulingPayload(session.details, parsed);
-      const appointment = await appointmentService.createAppointment(session.userId, {
-        callerName: session.details.callerName || 'Caller',
-        callerPhone: session.details.phone || null,
-        callerEmail: session.details.email || null,
-        companyName: session.details.company || null,
-        fleetSize: typeof session.details.fleetSize === 'string' ? parseInt(session.details.fleetSize, 10) || null : session.details.fleetSize || null,
-        meetingPurpose: session.details.meetingPurpose || 'General inquiry',
-        meetingTitle: session.details.meetingPurpose ? `${session.details.meetingPurpose} - FleetNimble` : 'FleetNimble Meeting',
-        scheduledDate: payload.scheduledDate,
-        durationMinutes: 30,
+      // Use the complete booking workflow service
+      const result = await bookingWorkflow.executeAppointmentBookingWorkflow({
+        userId: session.userId,
+        callId: session.callId,
+        callSid: session.callSid,
+        extractedData: session.details,
+        transcript: session.messages,
+        sessionMetrics: session.metrics,
       });
+
       COMPLETED_ACTIONS.add(actionKey);
-
-      if (session.callId) {
-        await callService.updateCall(session.userId, session.callId, {
-          appointmentId: appointment.id,
-          callStatus: 'COMPLETED',
-          callEndedAt: new Date(),
-        });
-      }
-
-      const customer = session.details.phone || session.details.email
-        ? await memoryService.findOrCreateCustomer(session.userId, session.details).catch(() => null)
-        : null;
-      if (customer) {
-        await memoryService.updateCustomerAfterCall(customer.id, {
-          appointmentId: appointment.id,
-          intent: 'schedule_meeting',
-          summary: `Scheduled meeting: ${session.details.meetingPurpose || 'General'}`,
-          sentiment: 'positive',
-        }).catch(err => logger.warn('MEMORY_UPDATE_FAILED', { customerId: customer.id, error: err.message }));
-      }
 
       session.stage = STAGES.COMPLETED;
       session.pendingAction = null;
 
-      const reply = `Perfect! I have successfully scheduled your meeting.\n\n- **Meeting**: ${session.details.meetingPurpose || 'General meeting'}\n- **Date**: ${session.details.preferredDate}\n- **Time**: ${session.details.preferredTime || '10:00'}\n\nA confirmation has been saved. Is there anything else I can help you with?`;
+      const reply = `Perfect! I have successfully scheduled your meeting.\n\n- **Meeting**: ${session.details.meetingPurpose || 'General meeting'}\n- **Date**: ${session.details.preferredDate}\n- **Time**: ${session.details.preferredTime || '10:00'}\n\nA confirmation has been sent via email and SMS. Is there anything else I can help you with?`;
 
       session.messages.push({ role: 'assistant', content: reply });
 
@@ -746,12 +724,20 @@ async function handleConfirmation(session) {
         isComplete: true,
         pendingAction: null,
         suggestedReplies: ['No, that is all thanks', 'Yes, I have another question'],
-        actionResult: { type: 'appointment', status: 'completed', id: appointment.id, message: 'Appointment scheduled successfully' },
+        actionResult: { 
+          type: 'appointment', 
+          status: 'completed', 
+          id: result.appointment.id, 
+          message: 'Appointment scheduled successfully with full workflow execution',
+          emailSent: result.emailSent,
+          smsSent: result.smsSent,
+          followUpsCreated: result.followUps.length,
+        },
       });
     } catch (err) {
       logger.error('APPOINTMENT_CREATION_ERROR', { error: err.message });
       return buildResponse(session,
-        'I apologize, but I encountered an issue creating the appointment. Please try again or contact our support team directly.',
+        `I apologize, but I encountered an issue creating the appointment: ${err.message}. Please try again or contact our support team directly.`,
         STAGES.CLARIFYING, 'error', {
           suggestedReplies: ['Try again', 'Contact support instead'],
         });
@@ -788,7 +774,6 @@ async function handleConfirmation(session) {
           ticketId: ticket.id,
           intent: 'support_request',
           summary: `Support ticket: ${session.details.issue?.substring(0, 100)}`,
-          sentiment: 'neutral',
         }).catch(err => logger.warn('MEMORY_UPDATE_FAILED', { customerId: customer.id, error: err.message }));
       }
 

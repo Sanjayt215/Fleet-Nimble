@@ -1,4 +1,5 @@
 import prisma from '../utils/prisma.js';
+import { emitToUser } from '../utils/socketHub.js';
 
 export async function createSupportTicket(userId, data) {
   const { callId, ...ticketData } = data;
@@ -12,6 +13,9 @@ export async function createSupportTicket(userId, data) {
       data: { supportTicketId: ticket.id },
     });
   }
+
+  // Emit Socket.IO event for real-time frontend update
+  emitToUser(userId, 'support.ticket.created', { ticket });
 
   return ticket;
 }

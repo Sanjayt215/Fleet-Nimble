@@ -1,8 +1,9 @@
 import prisma from '../utils/prisma.js';
 import logger from '../utils/logger.js';
+import { emitToUser } from '../utils/socketHub.js';
 
 export async function findOrCreateCustomer(userId, extracted) {
-  const { callerName, phone, email, company, fleetSize } = extracted;
+  const { callerName, phone, email, company, fleetSize, industry } = extracted;
   if (!phone && !email && !callerName) return null;
 
   const where = { userId };
@@ -23,12 +24,16 @@ export async function findOrCreateCustomer(userId, extracted) {
         name: callerName || 'Unknown',
         companyName: company || null,
         fleetSize: fleetSize || null,
+        industry: industry || null,
         status: 'LEAD',
         leadScore: calculateLeadScore({ fleetSize, company }),
         lastContactAt: new Date(),
       },
     });
     logger.info('CUSTOMER_CREATED', { userId, customerId: customer.id, name: callerName });
+    
+    // Emit Socket.IO event for real-time frontend update
+    emitToUser(userId, 'crm.customer.created', { customer });
   } else {
     const updates = { lastContactAt: new Date() };
     if (callerName && !customer.name) updates.name = callerName;
@@ -36,6 +41,7 @@ export async function findOrCreateCustomer(userId, extracted) {
     if (fleetSize != null && customer.fleetSize !== fleetSize) updates.fleetSize = fleetSize;
     if (phone && !customer.phone) updates.phone = phone;
     if (email && !customer.email) updates.email = email;
+    if (industry && !customer.industry) updates.industry = industry;
 
     customer = await prisma.receptionistCustomer.update({
       where: { id: customer.id },
@@ -45,6 +51,9 @@ export async function findOrCreateCustomer(userId, extracted) {
       },
     });
     logger.info('CUSTOMER_UPDATED', { userId, customerId: customer.id });
+    
+    // Emit Socket.IO event for real-time frontend update
+    emitToUser(userId, 'crm.customer.updated', { customer });
   }
 
   return customer;

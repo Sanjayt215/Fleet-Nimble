@@ -1,4 +1,5 @@
 import prisma from '../utils/prisma.js';
+import { emitToUser } from '../utils/socketHub.js';
 
 export async function getCallLogs(userId, { page = 1, limit = 20, status, type, startDate, endDate }) {
   const where = { userId };
@@ -40,19 +41,31 @@ export async function getCallById(userId, id) {
 }
 
 export async function createCall(userId, data) {
-  return prisma.aiReceptionistCall.create({
+  const call = await prisma.aiReceptionistCall.create({
     data: { userId, ...data },
   });
+  
+  // Emit Socket.IO event for real-time frontend update
+  emitToUser(userId, 'call.created', { call });
+  
+  return call;
 }
 
 export async function updateCallStatus(userId, id, callStatus) {
-  return prisma.aiReceptionistCall.update({
+  const call = await prisma.aiReceptionistCall.update({
     where: { id },
     data: {
       callStatus,
       callEndedAt: callStatus === 'COMPLETED' || callStatus === 'FAILED' ? new Date() : undefined,
     },
   });
+  
+  // Emit Socket.IO event for real-time frontend update
+  if (callStatus === 'COMPLETED') {
+    emitToUser(userId, 'call.completed', { call });
+  }
+  
+  return call;
 }
 
 export async function updateCall(userId, id, data) {

@@ -8,6 +8,7 @@ import SupportTicketModal from './SupportTicketModal';
 import ReceptionistSettingsModal from './ReceptionistSettingsModal';
 import AnalyticsCards from './AnalyticsCards';
 import LiveCallsPanel from './LiveCallsPanel';
+import ConversationIntelligencePanel from './ConversationIntelligencePanel';
 import CallDetailModal from './CallDetailModal';
 import { normalizeDisplayText } from '../utils/normalizeDisplayText';
 
@@ -18,6 +19,7 @@ const TABS = [
 
 const ADMIN_SUBTABS = [
   { id: 'calls', label: 'Call Logs' },
+  { id: 'conversations', label: 'Conversations' },
   { id: 'appointments', label: 'Appointments' },
   { id: 'support', label: 'Support Tickets' },
   { id: 'analytics', label: 'Analytics' },
@@ -63,16 +65,17 @@ export default function AIReceptionist() {
     try {
       setLoading(true);
       setError(null);
-      const [statusRes, summaryRes, callsRes, apptsRes, ticketsRes] = await Promise.allSettled([
+      const [statusRes, summaryRes, callsRes, apptsRes, ticketsRes, channelRes] = await Promise.allSettled([
         api.get('/ai-receptionist/health'),
         api.get('/ai-receptionist/summary'),
         api.get('/ai-receptionist/calls?page=1&limit=10'),
         api.get('/ai-receptionist/appointments?limit=5'),
         api.get('/ai-receptionist/support-tickets?limit=5'),
+        api.get('/ai-receptionist/status'),
       ]);
       if (statusRes.status === 'fulfilled') {
         const d = statusRes.value.data;
-        setTwilioPhone(d.phoneNumber || d.twilioPhone || null);
+        setTwilioPhone(channelRes.status === 'fulfilled' ? (channelRes.value.data?.data?.phoneNumber || null) : null);
         setChannelStatus({
           phoneConfigured: d.phoneConfigured,
           mediaStreamEnabled: d.mediaStreamEnabled,
@@ -112,7 +115,21 @@ export default function AIReceptionist() {
       fetchData();
       showToast('New appointment created by AI Receptionist');
     }, [fetchData, showToast]),
+    'support.ticket.created': useCallback(() => {
+      fetchData();
+      showToast('New support ticket created by AI Receptionist');
+    }, [fetchData, showToast]),
+    'call.created': useCallback(() => {
+      fetchData();
+    }, [fetchData]),
     'call.completed': useCallback(() => {
+      fetchData();
+    }, [fetchData]),
+    'crm.customer.created': useCallback(() => {
+      fetchData();
+      showToast('New customer added to CRM');
+    }, [fetchData, showToast]),
+    'crm.customer.updated': useCallback(() => {
       fetchData();
     }, [fetchData]),
     'crm.updated': useCallback(() => {
@@ -383,6 +400,7 @@ export default function AIReceptionist() {
                     <tr>
                       <th className="table-th">Name</th>
                       <th className="table-th">Company</th>
+                      <th className="table-th">Industry</th>
                       <th className="table-th">Phone</th>
                       <th className="table-th">Email</th>
                       <th className="table-th">Duration</th>
@@ -403,6 +421,7 @@ export default function AIReceptionist() {
                         <tr key={call.id} className="hover:bg-slate-800/50">
                           <td className="table-td font-medium">{call.callerName || '-'}</td>
                           <td className="table-td">{call.companyName || '-'}</td>
+                          <td className="table-td">{call.extractedData?.industry || call.customer?.industry || '-'}</td>
                           <td className="table-td">{call.callerPhone || '-'}</td>
                           <td className="table-td">{call.callerEmail || '-'}</td>
                           <td className="table-td text-xs">
@@ -460,6 +479,7 @@ export default function AIReceptionist() {
                       <tr>
                         <th className="table-th">Customer</th>
                         <th className="table-th">Company</th>
+                        <th className="table-th">Industry</th>
                         <th className="table-th">Email</th>
                         <th className="table-th">Phone</th>
                         <th className="table-th">Meeting Time</th>
@@ -473,6 +493,7 @@ export default function AIReceptionist() {
                         <tr key={apt.id} className="hover:bg-slate-800/50">
                           <td className="table-td font-medium">{apt.callerName || '-'}</td>
                           <td className="table-td">{apt.companyName || '-'}</td>
+                          <td className="table-td">{apt.industry || '-'}</td>
                           <td className="table-td">{apt.callerEmail || '-'}</td>
                           <td className="table-td">{apt.callerPhone || '-'}</td>
                           <td className="table-td text-xs">{apt.scheduledDate ? new Date(apt.scheduledDate).toLocaleString() : '-'}</td>
@@ -537,6 +558,7 @@ export default function AIReceptionist() {
           )}
 
           {activeAdminTab === 'analytics' && <AnalyticsCards />}
+          {activeAdminTab === 'conversations' && <ConversationIntelligencePanel showToast={showToast} />}
           {activeAdminTab === 'live' && <LiveCallsPanel showToast={showToast} />}
           {activeAdminTab === 'settings' && <ReceptionistSettingsModal onClose={() => {}} showToast={showToast} embedded />}
         </div>

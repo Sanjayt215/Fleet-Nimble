@@ -1,4 +1,5 @@
 import prisma from '../utils/prisma.js';
+import { emitToUser } from '../utils/socketHub.js';
 
 export async function createAppointment(userId, data) {
   const { callId, ...apptData } = data;
@@ -16,6 +17,9 @@ export async function createAppointment(userId, data) {
       data: { appointmentId: appointment.id },
     });
   }
+
+  // Emit Socket.IO event for real-time frontend update
+  emitToUser(userId, 'appointment.created', { appointment });
 
   return appointment;
 }

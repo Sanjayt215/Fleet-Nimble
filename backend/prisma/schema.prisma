@@ -68,6 +68,15 @@ model User {
   aiConversationSummaries    AiConversationSummary[]
   aiUserPreferences          AiUserPreference[]
   knowledgeSources           KnowledgeSource[]
+  AgentRun                   AgentRun[]
+  conversationTimelineEvents ConversationTimelineEvent[]
+  conversationSummaries      ConversationSummary[]
+  conversationAnalytics      ConversationAnalytics[]
+  followUpReminders          FollowUpReminder[]
+  fleetBrainMemory           FleetBrainMemoryItem[]
+  fleetBrainWorkflowRuns     FleetBrainWorkflowRun[]
+  fleetBrainLearnings        FleetBrainLearning[]
+  fleetBrainInsights         FleetBrainInsight[]
 
   @@index([email])
   @@index([roleId])
@@ -691,34 +700,38 @@ model AiAuditLog {
 // ──────────────────────────────────────────────
 
 model ReceptionistCustomer {
-  id                String                     @id @default(uuid())
-  userId            String                     @map("user_id")
-  companyId         String?                    @map("company_id")
-  phone             String?                    @unique @map("phone")
-  email             String?                    @map("email")
-  name              String                     @map("name")
-  companyName       String?                    @map("company_name")
-  fleetSize         Int?                       @map("fleet_size")
-  status            CustomerStatus             @default(LEAD)
-  leadScore         Int                        @default(0) @map("lead_score")
-  salesStage        SalesStage                 @default(LEAD)
-  lifetimeValue     Float                      @default(0) @map("lifetime_value")
-  totalCalls        Int                        @default(0) @map("total_calls")
-  totalAppointments Int                        @default(0) @map("total_appointments")
-  totalTickets      Int                        @default(0) @map("total_tickets")
-  lastContactAt     DateTime?                  @map("last_contact_at")
-  preferredTime     String?                    @map("preferred_time")
-  preferredDate     String?                    @map("preferred_date")
-  lastSummary       String?                    @map("last_summary")
-  lastIntent        String?                    @map("last_intent")
-  sentimentHistory  Json                       @default("[]") @map("sentiment_history")
-  tags              Json                       @default("[]")
-  metadata          Json                       @default("{}")
-  createdAt         DateTime                   @default(now()) @map("created_at")
-  updatedAt         DateTime                   @updatedAt @map("updated_at")
-  user              User                       @relation(fields: [userId], references: [id])
-  calls             AiReceptionistCall[]
-  notes             ReceptionistCustomerNote[]
+  id                   String                     @id @default(uuid())
+  userId               String                     @map("user_id")
+  companyId            String?                    @map("company_id")
+  phone                String?                    @unique @map("phone")
+  email                String?                    @map("email")
+  name                 String                     @map("name")
+  companyName          String?                    @map("company_name")
+  fleetSize            Int?                       @map("fleet_size")
+  industry             String?                    @map("industry")
+  status               CustomerStatus             @default(LEAD)
+  leadScore            Int                        @default(0) @map("lead_score")
+  salesStage           SalesStage                 @default(LEAD)
+  lifetimeValue        Float                      @default(0) @map("lifetime_value")
+  totalCalls           Int                        @default(0) @map("total_calls")
+  totalAppointments    Int                        @default(0) @map("total_appointments")
+  totalTickets         Int                        @default(0) @map("total_tickets")
+  lastContactAt        DateTime?                  @map("last_contact_at")
+  preferredTime        String?                    @map("preferred_time")
+  preferredDate        String?                    @map("preferred_date")
+  lastSummary          String?                    @map("last_summary")
+  lastIntent           String?                    @map("last_intent")
+  sentimentHistory     Json                       @default("[]") @map("sentiment_history")
+  tags                 Json                       @default("[]")
+  metadata             Json                       @default("{}")
+  createdAt            DateTime                   @default(now()) @map("created_at")
+  updatedAt            DateTime                   @updatedAt @map("updated_at")
+  user                 User                       @relation(fields: [userId], references: [id])
+  calls                AiReceptionistCall[]
+  notes                ReceptionistCustomerNote[]
+  summaries            ConversationSummary[]
+  followUps            FollowUpReminder[]
+  FleetBrainMemoryItem FleetBrainMemoryItem[]
 
   @@index([userId])
   @@index([companyId])
@@ -759,51 +772,234 @@ model AiReceptionistAuditLog {
 }
 
 // ──────────────────────────────────────────────
+// Conversation Intelligence
+// Timeline · Summaries · Analytics · Follow-ups
+// ──────────────────────────────────────────────
+
+model ConversationTimelineEvent {
+  id        String             @id @default(uuid())
+  callId    String             @map("call_id")
+  callSid   String?            @map("call_sid")
+  userId    String             @map("user_id")
+  /// CALL_STARTED | GREETING_SENT | INTENT_DETECTED | KNOWLEDGE_SEARCHED | LEAD_QUALIFIED |
+  /// TOOL_STARTED | TOOL_COMPLETED | APPOINTMENT_CONFIRMED | CRM_UPDATED | SUMMARY_CREATED |
+  /// MEMORY_UPDATED | FSM_TRANSITION | AGENT_RUN_STARTED | AGENT_RUN_COMPLETED |
+  /// SUPERVISOR_RETRY | SUPERVISOR_RECOVERED | CALL_COMPLETED
+  eventType String             @map("event_type")
+  label     String             @map("label")
+  data      Json               @default("{}")
+  at        DateTime           @default(now()) @map("at")
+  call      AiReceptionistCall @relation(fields: [callId], references: [id], onDelete: Cascade)
+  User      User               @relation(fields: [userId], references: [id])
+
+  @@index([callId, at])
+  @@index([userId, at])
+  @@map("conversation_timeline_events")
+}
+
+model ConversationSummary {
+  id               String                @id @default(uuid())
+  callId           String                @unique @map("call_id")
+  userId           String                @map("user_id")
+  customerId       String?               @map("customer_id")
+  executiveSummary String                @default("") @map("executive_summary")
+  salesSummary     String                @default("") @map("sales_summary")
+  supportSummary   String                @default("") @map("support_summary")
+  sentiment        String                @default("neutral")
+  customerIntent   String                @default("UNKNOWN") @map("customer_intent")
+  nextBestAction   String                @default("") @map("next_best_action")
+  createdAt        DateTime              @default(now()) @map("created_at")
+  call             AiReceptionistCall    @relation(fields: [callId], references: [id], onDelete: Cascade)
+  customer         ReceptionistCustomer? @relation(fields: [customerId], references: [id])
+  user             User                  @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("conversation_summaries")
+}
+
+model ConversationAnalytics {
+  id                   String             @id @default(uuid())
+  callId               String             @unique @map("call_id")
+  userId               String             @map("user_id")
+  talkRatio            Float              @default(0) @map("talk_ratio")
+  avgResponseLatencyMs Int                @default(0) @map("avg_response_latency_ms")
+  interruptions        Int                @default(0)
+  silenceDurationMs    Int                @default(0) @map("silence_duration_ms")
+  knowledgeHits        Int                @default(0) @map("knowledge_hits")
+  toolUses             Int                @default(0) @map("tool_uses")
+  conversationScore    Float              @default(0) @map("conversation_score")
+  salesScore           Float              @default(0) @map("sales_score")
+  supportScore         Float              @default(0) @map("support_score")
+  breakdown            Json               @default("{}")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  call                 AiReceptionistCall @relation(fields: [callId], references: [id], onDelete: Cascade)
+  user                 User               @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("conversation_analytics")
+}
+
+model FollowUpReminder {
+  id            String                     @id @default(uuid())
+  userId        String                     @map("user_id")
+  customerId    String?                    @map("customer_id")
+  appointmentId String?                    @map("appointment_id")
+  callId        String?                    @map("call_id")
+  /// EMAIL | SMS | CRM_ACTIVITY | REMINDER | CALENDAR
+  channel       String                     @map("channel")
+  subject       String?                    @map("subject")
+  content       String                     @default("")
+  dueAt         DateTime?                  @map("due_at")
+  /// PENDING | SENT | DONE | CANCELLED
+  status        String                     @default("PENDING") @map("status")
+  sentAt        DateTime?                  @map("sent_at")
+  createdAt     DateTime                   @default(now()) @map("created_at")
+  user          User                       @relation(fields: [userId], references: [id])
+  customer      ReceptionistCustomer?      @relation(fields: [customerId], references: [id])
+  appointment   AiReceptionistAppointment? @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  call          AiReceptionistCall?        @relation(fields: [callId], references: [id])
+
+  @@index([userId, status])
+  @@index([customerId])
+  @@index([dueAt])
+  @@map("follow_up_reminders")
+}
+
+// ──────────────────────────────────────────────
+// Fleet Brain — intelligence center
+// Memory · Workflows · Learning · Insights
+// ──────────────────────────────────────────────
+
+model FleetBrainMemoryItem {
+  id         String                @id @default(uuid())
+  userId     String                @map("user_id")
+  companyId  String?               @map("company_id")
+  customerId String?               @map("customer_id")
+  /// LONG_TERM | SHORT_TERM | CONVERSATION | BUSINESS | CUSTOMER | FLEET
+  scope      String                @map("scope")
+  key        String
+  value      Json                  @default("{}")
+  ttlSec     Int?                  @map("ttl_sec")
+  expiresAt  DateTime?             @map("expires_at")
+  createdAt  DateTime              @default(now()) @map("created_at")
+  updatedAt  DateTime              @updatedAt @map("updated_at")
+  user       User                  @relation(fields: [userId], references: [id])
+  customer   ReceptionistCustomer? @relation(fields: [customerId], references: [id])
+
+  @@unique([userId, scope, key])
+  @@index([userId, scope])
+  @@index([expiresAt])
+  @@map("fleet_brain_memory_items")
+}
+
+model FleetBrainWorkflowRun {
+  id           String    @id @default(uuid())
+  userId       String    @map("user_id")
+  companyId    String?   @map("company_id")
+  workflowType String    @map("workflow_type")
+  /// PENDING | RUNNING | COMPLETED | FAILED | CANCELLED
+  status       String    @default("PENDING") @map("status")
+  trigger      String    @default("manual") @map("trigger")
+  callId       String?   @map("call_id")
+  steps        Json      @default("[]")
+  currentStep  String?   @map("current_step")
+  result       Json      @default("{}")
+  error        String?   @map("error")
+  startedAt    DateTime  @default(now()) @map("started_at")
+  finishedAt   DateTime? @map("finished_at")
+  user         User      @relation(fields: [userId], references: [id])
+
+  @@index([userId, startedAt(sort: Desc)])
+  @@index([status, startedAt])
+  @@map("fleet_brain_workflow_runs")
+}
+
+model FleetBrainLearning {
+  id             String   @id @default(uuid())
+  userId         String   @map("user_id")
+  companyId      String?  @map("company_id")
+  callId         String?  @map("call_id")
+  /// CONVERSATION | FLEET_ISSUE | SALES_OBJECTION | KNOWLEDGE_GAP | KPI
+  learningType   String   @map("learning_type")
+  content        String   @map("content")
+  data           Json     @default("{}")
+  recommendation String?  @map("recommendation")
+  applied        Boolean  @default(false)
+  createdAt      DateTime @default(now()) @map("created_at")
+  user           User     @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([learningType])
+  @@map("fleet_brain_learnings")
+}
+
+model FleetBrainInsight {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  companyId String?  @map("company_id")
+  /// EXECUTIVE | FLEET | SALES | SUPPORT | AI_PERFORMANCE | REVENUE_FORECAST | LEAD_FORECAST
+  type      String   @map("type")
+  title     String   @map("title")
+  summary   String   @map("summary")
+  data      Json     @default("{}")
+  period    String   @map("period")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId, type, createdAt(sort: Desc)])
+  @@map("fleet_brain_insights")
+}
+
+// ──────────────────────────────────────────────
 // AI Receptionist Core Models
 // ──────────────────────────────────────────────
 
 model AiReceptionistCall {
-  id                String                       @id @default(uuid())
-  userId            String                       @map("user_id")
-  companyId         String?                      @map("company_id")
-  customerId        String?                      @map("customer_id")
-  callerName        String                       @map("caller_name")
-  callerPhone       String?                      @map("caller_phone")
-  callerEmail       String?                      @map("caller_email")
-  companyName       String?                      @map("company_name")
-  fleetSize         Int?                         @map("fleet_size")
-  callType          CallType                     @default(OTHER)
-  callStatus        CallStatus                   @default(NEW)
-  callStartedAt     DateTime                     @default(now()) @map("call_started_at")
-  callEndedAt       DateTime?                    @map("call_ended_at")
-  durationSeconds   Int?                         @map("duration_seconds")
-  transcript        String?                      @default("")
-  summary           String?                      @default("")
-  sentiment         String?                      @default("neutral")
-  actionItems       Json                         @default("[]")
-  extractedData     Json                         @default("{}")
-  appointmentId     String?                      @map("appointment_id")
-  supportTicketId   String?                      @map("support_ticket_id")
+  id                    String                       @id @default(uuid())
+  userId                String                       @map("user_id")
+  companyId             String?                      @map("company_id")
+  customerId            String?                      @map("customer_id")
+  callerName            String                       @map("caller_name")
+  callerPhone           String?                      @map("caller_phone")
+  callerEmail           String?                      @map("caller_email")
+  companyName           String?                      @map("company_name")
+  fleetSize             Int?                         @map("fleet_size")
+  callType              CallType                     @default(OTHER)
+  callStatus            CallStatus                   @default(NEW)
+  callStartedAt         DateTime                     @default(now()) @map("call_started_at")
+  callEndedAt           DateTime?                    @map("call_ended_at")
+  durationSeconds       Int?                         @map("duration_seconds")
+  transcript            String?                      @default("")
+  summary               String?                      @default("")
+  sentiment             String?                      @default("neutral")
+  actionItems           Json                         @default("[]")
+  extractedData         Json                         @default("{}")
+  appointmentId         String?                      @map("appointment_id")
+  supportTicketId       String?                      @map("support_ticket_id")
   // ── Twilio / Recording ──
-  twilioCallSid     String?                      @unique @map("twilio_call_sid")
-  twilioAccountSid  String?                      @map("twilio_account_sid")
-  twilioFrom        String?                      @map("twilio_from")
-  twilioTo          String?                      @map("twilio_to")
-  recordingUrl      String?                      @map("recording_url")
-  recordingDuration Int?                         @map("recording_duration")
+  twilioCallSid         String?                      @unique @map("twilio_call_sid")
+  twilioAccountSid      String?                      @map("twilio_account_sid")
+  twilioFrom            String?                      @map("twilio_from")
+  twilioTo              String?                      @map("twilio_to")
+  recordingUrl          String?                      @map("recording_url")
+  recordingDuration     Int?                         @map("recording_duration")
   // ── Handoff ──
-  escalatedAt       DateTime?                    @map("escalated_at")
-  handoffReason     String?                      @map("handoff_reason")
-  handoffTo         String?                      @map("handoff_to")
+  escalatedAt           DateTime?                    @map("escalated_at")
+  handoffReason         String?                      @map("handoff_reason")
+  handoffTo             String?                      @map("handoff_to")
   // ── Analytics ──
-  detectedLanguage  String?                      @default("en") @map("detected_language")
-  aiConfidence      Float?                       @map("ai_confidence")
-  createdAt         DateTime                     @default(now()) @map("created_at")
-  updatedAt         DateTime                     @updatedAt @map("updated_at")
-  user              User                         @relation(fields: [userId], references: [id])
-  customer          ReceptionistCustomer?        @relation(fields: [customerId], references: [id])
-  appointment       AiReceptionistAppointment?   @relation("CallAppointment", fields: [appointmentId], references: [id])
-  supportTicket     AiReceptionistSupportTicket? @relation("CallSupportTicket", fields: [supportTicketId], references: [id])
+  detectedLanguage      String?                      @default("en") @map("detected_language")
+  aiConfidence          Float?                       @map("ai_confidence")
+  createdAt             DateTime                     @default(now()) @map("created_at")
+  updatedAt             DateTime                     @updatedAt @map("updated_at")
+  user                  User                         @relation(fields: [userId], references: [id])
+  customer              ReceptionistCustomer?        @relation(fields: [customerId], references: [id])
+  appointment           AiReceptionistAppointment?   @relation("CallAppointment", fields: [appointmentId], references: [id])
+  supportTicket         AiReceptionistSupportTicket? @relation("CallSupportTicket", fields: [supportTicketId], references: [id])
+  timelineEvents        ConversationTimelineEvent[]
+  conversationSummary   ConversationSummary?
+  conversationAnalytics ConversationAnalytics?
+  followUps             FollowUpReminder[]
 
   @@index([userId])
   @@index([companyId])
@@ -825,10 +1021,12 @@ model AiReceptionistAppointment {
   callerEmail      String?              @map("caller_email")
   companyName      String?              @map("company_name")
   fleetSize        Int?                 @map("fleet_size")
+  industry         String?              @map("industry")
   meetingTitle     String               @default("Scheduled Meeting") @map("meeting_title")
   meetingPurpose   String?              @map("meeting_purpose")
   scheduledDate    DateTime             @map("scheduled_date")
   durationMinutes  Int                  @default(30) @map("duration_minutes")
+  timezone         String?              @default("UTC")
   status           AppointmentStatus    @default(SCHEDULED)
   calendarProvider String               @default("internal") @map("calendar_provider")
   calendarEventId  String?              @map("calendar_event_id")
@@ -839,6 +1037,7 @@ model AiReceptionistAppointment {
   updatedAt        DateTime             @updatedAt @map("updated_at")
   user             User                 @relation(fields: [userId], references: [id])
   calls            AiReceptionistCall[] @relation("CallAppointment")
+  followUps        FollowUpReminder[]
 
   @@index([userId])
   @@index([companyId])
@@ -1302,4 +1501,57 @@ enum NoteType {
   SUPPORT
   FOLLOW_UP
   SYSTEM
+}
+
+// ──────────────────────────────────────────────
+// Multi-Agent Runtime (Supervisor + specialist agents)
+// ──────────────────────────────────────────────
+
+model AgentRun {
+  id         String    @id @default(uuid())
+  callId     String?   @map("call_id")
+  callSid    String?   @map("call_sid")
+  userId     String?   @map("user_id")
+  runId      String    @unique @map("run_id")
+  utterance  String?   @map("utterance")
+  intent     String?   @map("intent")
+  fsmState   String?   @map("fsm_state")
+  mode       String    @default("rules") @map("mode") /// rules | llm | parallel | shadow
+  status     String    @default("RUNNING") @map("status") /// RUNNING | SUCCESS | PARTIAL | FAILED
+  outcome    Json?     @map("outcome")
+  error      String?   @map("error")
+  startedAt  DateTime  @default(now()) @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+  user       User?     @relation(fields: [userId], references: [id])
+
+  tasks AgentTaskLog[]
+
+  @@index([callId, startedAt])
+  @@index([status, startedAt])
+  @@index([userId])
+  @@map("agent_runs")
+}
+
+model AgentTaskLog {
+  id         String   @id @default(uuid())
+  runId      String   @map("run_id")
+  callId     String?  @map("call_id")
+  userId     String?  @map("user_id")
+  agent      String
+  taskType   String   @map("task_type")
+  status     String /// SUCCESS | PARTIAL | FAILED | SKIPPED | RETRIED
+  confidence Float?
+  costMs     Int?     @map("cost_ms")
+  llmTokens  Int?     @map("llm_tokens")
+  dbQueries  Int?     @map("db_queries")
+  cacheHits  Int?     @map("cache_hits")
+  retries    Int      @default(0)
+  error      String?  @map("error")
+  at         DateTime @default(now()) @map("at")
+  run        AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([callId])
+  @@index([agent, at])
+  @@index([runId])
+  @@map("agent_task_logs")
 }
