@@ -61,3 +61,5 @@ export function getOrchestrator() {
 export function getRuntimeStatus() {
   return getOrchestrator().getStatus();
 }
+
+export { shouldUseMultiAgent, isShadowRun } from './integrations/conversationBridge.js';

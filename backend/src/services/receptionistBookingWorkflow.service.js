@@ -9,6 +9,7 @@ import * as followUpService from './followUp.service.js';
 import { generateConversationSummaries } from './conversationSummary.service.js';
 import { computeConversationAnalytics } from './conversationAnalytics.service.js';
 import { recordTimelineEvent, TIMELINE_EVENT_TYPES } from './conversationTimeline.service.js';
+import { wallClockToUtc } from '../utils/scheduling.js';
 
 /**
  * Calculate lead score based on customer data
@@ -201,7 +202,7 @@ export async function executeAppointmentBookingWorkflow({
       };
     }, {
       maxWait: 5000, // 5 seconds
-      timeout: 10000, // 10 seconds
+      timeout: 15000, // 15 seconds
     });
 
     logger.info('BOOKING_WORKFLOW_TRANSACTION_SUCCESS', { 
@@ -434,51 +435,29 @@ async function createAppointmentInTransaction(tx, userId, data) {
 }
 
 /**
- * Parse date/time with timezone support
+ * Parse date/time with timezone support (DST-aware via Intl)
  */
 function parseDateTime(preferredDate, preferredTime, timezone) {
   let scheduledDate = new Date();
-  
-  if (preferredDate) {
+
+  const resolved = wallClockToUtc({ preferredDate, preferredTime, timezone });
+  if (resolved) {
+    scheduledDate = resolved;
+  } else if (preferredDate) {
     const parsed = new Date(preferredDate);
     if (!isNaN(parsed.getTime())) {
       scheduledDate = parsed;
     }
-  }
-
-  if (preferredTime) {
-    const [hours, minutes] = preferredTime.split(':').map(Number);
-    if (!isNaN(hours) && !isNaN(minutes)) {
-      scheduledDate.setHours(hours, minutes, 0, 0);
+    if (preferredTime) {
+      const [hours, minutes] = preferredTime.split(':').map(Number);
+      if (!isNaN(hours) && !isNaN(minutes)) {
+        scheduledDate.setHours(hours, minutes, 0, 0);
+      }
     }
-  }
-
-  // Apply timezone offset if provided
-  if (timezone && timezone !== 'UTC') {
-    // Simple timezone handling - in production, use a library like luxon or date-fns-tz
-    const offset = getTimezoneOffset(timezone);
-    scheduledDate = new Date(scheduledDate.getTime() - offset);
   }
 
   return {
     scheduledDate,
     timezone: timezone || 'UTC',
   };
-}
-
-/**
- * Get timezone offset in milliseconds
- */
-function getTimezoneOffset(timezone) {
-  const offsets = {
-    'America/New_York': -5 * 3600000,
-    'America/Los_Angeles': -8 * 3600000,
-    'America/Chicago': -6 * 3600000,
-    'Europe/London': 0,
-    'Europe/Paris': 1 * 3600000,
-    'Asia/Tokyo': 9 * 3600000,
-    'Asia/Shanghai': 8 * 3600000,
-    'Australia/Sydney': 11 * 3600000,
-  };
-  return offsets[timezone] || 0;
 }

@@ -366,7 +366,6 @@ export async function executeAppointmentCreation(session) {
   try {
     const result = await prisma.$transaction(async (tx) => {
       logger.info('DATABASE_WRITE', { tool: 'create_appointment', callId, operation: 'transaction_start' });
-
       const normalizedPhone = callerPhone || collectedData.phone || null;
       const customerEmail = collectedData.email || null;
 
@@ -479,7 +478,7 @@ export async function executeAppointmentCreation(session) {
       logger.info('DATABASE_WRITE', { tool: 'create_appointment', callId, operation: 'transaction_commit' });
 
       return { customer: txCustomer, appointment: txAppointment, customerCreated };
-    });
+    }, { timeout: 15000 });
 
     customer = result.customer;
     appointment = result.appointment;
@@ -703,7 +702,7 @@ export async function executeSupportTicketCreation(session) {
 
       logger.info('DATABASE_WRITE', { tool: 'create_support_ticket', callId, operation: 'transaction_commit' });
       return txTicket;
-    });
+    }, { timeout: 15000 });
 
     PENDING_ACTIONS.set(executionId, { id: ticket.id, timestamp: Date.now() });
     metrics.recordTicketCreated();
@@ -938,7 +937,7 @@ export async function updateCallRecordAtEnd({ callId, callSid, userId, intent, s
         await tx.receptionistCustomer.update({ where: { id: customerId }, data: custUpdates });
         logger.info('CRM_UPDATED', { customerId, callId: targetCallId });
       }
-    });
+    }, { timeout: 15000 });
   } catch (err) {
     logger.error('CALL_RECORD_UPDATE_FAILED', { callSid, callId, error: err.message });
   }
@@ -979,7 +978,7 @@ export async function updateCRMAfterCall({ userId, customerId, collectedData, in
 
       await tx.receptionistCustomer.update({ where: { id: customerId }, data: updates });
       logger.info('CRM_UPDATED', { customerId });
-    });
+    }, { timeout: 15000 });
   } catch (err) {
     logger.warn('CRM_UPDATE_FAILED', { customerId, error: err.message });
   }
