@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as fleetController from '../controllers/fleetController.js';
-import { authenticate, authorize } from '../middleware/auth.js';
+import { authenticate } from '../middleware/auth.js';
+import { requireAdmin } from '../middleware/roles.js';
 
 const router = Router();
 router.use(authenticate);
@@ -17,7 +18,7 @@ router.get('/reports/:type/:vehicleId', fleetController.getReports);
 router.get('/drivers', fleetController.getDrivers);
 router.get('/work-orders', fleetController.getWorkOrders);
 router.post('/work-orders', fleetController.createWorkOrder);
-router.get('/admin/stats', authorize('admin'), fleetController.adminStats);
-router.get('/admin/users', authorize('admin'), fleetController.adminUsers);
+router.get('/admin/stats', requireAdmin, fleetController.adminStats);
+router.get('/admin/users', requireAdmin, fleetController.adminUsers);
 
 export default router;

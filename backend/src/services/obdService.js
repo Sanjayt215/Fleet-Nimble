@@ -1,8 +1,8 @@
 import prisma from '../utils/prisma.js';
 import { cacheGet, cacheSet } from '../utils/redis.js';
 import { parseLiveDataPayload } from '../utils/telemetryParser.js';
-import { parseDtcResponse, getDtcDescription, getDtcSeverity } from '../utils/dtcDecoder.js';
-import { evaluateTelemetry } from './alertEngine.js';
+import { parseDtcResponse, getDtcDescription, severityFromCode } from '../utils/dtcDecoder.js';
+import { processTelemetryAlerts } from './alertEngine.js';
 import { AppError } from '../middleware/errorHandler.js';
 
 async function verifyVehicleAccess(vehicleId, userId, role) {
@@ -25,7 +25,7 @@ export async function saveLiveData(userId, role, payload, io) {
   });
 
   await cacheSet(`obd:latest:${payload.vehicleId}`, record, 60);
-  await evaluateTelemetry(payload.vehicleId, data, io);
+  await processTelemetryAlerts(payload.vehicleId, data, io);
 
   if (io) {
     io.to(`vehicle:${payload.vehicleId}`).emit('live:update', record);
@@ -69,7 +69,7 @@ export async function saveDtcCodes(userId, role, { vehicleId, rawResponse, codes
           vehicleId,
           code,
           description: getDtcDescription(code),
-          severity: getDtcSeverity(code),
+          severity: severityFromCode(code),
           active: true,
         },
       });
