@@ -298,6 +298,72 @@ describe('Phase 5 — Trusted Ownership', () => {
   });
 });
 
+describe('Phase 10 — Validation Cache', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockConfig.aiReceptionist.defaultUserId = 'e8191a8a-26bd-4cdf-b967-475c313a25a7';
+    mockConfig.aiReceptionist.defaultCompanyId = '00000000-0000-0000-0000-000000000010';
+  });
+
+  it('reuses validated owner within cache window (single DB hit)', async () => {
+    prismaMock.user.findUnique.mockResolvedValue(mockUserValid);
+    prismaMock.company.findUnique.mockResolvedValue(mockCompanyValid);
+
+    const { resolveTenant, clearCache } = await import('../src/services/receptionistTenantResolver.service.js');
+    clearCache();
+
+    const first = await resolveTenant({ calledNumber: null, twilioAccountSid: null });
+    expect(first.ownerValidated).toBe(true);
+    expect(prismaMock.user.findUnique).toHaveBeenCalledTimes(1);
+
+    const second = await resolveTenant({ calledNumber: null, twilioAccountSid: null });
+    expect(second.ownerValidated).toBe(true);
+    expect(second.companyValidated).toBe(true);
+    expect(prismaMock.user.findUnique).toHaveBeenCalledTimes(1);
+    expect(prismaMock.company.findUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it('clearCache invalidates so next resolution hits the DB again', async () => {
+    prismaMock.user.findUnique.mockResolvedValue(mockUserValid);
+    prismaMock.company.findUnique.mockResolvedValue(mockCompanyValid);
+
+    const { resolveTenant, clearCache } = await import('../src/services/receptionistTenantResolver.service.js');
+    clearCache();
+    await resolveTenant({ calledNumber: null, twilioAccountSid: null });
+    expect(prismaMock.user.findUnique).toHaveBeenCalledTimes(1);
+
+    clearCache();
+    await resolveTenant({ calledNumber: null, twilioAccountSid: null });
+    expect(prismaMock.user.findUnique).toHaveBeenCalledTimes(2);
+  });
+
+  it('DB errors are never cached, so retries still hit the DB', async () => {
+    prismaMock.user.findUnique
+      .mockRejectedValueOnce(new Error('connection refused'))
+      .mockResolvedValue(mockUserValid);
+    prismaMock.company.findUnique
+      .mockRejectedValueOnce(new Error('connection refused'))
+      .mockResolvedValue(mockCompanyValid);
+
+    const { validateOwnerAtStartup, clearCache } = await import('../src/services/receptionistTenantResolver.service.js');
+    clearCache();
+
+    let result;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        result = await validateOwnerAtStartup();
+        if (result.ownerValidated && result.companyValidated) break;
+      } catch {
+        // retry
+      }
+    }
+
+    expect(result.ownerValidated).toBe(true);
+    expect(result.companyValidated).toBe(true);
+    expect(prismaMock.user.findUnique.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
 describe('Phase 6 — Call Creation', () => {
   beforeEach(() => {
     vi.clearAllMocks();

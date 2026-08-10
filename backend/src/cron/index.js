@@ -5,6 +5,7 @@ import { purgeExpiredDedup } from '../mqtt/deduplication.js';
 import { purgeOldDeadLetters, fetchRetryBatch, markDeadLetterProcessed, markDeadLetterRetry } from '../mqtt/deadLetter.js';
 import { handleMqttMessage } from '../mqtt/handlers/telemetryHandler.js';
 import { markStaleMqttDevices } from '../services/deviceAuthService.js';
+import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 
 export function startCronJobs(app) {
@@ -65,33 +66,37 @@ export function startCronJobs(app) {
     }
   });
 
-  // MQTT dead-letter retry every minute
-  cron.schedule('* * * * *', async () => {
-    try {
-      const io = getIo();
-      const batch = await fetchRetryBatch(25);
-      for (const row of batch) {
-        try {
-          await handleMqttMessage(row.topic, Buffer.from(JSON.stringify(row.payload)), io);
-          await markDeadLetterProcessed(row.id);
-        } catch (err) {
-          await markDeadLetterRetry(row.id, err, row.retryCount + 1);
+  // MQTT dead-letter retry every minute (only when MQTT ingest is enabled)
+  // MQTT device heartbeat stale check every 60s (only when MQTT ingest is enabled)
+  if (config.mqtt.enabled) {
+    cron.schedule('* * * * *', async () => {
+      try {
+        const io = getIo();
+        const batch = await fetchRetryBatch(25);
+        for (const row of batch) {
+          try {
+            await handleMqttMessage(row.topic, Buffer.from(JSON.stringify(row.payload)), io);
+            await markDeadLetterProcessed(row.id);
+          } catch (err) {
+            await markDeadLetterRetry(row.id, err, row.retryCount + 1);
+          }
         }
+      } catch (err) {
+        logger.error('MQTT DLQ retry cron failed', { err: err.message });
       }
-    } catch (err) {
-      logger.error('MQTT DLQ retry cron failed', { err: err.message });
-    }
-  });
+    });
 
-  // MQTT device heartbeat stale check every 60s
-  cron.schedule('* * * * *', async () => {
-    try {
-      const io = getIo();
-      await markStaleMqttDevices(io);
-    } catch (err) {
-      logger.error('MQTT heartbeat cron failed', { err: err.message });
-    }
-  });
+    cron.schedule('* * * * *', async () => {
+      try {
+        const io = getIo();
+        await markStaleMqttDevices(io);
+      } catch (err) {
+        logger.error('MQTT heartbeat cron failed', { err: err.message });
+      }
+    });
+  } else {
+    logger.info('MQTT cron jobs disabled (MQTT_ENABLED != true)');
+  }
 
   // AI Receptionist: cleanup stale call sessions every 30s
   cron.schedule('*/30 * * * * *', async () => {

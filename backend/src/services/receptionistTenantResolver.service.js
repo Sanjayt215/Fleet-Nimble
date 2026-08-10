@@ -11,7 +11,7 @@ const TENANT_STATE = {
   persistenceAvailable: false,
 };
 
-let lastValidationTime = 0;
+const validationCache = new Map();
 const VALIDATION_CACHE_MS = 300000;
 
 const OWNER_CONFIGURED = Boolean(
@@ -37,32 +37,48 @@ function resolveCompanyId(userRecord) {
   return null;
 }
 
+async function withValidationCache(key, fetcher) {
+  const now = Date.now();
+  const hit = validationCache.get(key);
+  if (hit && now - hit.at < VALIDATION_CACHE_MS) return hit.value;
+
+  const outcome = await fetcher();
+  if (outcome.cache) {
+    validationCache.set(key, { value: outcome.value, at: now });
+  }
+  return outcome.value;
+}
+
 async function validateCompany(companyId) {
   if (!companyId) return false;
-  try {
-    const company = await prisma.company.findUnique({
-      where: { id: companyId },
-      select: { id: true },
-    });
-    return Boolean(company);
-  } catch {
-    return false;
-  }
+  return withValidationCache(`company:${companyId}`, async () => {
+    try {
+      const company = await prisma.company.findUnique({
+        where: { id: companyId },
+        select: { id: true },
+      });
+      return { cache: true, value: Boolean(company) };
+    } catch {
+      return { cache: false, value: false };
+    }
+  });
 }
 
 async function validateUser(userId) {
   if (!userId) return { valid: false, user: null };
-  try {
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { id: true, companyId: true, deletedAt: true },
-    });
-    if (!user) return { valid: false, user: null };
-    if (user.deletedAt !== null) return { valid: false, user: null };
-    return { valid: true, user };
-  } catch {
-    return { valid: false, user: null };
-  }
+  return withValidationCache(`user:${userId}`, async () => {
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, companyId: true, deletedAt: true },
+      });
+      if (!user) return { cache: true, value: { valid: false, user: null } };
+      if (user.deletedAt !== null) return { cache: true, value: { valid: false, user: null } };
+      return { cache: true, value: { valid: true, user } };
+    } catch {
+      return { cache: false, value: { valid: false, user: null } };
+    }
+  });
 }
 
 function buildOwnerState(validation) {
@@ -153,7 +169,6 @@ export async function resolveTenant(input) {
   TENANT_STATE.ownerValidated = ownerValidated;
   TENANT_STATE.companyValidated = companyValidated;
   TENANT_STATE.persistenceAvailable = persistenceAvailable;
-  lastValidationTime = Date.now();
 
   logger.info('TENANT_RESOLUTION_COMPLETE', {
     resolved: persistenceAvailable,
@@ -250,5 +265,5 @@ export function clearCache() {
   TENANT_STATE.ownerValidated = false;
   TENANT_STATE.companyValidated = false;
   TENANT_STATE.persistenceAvailable = false;
-  lastValidationTime = 0;
+  validationCache.clear();
 }
