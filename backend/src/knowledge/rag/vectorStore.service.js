@@ -21,7 +21,7 @@ export function isPgvectorEnabled() {
 
 export async function storeEmbedding(articleId, chunkIndex, chunkText, embedding, metadata = {}) {
   const { default: prisma } = await import('../../utils/prisma.js');
-  const { createHash } = await import('crypto');
+  const { createHash, randomUUID } = await import('crypto');
   const contentHash = createHash('sha256').update(chunkText).digest('hex');
 
   if (_usePgvector && embedding) {
@@ -31,13 +31,16 @@ export async function storeEmbedding(articleId, chunkIndex, chunkText, embedding
       `INSERT INTO vector_embeddings (id, article_id, chunk_index, chunk_text, embedding, embedding_model, embedding_version, content_hash, metadata)
        VALUES ($1, $2, $3, $4, $5::vector($6), $7, $8, $9, $10)
        ON CONFLICT (id) DO UPDATE SET embedding = $5::vector($6), content_hash = $9, updated_at = NOW()`,
-      crypto.randomUUID(), articleId, chunkIndex, chunkText, vectorStr, dims,
+      randomUUID(), articleId, chunkIndex, chunkText, vectorStr, dims,
       metadata.embeddingModel || 'text-embedding-ada-002',
       metadata.embeddingVersion || 1,
       contentHash,
       JSON.stringify(metadata)
     );
   } else {
+    // JSON fallback: persist the embedding inside the metadata Json column so
+    // similaritySearch can still score it semantically without pgvector.
+    const storedMetadata = embedding ? { ...metadata, _embedding: embedding } : metadata;
     await prisma.vectorEmbedding.upsert({
       where: { id: `${articleId}_${chunkIndex}` },
       create: {
@@ -48,12 +51,12 @@ export async function storeEmbedding(articleId, chunkIndex, chunkText, embedding
         embeddingModel: metadata.embeddingModel || 'text-embedding-ada-002',
         embeddingVersion: metadata.embeddingVersion || 1,
         contentHash,
-        metadata,
+        metadata: storedMetadata,
       },
       update: {
         chunkText,
         contentHash,
-        metadata,
+        metadata: storedMetadata,
         embeddingVersion: metadata.embeddingVersion || 1,
       },
     });
@@ -132,8 +135,9 @@ export async function similaritySearch(queryEmbedding, options = {}) {
 
   const scored = [];
   for (const ve of allEmbeddings) {
-    if (ve.embedding && Array.isArray(ve.embedding)) {
-      const sim = cosineSimilarity(queryEmbedding, ve.embedding);
+    const stored = Array.isArray(ve.embedding) ? ve.embedding : (Array.isArray(ve.metadata?._embedding) ? ve.metadata._embedding : null);
+    if (stored) {
+      const sim = cosineSimilarity(queryEmbedding, stored);
       if (sim >= minScore) {
         scored.push({
           id: ve.id,

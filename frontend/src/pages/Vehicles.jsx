@@ -47,8 +47,7 @@ export default function Vehicles() {
           return [vehicle, ...prev];
         });
       },
-    },
-    isDemo ? null : null
+    }
   );
 
   const filteredVehicles = useMemo(() => {

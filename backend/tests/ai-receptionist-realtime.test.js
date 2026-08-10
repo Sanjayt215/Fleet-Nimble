@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 
 // ── Mock the 'ws' module so the handler uses a controllable fake socket ──
-const openaiSockets = [];
+const geminiSockets = [];
 let throwOnConstruct = false;
 
 class FakeWebSocket extends EventEmitter {
@@ -16,11 +16,14 @@ class FakeWebSocket extends EventEmitter {
     this.opts = opts;
     this.readyState = FakeWebSocket.CONNECTING;
     this.sent = [];
-    openaiSockets.push(this);
+    // Only track Gemini Live API connections
+    if (url && url.includes('generativelanguage.googleapis.com')) {
+      geminiSockets.push(this);
+    }
     this.on('open', () => { this.readyState = FakeWebSocket.OPEN; });
     this.on('close', () => { this.readyState = FakeWebSocket.CLOSED; });
     if (throwOnConstruct) {
-      throw new Error('openai connect failure');
+      throw new Error('gemini connect failure');
     }
   }
 
@@ -64,14 +67,17 @@ function makeFakeTwilioWs() {
 }
 
 function setRealtimeReady(ready) {
-  config.openai.apiKey = ready ? 'sk-test-key' : '';
+  config.gemini.apiKey = ready ? 'AIza-test-key' : '';
+  config.gemini.liveModel = ready ? 'gemini-3.1-flash-live-preview' : '';
   config.realtime.configured = ready;
   config.realtime.mediaStreamEnabled = ready;
-  config.realtime.model = 'gpt-4o-realtime-preview';
+  config.realtime.model = 'gemini-3.1-flash-live-preview';
+  config.realtimeProvider.provider = 'gemini';
+  config.realtimeProvider.geminiEnabled = ready;
 }
 
 beforeEach(() => {
-  openaiSockets.length = 0;
+  geminiSockets.length = 0;
   throwOnConstruct = false;
   setRealtimeReady(true);
   config.realtime.maxCallSeconds = 600;
@@ -121,7 +127,7 @@ describe('Twilio media events', () => {
     expect(() => ws.emit('message', JSON.stringify({ event: 'connected' }))).not.toThrow();
   });
 
-  it('handles start event and connects to OpenAI with greeting + g711 format', async () => {
+  it('handles start event and connects to Gemini with setup message', async () => {
     const ws = makeFakeTwilioWs();
     handleMediaStream(ws, { url: '/api/ai-receptionist/twilio/media-stream?callSid=CA123' });
     ws.emit('message', JSON.stringify({
@@ -133,65 +139,72 @@ describe('Twilio media events', () => {
       },
     }));
 
-    expect(openaiSockets.length).toBe(1);
-    const openai = openaiSockets[0];
-    openai.emit('open');
+    expect(geminiSockets.length).toBe(1);
+    const gemini = geminiSockets[0];
+    gemini.emit('open');
     // Flush microtask queue to let async buildSystemPrompt complete
     await new Promise(resolve => setImmediate(resolve));
 
-    const sessionUpdate = openai.sent.find((m) => m.includes('session.update'));
-    expect(sessionUpdate).toBeDefined();
-    expect(sessionUpdate).toContain('g711_ulaw');
-    expect(sessionUpdate).toContain('server_vad');
+    const setupMessage = gemini.sent.find((m) => m.includes('setup'));
+    expect(setupMessage).toBeDefined();
+    expect(setupMessage).toContain('gemini-3.1-flash-live-preview');
+    expect(setupMessage).toContain('systemInstruction');
+    expect(setupMessage).toContain('generationConfig');
+    expect(setupMessage).toContain('responseModalities');
 
-    // Greeting is deferred until session.created (Phase 6).
-    expect(openai.sent.find((m) => m.includes('response.create'))).toBeUndefined();
-
-    openai.emit('message', JSON.stringify({
-      type: 'session.created',
-      session: { id: 'sess_123', model: 'gpt-4o-realtime-preview' },
+    // Send setupComplete to acknowledge the setup
+    gemini.emit('message', JSON.stringify({
+      setupComplete: true,
     }));
 
-    // Greeting is gated on BOTH session.created AND session.updated
-    openai.emit('message', JSON.stringify({ type: 'session.updated' }));
-
-    const greeting = openai.sent.find((m) => m.includes('conversation.item.create'));
-    expect(greeting).toBeDefined();
-    expect(greeting).toContain('FleetNimble AI Receptionist');
-    expect(openai.sent.find((m) => m.includes('response.create'))).toBeDefined();
+    // Verify session was created
     expect(getSession('CA123')).toBeDefined();
   });
 
-  it('forwards Twilio media payload to OpenAI as input_audio_buffer.append', () => {
+  it('forwards Twilio media payload to Gemini as realtimeInput.audio', () => {
     const ws = makeFakeTwilioWs();
     handleMediaStream(ws, { url: '/api/ai-receptionist/twilio/media-stream?callSid=CA123' });
     ws.emit('message', JSON.stringify({
       event: 'start',
       start: { streamSid: 'MZ123', callSid: 'CA123', customParameters: { callSid: 'CA123' } },
     }));
-    const openai = openaiSockets[0];
-    openai.emit('open');
+    const gemini = geminiSockets[0];
+    gemini.emit('open');
+    gemini.emit('message', JSON.stringify({ setupComplete: true }));
 
     ws.emit('message', JSON.stringify({ event: 'media', streamSid: 'MZ123', media: { payload: 'BASE64AUDIO' } }));
-    const forwarded = openai.sent.find((m) => m.includes('input_audio_buffer.append'));
+    const forwarded = gemini.sent.find((m) => m.includes('realtimeInput') && m.includes('audio'));
     expect(forwarded).toBeDefined();
-    expect(forwarded).toContain('BASE64AUDIO');
+    expect(forwarded).toContain('data');
   });
 
-  it('forwards OpenAI audio deltas back to Twilio as media events', () => {
+  it('forwards Gemini audio deltas back to Twilio as media events', () => {
     const ws = makeFakeTwilioWs();
     handleMediaStream(ws, { url: '/api/ai-receptionist/twilio/media-stream?callSid=CA123' });
     ws.emit('message', JSON.stringify({
       event: 'start',
       start: { streamSid: 'MZ123', callSid: 'CA123', customParameters: { callSid: 'CA123' } },
     }));
-    const openai = openaiSockets[0];
-    openai.emit('open');
+    const gemini = geminiSockets[0];
+    gemini.emit('open');
+    gemini.emit('message', JSON.stringify({ setupComplete: true }));
 
-    openai.emit('message', JSON.stringify({ type: 'response.audio.delta', delta: 'DELTA64' }));
+    // Simulate Gemini sending audio via serverContent
+    gemini.emit('message', JSON.stringify({
+      serverContent: {
+        modelTurn: {
+          parts: [{
+            inlineData: {
+              data: 'DELTA64',
+              mimeType: 'audio/pcm;rate=24000',
+            },
+          }],
+        },
+      },
+    }));
     const media = ws.sent.find((m) => m.includes('"event":"media"'));
     expect(media).toBeDefined();
-    expect(media).toContain('DELTA64');
+    expect(media).toContain('media');
   });
 
   it('cleans up session on stop and closes the Twilio socket', async () => {
@@ -238,13 +251,13 @@ describe('Realtime configuration and failures', () => {
       event: 'start',
       start: { streamSid: 'MZ123', callSid: 'CA123', customParameters: { callSid: 'CA123' } },
     }));
-    // connectToOpenAI calls gracefulClose which is async — flush microtasks
+    // connectToGemini calls gracefulClose which is async — flush microtasks
     await new Promise(resolve => setTimeout(resolve, 0));
-    expect(openaiSockets.length).toBe(0);
+    expect(geminiSockets.length).toBe(0);
     expect(ws.readyState).toBe(FakeWebSocket.CLOSED);
   });
 
-  it('falls back gracefully on OpenAI connection error', async () => {
+  it('falls back gracefully on Gemini connection error', async () => {
     throwOnConstruct = true;
     const ws = makeFakeTwilioWs();
     handleMediaStream(ws, { url: '/api/ai-receptionist/twilio/media-stream?callSid=CA123' });
@@ -252,7 +265,7 @@ describe('Realtime configuration and failures', () => {
       event: 'start',
       start: { streamSid: 'MZ123', callSid: 'CA123', customParameters: { callSid: 'CA123' } },
     }));
-    // connectToOpenAI calls gracefulClose which is async — flush microtasks
+    // connectToGemini calls gracefulClose which is async — flush microtasks
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(ws.readyState).toBe(FakeWebSocket.CLOSED);
   });

@@ -478,7 +478,19 @@ export function cleanupRateLimitData() {
 }
 
 // Run cleanup every minute
-setInterval(cleanupRateLimitData, 60000);
+let securityCleanupInterval = null;
+
+export function startSecurityCleanup() {
+  if (securityCleanupInterval) return;
+  securityCleanupInterval = setInterval(cleanupRateLimitData, 60000);
+}
+
+export function stopSecurityCleanup() {
+  if (securityCleanupInterval) {
+    clearInterval(securityCleanupInterval);
+    securityCleanupInterval = null;
+  }
+}
 
 /**
  * Security compliance check

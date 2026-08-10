@@ -366,7 +366,7 @@ describe('Phase 7 — Customer Lookup', () => {
 
     const findArgs = prismaMock.receptionistCustomer.findFirst.mock.calls[0][0];
     expect(findArgs.where.userId).toBe('e8191a8a-26bd-4cdf-b967-475c313a25a7');
-    expect(findArgs.where.phone).toBe('+1234567890');
+    expect(findArgs.where.OR[0].phone).toBe('+1234567890');
   });
 
   it('customer lookup with different userId returns null', async () => {

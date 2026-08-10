@@ -405,10 +405,22 @@ export async function cleanupOldConversationSummaries() {
 }
 
 // Run cleanup daily
-setInterval(() => {
-  cleanupOldConversationContexts().catch(err => logger.error('Cleanup failed', { error: err.message }));
-  cleanupOldConversationSummaries().catch(err => logger.error('Cleanup failed', { error: err.message }));
-}, 24 * 60 * 60 * 1000);
+let memoryCleanupInterval = null;
+
+export function startMemoryCleanup() {
+  if (memoryCleanupInterval) return;
+  memoryCleanupInterval = setInterval(() => {
+    cleanupOldConversationContexts().catch(err => logger.error('Cleanup failed', { error: err.message }));
+    cleanupOldConversationSummaries().catch(err => logger.error('Cleanup failed', { error: err.message }));
+  }, 24 * 60 * 60 * 1000);
+}
+
+export function stopMemoryCleanup() {
+  if (memoryCleanupInterval) {
+    clearInterval(memoryCleanupInterval);
+    memoryCleanupInterval = null;
+  }
+}
 
 /**
  * Save conversation context for follow-up support

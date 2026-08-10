@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import api, { TOKEN_KEY, REFRESH_KEY, clearTokens, getAccessToken, getRefreshToken } from '../services/api';
+import { resetSocket, updateSocketAuth } from '../services/socket';
 
 export const AuthContext = createContext(null);
 
@@ -11,6 +12,7 @@ export function AuthProvider({ children }) {
 
   const goToLogin = useCallback((reason) => {
     clearTokens();
+    resetSocket();
     setUser(null);
     setSessionExpired(true);
     setAuthError(reason || 'Your session expired. Please sign in again.');
@@ -47,6 +49,7 @@ export function AuthProvider({ children }) {
           if (newAccess) {
             localStorage.setItem(TOKEN_KEY, newAccess);
             if (newRefresh) localStorage.setItem(REFRESH_KEY, newRefresh);
+            updateSocketAuth();
             const { data: profileData } = await api.get('/auth/profile');
             setUser(profileData.data?.user || profileData.user);
             setSessionExpired(false);
@@ -81,6 +84,7 @@ export function AuthProvider({ children }) {
   const storeTokens = (accessToken, refreshToken, userData) => {
     if (accessToken) localStorage.setItem(TOKEN_KEY, accessToken);
     if (refreshToken) localStorage.setItem(REFRESH_KEY, refreshToken);
+    updateSocketAuth();
     setUser(userData);
     setSessionExpired(false);
     setAuthError(null);
@@ -111,6 +115,7 @@ export function AuthProvider({ children }) {
       await api.post('/auth/logout', { refreshToken: rt });
     } catch { /* ignore */ }
     clearTokens();
+    resetSocket();
     setUser(null);
     setSessionExpired(false);
     setAuthError(null);
@@ -126,6 +131,7 @@ export function AuthProvider({ children }) {
       if (!newAccess) return false;
       localStorage.setItem(TOKEN_KEY, newAccess);
       if (newRefresh) localStorage.setItem(REFRESH_KEY, newRefresh);
+      updateSocketAuth();
       return true;
     } catch {
       return false;

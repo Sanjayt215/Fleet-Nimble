@@ -24,7 +24,6 @@ router.get('/health', (_req, res) => {
     module: 'ai-receptionist',
     twilioConfigured: config.twilio.configured,
     phoneConfigured: config.twilio.phoneConfigured,
-    phoneNumber: config.twilio.phoneNumber || null,
     mediaStreamEnabled: config.realtime.mediaStreamEnabled,
     businessToolsEnabled: config.realtime.businessToolsEnabled,
     modelConfigured: Boolean(config.realtime.model),

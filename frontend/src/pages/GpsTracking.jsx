@@ -131,8 +131,7 @@ export default function GpsTracking() {
           return prev;
         });
       }
-    },
-    isDemo ? null : null // Listen to all vehicles
+    }
   );
 
   // Load live data

@@ -3,30 +3,40 @@ import logger from '../utils/logger.js';
 
 const TRANSCRIPT_CHUNK_SIZE = 5;
 const pendingUpdates = new Map();
+const flushChains = new Map();
+
+function enqueueFlush(callId, fn) {
+  const prev = flushChains.get(callId) || Promise.resolve();
+  const next = prev.then(fn, fn);
+  flushChains.set(callId, next);
+  return next;
+}
 
 export async function saveTranscriptChunk(callId, entries) {
-  try {
-    const call = await prisma.aiReceptionistCall.findUnique({
-      where: { id: callId },
-      select: { transcript: true },
-    });
-    if (!call) return;
-
-    let existing = [];
+  return enqueueFlush(callId, async () => {
     try {
-      existing = call.transcript ? JSON.parse(call.transcript) : [];
-    } catch {
-      existing = [];
-    }
+      const call = await prisma.aiReceptionistCall.findUnique({
+        where: { id: callId },
+        select: { transcript: true },
+      });
+      if (!call) return;
 
-    const updated = [...existing, ...entries];
-    await prisma.aiReceptionistCall.update({
-      where: { id: callId },
-      data: { transcript: JSON.stringify(updated) },
-    });
-  } catch (err) {
-    logger.error('TRANSCRIPT_SAVE_ERROR', { callId, error: err.message });
-  }
+      let existing = [];
+      try {
+        existing = call.transcript ? JSON.parse(call.transcript) : [];
+      } catch {
+        existing = [];
+      }
+
+      const updated = [...existing, ...entries];
+      await prisma.aiReceptionistCall.update({
+        where: { id: callId },
+        data: { transcript: JSON.stringify(updated) },
+      });
+    } catch (err) {
+      logger.error('TRANSCRIPT_SAVE_ERROR', { callId, error: err.message });
+    }
+  });
 }
 
 export function bufferTranscriptEntry(callId, entry) {

@@ -138,7 +138,10 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
 
       this._emit('connected', { provider: 'gemini', model: this._model });
 
-      this._sendSetup().then(() => this._startHeartbeat());
+      this._sendSetup().then(() => this._startHeartbeat()).catch(err => {
+        logger.error('GEMINI_SETUP_FAILED', { callSid: this._callSid, error: err.message });
+        this._emit('error', { code: 'setup_failed', error: err.message });
+      });
     });
 
     this._ws.on('message', (data) => {

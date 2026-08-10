@@ -16,6 +16,7 @@ const getNav = (basePath) => [
   { to: `${basePath}/reports`, label: 'Reports & Alerts', icon: '📈' },
   { to: `${basePath}/ai-assistant`, label: 'AI Assistant', icon: '🤖' },
   { to: `${basePath}/ai-receptionist`, label: 'AI Receptionist', icon: '📞' },
+  { to: `${basePath}/fleet-brain`, label: 'Fleet Brain', icon: '🧠' },
   { to: `${basePath}/settings`, label: 'Settings', icon: '⚙️' },
   { to: `${basePath}/admin`, label: 'Admin', icon: '🛡️', adminOnly: true },
 ];

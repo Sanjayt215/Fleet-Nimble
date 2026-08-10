@@ -1,5 +1,6 @@
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { readFileSync } from 'fs';
 import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 import { JsonKnowledgeProvider } from './providers/jsonProvider.js';
@@ -11,6 +12,21 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const KNOWLEDGE_BASE_PATH = process.env.FLEETNIMBLE_KNOWLEDGE_PATH || join(__dirname, 'content', 'fleetnimble-knowledge.json');
 const MARKDOWN_CONTENT_DIR = process.env.FLEETNIMBLE_MD_KNOWLEDGE_DIR || null;
 const KNOWLEDGE_PROVIDER_ORDER = config.knowledge.providerOrder;
+
+function loadJsonArticles() {
+  try {
+    const raw = readFileSync(KNOWLEDGE_BASE_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    const articles = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.articles) ? parsed.articles : []);
+    if (articles.length > 0) {
+      logger.info('KNOWLEDGE_JSON_ARTICLES_LOADED', { path: KNOWLEDGE_BASE_PATH, articles: articles.length });
+    }
+    return articles;
+  } catch (err) {
+    logger.warn('KNOWLEDGE_JSON_LOAD_FAILED', { path: KNOWLEDGE_BASE_PATH, error: err.message });
+    return [];
+  }
+}
 
 const UNKNOWN_ANSWER = "I don't have verified information about that. Let me connect you with a FleetNimble specialist who can help. Would you like me to schedule a follow-up or create a support ticket?";
 const SALES_UNKNOWN_ANSWER = "I don't have specific information about that feature yet. However, I can schedule a personalized demo with our product team who can show you exactly how FleetNimble handles that. Would you like to book a demo?";
@@ -32,7 +48,7 @@ class FleetNimbleKnowledgeEngine {
     if (this.initialized) return true;
 
     const providerMap = {
-      json: () => new JsonKnowledgeProvider(),
+      json: () => new JsonKnowledgeProvider(loadJsonArticles()),
       markdown: () => new MarkdownKnowledgeProvider(MARKDOWN_CONTENT_DIR),
       synchronized: () => new SynchronizedContentProvider(),
       database: () => new DatabaseKnowledgeProvider(),
@@ -46,7 +62,11 @@ class FleetNimbleKnowledgeEngine {
       }
       try {
         const provider = factory();
-        await provider.initialize();
+        const ok = await provider.initialize();
+        if (ok === false) {
+          logger.warn('KNOWLEDGE_PROVIDER_INIT_FAILED', { name });
+          continue;
+        }
         this.providers.push(provider);
         logger.info('KNOWLEDGE_PROVIDER_REGISTERED', { name: provider.name, type: provider.type });
       } catch (err) {
@@ -55,7 +75,7 @@ class FleetNimbleKnowledgeEngine {
     }
 
     if (this.providers.length === 0) {
-      const jsonProvider = new JsonKnowledgeProvider();
+      const jsonProvider = new JsonKnowledgeProvider(loadJsonArticles());
       await jsonProvider.initialize();
       this.providers.push(jsonProvider);
       logger.warn('KNOWLEDGE_FALLBACK_TO_JSON', { reason: 'no_providers_initialized' });

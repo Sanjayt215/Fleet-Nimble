@@ -24,9 +24,22 @@ import * as callService from './receptionistCall.service.js';
 import { redirectToGreeting, redirectToUnavailable } from './twilioWebhook.service.js';
 import * as providerHealth from './receptionistProviderHealth.service.js';
 import * as metrics from './receptionistMetrics.service.js';
-import { resolveTenant, isPersistenceAvailable, getResolvedOwner } from './receptionistTenantResolver.service.js';
+import { resolveTenant, isPersistenceAvailable } from './receptionistTenantResolver.service.js';
 import { createRealtimeVoiceProvider, isRealtimeProviderEnabled } from '../providers/realtime/realtimeVoiceProviderFactory.js';
 import { validateTwilioPayload } from './audio/twilioAudioCodec.js';
+import { shouldUseMultiAgent } from '../multiagent/index.js';
+import { orchestrateConversationTurn } from '../multiagent/integrations/conversationBridge.js';
+import {
+  recordTimelineEvent,
+  TIMELINE_EVENT_TYPES,
+} from './conversationTimeline.service.js';
+import { logCallStarted, logIntentDetected, logToolStarted, logToolCompleted, logCrmUpdated, logCallCompleted } from '../utils/callAudit.js';
+import { qualifyLeadFromText, persistLeadProfile } from './leadQualification.service.js';
+import { generateConversationSummaries } from './conversationSummary.service.js';
+import { computeConversationAnalytics } from './conversationAnalytics.service.js';
+import { supervise } from './callSupervisor.service.js';
+import { getFleetBrain } from '../fleetBrain/fleetBrain.service.js';
+import { normalizeSchedulingArgs, missingBookingFields, toSafeBookingLog } from '../utils/scheduling.js';
 
 const MAX_RECONNECT_ATTEMPTS = 2; // Phase 3 — max 2 retries, then redirect to greeting
 const GREETING_AUDIO_TIMEOUT_MS = 10000;
@@ -102,16 +115,156 @@ function handleMediaStream(ws, req) {
     speechEvents: 0,
     transcriptionEvents: 0,
   };
+  let callStartTs = null;
   // Phase 5 — zero-audio detection
   let responseCreatedSeen = false;
   let responseAudioSeen = false;
   let pipelineFailStage = null;
   let pipelineFailReason = null;
+  // Multi-agent runtime — only engaged when AI_RECEPTIONIST_MULTIAGENT_ENABLED=true
+  let multiAgentResponding = false;
+  // Conversation intelligence — live stages, interruptions and call-end artifacts
+  let interruptionCount = 0;
+  let silenceMs = 0;
+  let lastActivityAt = Date.now();
+
+  function emitCallStage(stage, label, data = {}) {
+    emitSocketEvent('call.stage', {
+      callSid,
+      callId: callRecordId,
+      stage,
+      label,
+      timestamp: new Date().toISOString(),
+      ...data,
+    });
+  }
+
+  async function recordTimeline(eventType, label, data = {}) {
+    if (!callRecordId && !callSid) return null;
+    try {
+      return await recordTimelineEvent({
+        userId,
+        callId: callRecordId,
+        callSid,
+        eventType,
+        label,
+        data,
+      });
+    } catch (err) {
+      logger.warn('TIMELINE_RECORD_FAILED', { callSid, eventType, error: err.message });
+      return null;
+    }
+  }
 
   function emitSocketEvent(event, data) {
     if (ioInstance && userId) {
       ioInstance.to(`user:${userId}`).emit(event, data);
       logger.debug('SOCKET_EVENT_SENT', { event, userId, callSid });
+    }
+  }
+
+  async function runMultiAgentTurn(text) {
+    if (!provider || !provider.isReady || multiAgentResponding) return;
+    emitCallStage('thinking', 'Thinking');
+    await recordTimeline(TIMELINE_EVENT_TYPES.AGENT_RUN_STARTED, 'Agent run started', { message: text.substring(0, 120) });
+    const result = await orchestrateConversationTurn({
+      userId,
+      callId: callRecordId,
+      callSid,
+      message: text,
+      context: {
+        callerPhone,
+        callerName: collectedData.callerName || null,
+        callerEmail: collectedData.callerEmail || null,
+        companyId,
+        callId: callRecordId,
+        companyName: collectedData.company || null,
+        fleetSize: collectedData.fleetSize ?? null,
+      },
+    });
+    if (result?.intent && result.intent !== currentIntent) {
+      currentIntent = result.intent;
+      logIntentDetected({ userId, callId: callRecordId, callSid, intent: result.intent, confidence: result.confidence });
+      emitSocketEvent('intent.changed', {
+        callSid, intent: result.intent, confidence: result.confidence, timestamp: new Date().toISOString(),
+      });
+    }
+    await recordTimeline(TIMELINE_EVENT_TYPES.AGENT_RUN_COMPLETED, 'Agent run completed', {
+      runId: result?.runId,
+      intent: result?.intent,
+      status: result?.status,
+      agents: Object.keys(result?.agents || {}),
+    });
+    if (result?.reply) {
+      multiAgentResponding = true;
+      try {
+        if (provider.cancelResponse) await provider.cancelResponse();
+        const ok = await provider.sendText(result.reply);
+        if (ok) {
+          emitCallStage('ai-speaking', 'AI Speaking', { runId: result.runId, intent: result.intent });
+          logger.info('MULTI_AGENT_REPLY_SENT', {
+            callSid, runId: result.runId, intent: result.intent, status: result.status,
+            reply: result.reply.substring(0, 80),
+          });
+        } else {
+          multiAgentResponding = false;
+          logger.warn('MULTI_AGENT_REPLY_SEND_FAILED', { callSid, runId: result.runId });
+        }
+      } catch (err) {
+        multiAgentResponding = false;
+        logger.warn('MULTI_AGENT_REPLY_ERROR', { callSid, error: err.message });
+      }
+    }
+  }
+
+  async function runFleetBrainTurn(text) {
+    const brain = getFleetBrain();
+    if (!brain.isEnabled() || !userId || !text) return;
+    const context = await brain.getContext(userId, {
+      force: false,
+      session: {
+        callId: callRecordId,
+        intent: currentIntent,
+        customer: customerMemory?.customer || null,
+        transcriptEntries: callTranscriptBuffer.slice(-6),
+      },
+    });
+    const plan = await brain.buildPlan({
+      userId,
+      message: text,
+      context,
+      customer: customerMemory?.customer || null,
+    });
+    if (!plan) return;
+    if (plan.intent && plan.intent !== currentIntent) {
+      currentIntent = plan.intent;
+      logIntentDetected({ userId, callId: callRecordId, callSid, intent: plan.intent, confidence: null });
+      emitSocketEvent('intent.changed', {
+        callSid, intent: plan.intent, confidence: null, timestamp: new Date().toISOString(),
+      });
+    }
+    await recordTimeline(TIMELINE_EVENT_TYPES.FLEET_BRAIN_PLAN, 'Fleet Brain plan', {
+      intent: plan.intent,
+      skill: plan.skill,
+      requiredTools: plan.requiredTools,
+      missingInformation: plan.missingInformation,
+      nextAction: plan.nextAction,
+    });
+    if (plan.requiredTools?.length > 0) {
+      const record = await brain.runWorkflow({
+        userId,
+        companyId,
+        callId: callRecordId,
+        trigger: 'turn',
+        message: text,
+        context,
+        skillName: plan.skill || null,
+      });
+      await recordTimeline(TIMELINE_EVENT_TYPES.FLEET_BRAIN_WORKFLOW, 'Fleet Brain workflow', {
+        runId: record?.id,
+        status: record?.status,
+        workflowType: record?.workflowType,
+      });
     }
   }
 
@@ -149,6 +302,8 @@ function handleMediaStream(ws, req) {
       rtmSession.diagGreetingRequestTime = Date.now();
       rtmSession.setState(RealtimeSessionManager.STATES.GREETING);
     }
+    recordTimeline(TIMELINE_EVENT_TYPES.GREETING_SENT, 'Greeting sent', { personalized: !!customerMemory });
+    emitCallStage('ai-speaking', 'AI Speaking', { phase: 'greeting' });
     if (provider && provider.isConnected) {
       const greetingText = customerMemory?.isReturning && customerMemory?.customer?.name
         ? `Welcome back, ${customerMemory.customer.name}. Last time we discussed FleetNimble. How may I help you today?`
@@ -190,23 +345,45 @@ function handleMediaStream(ws, req) {
 
       case 'create_appointment': {
         if (!BUSINESS_TOOLS_ENABLED) {
-          logger.warn('VOICE_AGENT_TOOL_FAILED', { tool: 'create_appointment', error: 'feature_disabled', callSid });
+          logger.warn('BOOKING_TOOL_CALLED', { tool: 'create_appointment', callSid, status: 'feature_disabled' });
           return { error: 'feature_disabled', message: 'Business tools are currently disabled' };
         }
 
-        collectedData.callerName = collectedData.callerName || args?.callerName;
-        collectedData.company = collectedData.company || args?.companyName;
-        collectedData.fleetSize = collectedData.fleetSize || args?.fleetSize;
-        collectedData.email = collectedData.email || args?.email;
-        collectedData.phone = collectedData.phone || args?.phone;
-        collectedData.meetingPurpose = collectedData.meetingPurpose || args?.meetingPurpose;
+        logger.info('BOOKING_TOOL_CALLED', {
+          callSid, callId: callRecordId, args: toSafeBookingLog(args),
+        });
 
-        if (args?.scheduledDateTime) {
-          const dt = new Date(args.scheduledDateTime);
-          if (!isNaN(dt.getTime())) {
-            collectedData.preferredDate = dt.toISOString().split('T')[0];
-            collectedData.preferredTime = dt.toTimeString().split(' ')[0].substring(0, 5);
-          }
+        const normalized = normalizeSchedulingArgs(args || {});
+        collectedData.callerName = collectedData.callerName || normalized.callerName;
+        collectedData.company = collectedData.company || normalized.company;
+        collectedData.fleetSize = collectedData.fleetSize ?? normalized.fleetSize;
+        collectedData.email = collectedData.email || normalized.email;
+        collectedData.phone = collectedData.phone || normalized.phone;
+        collectedData.industry = collectedData.industry || normalized.industry;
+        collectedData.meetingPurpose = collectedData.meetingPurpose || normalized.meetingPurpose;
+        collectedData.timezone = collectedData.timezone || normalized.timezone;
+        collectedData.durationMinutes = collectedData.durationMinutes || normalized.durationMinutes;
+        if (normalized.scheduledDateTime) collectedData.scheduledDateTime = normalized.scheduledDateTime;
+        if (normalized.preferredDate) collectedData.preferredDate = normalized.preferredDate;
+        if (normalized.preferredTime) collectedData.preferredTime = normalized.preferredTime;
+
+        const missing = missingBookingFields(collectedData);
+        logger.info('BOOKING_ARGUMENTS_VALIDATED', {
+          callSid, callId: callRecordId, missing, collectedData: toSafeBookingLog(collectedData),
+        });
+
+        if (missing.length > 0) {
+          logger.warn('BOOKING_VALIDATION_INCOMPLETE', {
+            callSid, callId: callRecordId, missing,
+          });
+          result = {
+            success: false,
+            retryable: false,
+            missing_fields: missing,
+            message: `The booking is missing required details: ${missing.join(', ')}. Ask the caller for the missing information before booking.`,
+            error: 'missing_required_fields',
+          };
+          break;
         }
 
         const session = {
@@ -247,7 +424,12 @@ function handleMediaStream(ws, req) {
             sessionId: callRecordId,
             conversationState: currentStage,
           });
-          result = { success: false, message: orchestratorResult.reply || 'Unable to create the appointment.', error: 'creation_failed' };
+          result = {
+            success: false,
+            retryable: orchestratorResult.retryable === false ? false : undefined,
+            message: orchestratorResult.reply || 'Unable to create the appointment.',
+            error: orchestratorResult.error || 'creation_failed',
+          };
         }
         break;
       }
@@ -340,7 +522,7 @@ function handleMediaStream(ws, req) {
 
       case 'update_conversation_memory': {
         if (args?.key && args?.value && userId) {
-          const { default: prisma } = await import('../prisma/index.js');
+          const { default: prisma } = await import('../utils/prisma.js');
           await prisma.aiUserPreference.upsert({
             where: { userId_key: { userId, key: `call_memory_${args.key}` } },
             create: { userId, key: `call_memory_${args.key}`, value: args.value },
@@ -409,6 +591,19 @@ function handleMediaStream(ws, req) {
     }
 
     logger.info('TOOL_CALL_EXECUTING', { callSid, functionName, args });
+    logToolStarted({ userId, callId: callRecordId, callSid, tool: functionName, args });
+
+    const stageForTool = (name) => {
+      if (name === 'retrieve_knowledge') return { stage: 'searching', label: 'Searching Knowledge' };
+      if (name === 'create_appointment') return { stage: 'booking-demo', label: 'Booking Demo' };
+      if (name === 'lookup_customer' || name === 'save_customer_note' || name === 'update_conversation_memory') return { stage: 'saving-crm', label: 'Saving to CRM' };
+      return { stage: 'executing-tool', label: 'Executing Tool' };
+    };
+    const stageInfo = stageForTool(functionName);
+    emitCallStage(stageInfo.stage, stageInfo.label, { tool: functionName });
+    if (functionName === 'retrieve_knowledge') {
+      await recordTimeline(TIMELINE_EVENT_TYPES.KNOWLEDGE_SEARCHED, 'Knowledge search', { query: args?.query });
+    }
 
     let lastError = null;
     const maxRetries = functionName === 'lookup_customer' ? 0 : MAX_TOOL_RETRIES;
@@ -424,9 +619,10 @@ function handleMediaStream(ws, req) {
           timeoutPromise,
         ]);
 
-        if (result && result.success === false && attempt < maxRetries) {
+        if (result && result.success === false && result.retryable !== false && attempt < maxRetries) {
           lastError = result.error || 'transient_failure';
           logger.warn('TOOL_RETRY', { callSid, functionName, attempt, error: lastError });
+          await recordTimeline(TIMELINE_EVENT_TYPES.SUPERVISOR_RETRY, 'Retrying failed operation', { tool: functionName, attempt: attempt + 1 });
           if (attempt < maxRetries - 1) {
             await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 500));
           }
@@ -457,13 +653,20 @@ function handleMediaStream(ws, req) {
             type: 'appointment_created',
             timestamp: new Date().toISOString(),
           });
+          logCrmUpdated({ userId, callId: callRecordId, callSid, customerId: result.customerId, operation: 'appointment_created' });
           logger.info('SOCKET_EVENT_SENT', { events: ['appointment.created', 'crm.updated', 'dashboard.refresh', 'analytics.refresh'], callSid });
         }
+
+        logToolCompleted({
+          userId, callId: callRecordId, callSid, tool: functionName,
+          success: !result?.error, data: { appointmentId: result?.appointmentId, ticketId: result?.ticketId },
+        });
 
         return result;
       } catch (err) {
         lastError = err.message;
         logger.warn('TOOL_RETRY', { callSid, functionName, attempt, error: err.message });
+        await recordTimeline(TIMELINE_EVENT_TYPES.SUPERVISOR_RETRY, 'Retrying failed operation', { tool: functionName, attempt: attempt + 1, error: err.message });
 
         if (attempt < maxRetries) {
           const delay = Math.pow(2, attempt) * 500;
@@ -483,6 +686,7 @@ function handleMediaStream(ws, req) {
           sessionId: callRecordId,
           conversationState: currentStage,
         });
+        logToolCompleted({ userId, callId: callRecordId, callSid, tool: functionName, success: false, error: err.message });
         return { success: false, message: 'I encountered an issue processing that request. Our team has been notified.', error: err.message };
       }
     }
@@ -623,6 +827,7 @@ function handleMediaStream(ws, req) {
         pipelineCounters.transcriptionEvents++;
         callTranscriptBuffer.push({ role: 'caller', content: data.text, timestamp: new Date().toISOString() });
         addTranscriptEntry(callSid, { role: 'caller', content: data.text });
+        emitCallStage('customer-speaking', 'Customer Speaking');
         if (legacySession?.metadata?.callLogId) {
           bufferTranscriptEntry(legacySession.metadata.callLogId, { role: 'caller', content: data.text, timestamp: new Date().toISOString() });
         }
@@ -636,6 +841,16 @@ function handleMediaStream(ws, req) {
           transcript.push({ role: 'caller', content: data.text, timestamp: new Date().toISOString() });
         }
         if (legacySession) legacySession.transcript = transcript.slice(-500);
+        if (shouldUseMultiAgent() && !multiAgentResponding) {
+          runMultiAgentTurn(data.text).catch((err) => {
+            logger.warn('MULTI_AGENT_TURN_FAILED', { callSid, error: err.message });
+          });
+        }
+        if (getFleetBrain().isEnabled() && !shouldUseMultiAgent()) {
+          runFleetBrainTurn(data.text).catch((err) => {
+            logger.warn('FLEET_BRAIN_TURN_FAILED', { callSid, error: err.message });
+          });
+        }
       });
 
       provider.on('assistantTranscript', (data) => {
@@ -659,6 +874,12 @@ function handleMediaStream(ws, req) {
 
       provider.on('speechStarted', () => {
         pipelineCounters.speechEvents++;
+        if (rtmSession?.state === RealtimeSessionManager.STATES.RESPONDING) {
+          interruptionCount++;
+          emitSocketEvent('call.interrupted', { callSid, count: interruptionCount, timestamp: new Date().toISOString() });
+        }
+        multiAgentResponding = false;
+        emitCallStage('customer-speaking', 'Customer Speaking');
         if (rtmSession) rtmSession.updateActivity();
         if (provider) provider.cancelResponse();
         if (currentToolCallId) {
@@ -678,9 +899,12 @@ function handleMediaStream(ws, req) {
       provider.on('responseStarted', () => {
         logger.info('AI_RESPONSE_STARTED', { callSid });
         responseCreatedSeen = true;
+        multiAgentResponding = true;
+        emitCallStage('ai-speaking', 'AI Speaking');
       });
 
       provider.on('responseCompleted', () => {
+        multiAgentResponding = false;
         if (rtmSession) {
           if (rtmSession.state === RealtimeSessionManager.STATES.RESPONDING ||
               rtmSession.state === RealtimeSessionManager.STATES.GREETING) {
@@ -828,6 +1052,9 @@ function handleMediaStream(ws, req) {
       clearTimeout(greetingTimeoutTimer);
       greetingTimeoutTimer = null;
     }
+    if (callStartTs) {
+      pipelineCounters.duration = Date.now() - callStartTs;
+    }
 
     // Discard any buffered early audio
     if (earlyAudioQueue.length > 0) {
@@ -878,27 +1105,145 @@ function handleMediaStream(ws, req) {
         const callEmail = collectedData.email || null;
         const callPhone = collectedData.phone || callerPhone || null;
 
-        await orchestrator.updateCallRecordAtEnd({
+        await supervise({
+          userId,
           callId: callRecordId,
           callSid,
-          userId,
-          intent: currentIntent,
-          summary: summaryText,
-          transcript: transcriptJson,
-          sentiment: collectedData.sentiment || 'neutral',
-          customerId,
+          operationKey: `${callSid || callRecordId}:end:callRecord`,
+          operation: 'updateCallRecordAtEnd',
+          fn: () => orchestrator.updateCallRecordAtEnd({
+            callId: callRecordId,
+            callSid,
+            userId,
+            intent: currentIntent,
+            summary: summaryText,
+            transcript: transcriptJson,
+            sentiment: collectedData.sentiment || 'neutral',
+            customerId,
+          }),
+          maxRetries: 1,
         }).catch(e => logger.warn('CALL_END_UPDATE_FAILED', { error: e.message }));
 
         if (customerId) {
-          await orchestrator.updateCRMAfterCall({
+          await supervise({
             userId,
-            customerId,
-            collectedData,
-            intent: currentIntent,
-            summary: summaryText,
-            sentiment: collectedData.sentiment || 'neutral',
+            callId: callRecordId,
+            callSid,
+            operationKey: `${callSid || callRecordId}:end:crm`,
+            operation: 'updateCRMAfterCall',
+            fn: () => orchestrator.updateCRMAfterCall({
+              userId,
+              customerId,
+              collectedData,
+              intent: currentIntent,
+              summary: summaryText,
+              sentiment: collectedData.sentiment || 'neutral',
+            }),
+            maxRetries: 1,
           }).catch(e => logger.warn('CRM_END_UPDATE_FAILED', { error: e.message }));
         }
+
+        // ── Conversation Intelligence: lead qualification, summaries, analytics ──
+        let leadProfile = null;
+        try {
+          leadProfile = qualifyLeadFromText({
+            text: callTranscriptBuffer.map(t => t.content).join(' '),
+            collectedData,
+            customer: customerMemory?.customer || null,
+          });
+          collectedData.leadScore = leadProfile.leadScore;
+          if (customerId) {
+            const persisted = await persistLeadProfile({ userId, customerId, callId: callRecordId, callSid, profile: leadProfile });
+            if (persisted) logCrmUpdated({ userId, callId: callRecordId, callSid, customerId, operation: 'lead_qualified' });
+          }
+        } catch (err) {
+          logger.warn('LEAD_QUALIFICATION_FAILED', { callSid, error: err.message });
+        }
+
+        try {
+          const summaries = await generateConversationSummaries({
+            userId,
+            callId: callRecordId,
+            callSid,
+            customerId,
+            transcriptEntries: callTranscriptBuffer,
+            collectedData: { ...collectedData, leadScore: collectedData.leadScore ?? leadProfile?.leadScore ?? null },
+            callIntent: currentIntent,
+            leadProfile,
+          });
+          collectedData.summaries = summaries;
+        } catch (err) {
+          logger.warn('CONVERSATION_SUMMARIES_FAILED', { callSid, error: err.message });
+        }
+
+        try {
+          const { getLiveTimeline } = await import('./conversationTimeline.service.js');
+          await computeConversationAnalytics({
+            userId,
+            callId: callRecordId,
+            callSid,
+            transcriptEntries: callTranscriptBuffer,
+            timelineEvents: getLiveTimeline(callRecordId),
+            collectedData: { ...collectedData, leadScore: collectedData.leadScore ?? leadProfile?.leadScore ?? null },
+            intent: currentIntent,
+            sentiment: collectedData.summaries?.sentiment || collectedData.sentiment || 'neutral',
+            sessionMetrics: { interruptions: interruptionCount },
+          });
+        } catch (err) {
+          logger.warn('CONVERSATION_ANALYTICS_FAILED', { callSid, error: err.message });
+        }
+
+        // ── Fleet Brain: post-call learning (fire-and-forget — never delays cleanup) ──
+        try {
+          const brain = getFleetBrain();
+          if (brain.isEnabled()) {
+            const { getLiveTimeline } = await import('./conversationTimeline.service.js');
+            const learnCall = brain.learnFromCall({
+              userId,
+              companyId,
+              callId: callRecordId,
+              callSid,
+              transcriptEntries: callTranscriptBuffer,
+              collectedData: {
+                ...collectedData,
+                intent: currentIntent,
+                appointmentCreated: !!collectedData.appointmentCreated,
+                supportTicketCreated: !!collectedData.supportTicketCreated,
+                answered: collectedData.lastKnowledgeQuery ? true : null,
+              },
+              timelineEvents: callRecordId ? getLiveTimeline(callRecordId) : [],
+              analytics: collectedData.summaries?.analytics || null,
+            });
+            learnCall.then((learned) => {
+              if (learned) {
+                recordTimeline(TIMELINE_EVENT_TYPES.FLEET_BRAIN_LEARNED, 'Fleet Brain learned', {
+                  learnings: learned?.learnings?.length || 0,
+                  recommendations: learned?.recommendations?.length || 0,
+                });
+              }
+            }).catch((err) => {
+              logger.warn('FLEET_BRAIN_LEARN_FAILED', { callSid, error: err.message });
+            });
+          }
+        } catch (err) {
+          logger.warn('FLEET_BRAIN_LEARN_FAILED', { callSid, error: err.message });
+        }
+
+        await recordTimeline(TIMELINE_EVENT_TYPES.CALL_COMPLETED, 'Call completed', {
+          duration: pipelineCounters.duration,
+          intent: currentIntent,
+          leadScore: collectedData.leadScore ?? null,
+        });
+        logCallCompleted({ userId, callId: callRecordId, callSid, data: { intent: currentIntent, duration: pipelineCounters.duration } });
+        emitCallStage('completed', 'Completed', {});
+
+        emitSocketEvent('summary.created', {
+          callId: callRecordId,
+          callSid,
+          summary: collectedData.summaries,
+          leadScore: collectedData.leadScore ?? null,
+          timestamp: new Date().toISOString(),
+        });
 
         emitSocketEvent('call.completed', {
           callId: callRecordId,
@@ -1054,20 +1399,66 @@ function handleMediaStream(ws, req) {
           logger.warn('TWILIO_MEDIA_STARTED', { callSid, warning: 'missing_streamSid' });
         }
 
-        // Resolve tenant owner for this call — trusted server-side only
+        // Resolve tenant owner for this call — trusted server-side only.
+        // The owner is kept in the call-local closure; never read from the
+        // module-global resolved owner afterwards (concurrent calls would race).
         callerPhone = params.from || start.from || null;
         const calledNumber = params.to || start.to || null;
         const twilioAccountSid = params.AccountSid || null;
+        callStartTs = Date.now();
 
         resolveTenant({ calledNumber, twilioAccountSid, callSid }).then(owner => {
-          if (owner?.userId) {
-            userId = owner.userId;
-            companyId = owner.companyId;
+          const ownerUserId = owner?.userId;
+          const ownerCompanyId = owner?.companyId;
+          if (ownerUserId) {
+            userId = ownerUserId;
+            companyId = ownerCompanyId;
             logger.info('TENANT_RESOLVED_FOR_CALL', { callSid, source: owner.source });
           } else {
             logger.warn('TENANT_NOT_RESOLVED', { callSid });
           }
-        });
+
+          // Customer lookup uses trusted owner id — never accept from caller input
+          if (callerPhone && ownerUserId) {
+            const normalized = callerPhone.replace(/[^\d+]/g, '');
+            orchestrator.lookupCustomerByPhone(ownerUserId, normalized).then(memory => {
+              if (memory && memory.customer) {
+                customerMemory = memory;
+                customerId = memory.customer?.id;
+                logger.info('CUSTOMER_IDENTIFIED', { callSid, name: memory.customer?.name });
+              }
+            }).catch(err => logger.warn('CUSTOMER_LOOKUP_FAILED', { callSid, error: err.message }));
+          }
+
+          // Upsert call record with trusted ownership — never from caller input
+          if (ownerUserId && ownerCompanyId && isPersistenceAvailable()) {
+            orchestrator.createCallRecord({
+              userId: ownerUserId,
+              companyId: ownerCompanyId,
+              callSid,
+              from: callerPhone,
+              to: calledNumber,
+              twilioAccountSid,
+            }).then(record => {
+              if (record) {
+                callRecordId = record.id;
+                if (legacySession) legacySession.metadata.callLogId = record.id;
+                lastActivityAt = Date.now();
+                logCallStarted({ userId: ownerUserId, callId: record.id, callSid, data: { from: callerPhone } });
+                emitSocketEvent('call.started', {
+                  callId: record.id,
+                  callSid,
+                  callerPhone,
+                  calledNumber,
+                  timestamp: new Date().toISOString(),
+                });
+                emitCallStage('greeting', 'Connecting', {});
+              }
+            }).catch(e => logger.warn('CALL_RECORD_START_FAILED', { error: e.message }));
+          } else {
+            logger.info('CALL_RECORD_SKIPPED_NO_OWNER', { callSid });
+          }
+        }).catch(err => logger.warn('TENANT_RESOLVE_FAILED', { callSid, error: err.message }));
 
         rtmSession = RealtimeSessionManager.create(callSid, ws, {
           from: params.from || start.from || null,
@@ -1075,6 +1466,16 @@ function handleMediaStream(ws, req) {
           caller: params.from || start.from || null,
           calledNumber: params.to || start.to || null,
           sessionId: start.callSid || callSid,
+        }, ({ from, to }) => {
+          recordTimeline(TIMELINE_EVENT_TYPES.FSM_TRANSITION, 'Call state transition', { from, to }).then(() => {
+            emitSocketEvent('call.fsm', {
+              callSid,
+              callId: callRecordId,
+              from,
+              to,
+              timestamp: new Date().toISOString(),
+            });
+          }).catch(err => logger.warn('TIMELINE_RECORD_FAILED', { callSid, error: err.message }));
         });
         rtmSession.streamSid = streamSid;
 
@@ -1088,42 +1489,6 @@ function handleMediaStream(ws, req) {
         });
         legacySession.streamSid = streamSid;
         legacySession.timers = timers;
-
-        // Customer lookup uses trusted userId from resolver — never accept from caller input
-        if (callerPhone) {
-          const normalized = callerPhone.replace(/[^\d+]/g, '');
-          const lookupUserId = userId || getResolvedOwner()?.userId;
-          if (lookupUserId) {
-            orchestrator.lookupCustomerByPhone(lookupUserId, normalized).then(memory => {
-              if (memory && memory.customer) {
-                customerMemory = memory;
-                customerId = memory.customer?.id;
-                logger.info('CUSTOMER_IDENTIFIED', { callSid, name: memory.customer?.name });
-              }
-            }).catch(err => logger.warn('CUSTOMER_LOOKUP_FAILED', { callSid, error: err.message }));
-          }
-        }
-
-        // Upsert call record with trusted ownership — never from caller input
-        const recordUserId = userId || getResolvedOwner()?.userId;
-        const recordCompanyId = companyId || getResolvedOwner()?.companyId;
-        if (recordUserId && recordCompanyId && isPersistenceAvailable()) {
-          orchestrator.createCallRecord({
-            userId: recordUserId,
-            companyId: recordCompanyId,
-            callSid,
-            from: callerPhone,
-            to: calledNumber,
-            twilioAccountSid,
-          }).then(record => {
-            if (record) {
-              callRecordId = record.id;
-              if (legacySession) legacySession.metadata.callLogId = record.id;
-            }
-          }).catch(e => logger.warn('CALL_RECORD_START_FAILED', { error: e.message }));
-        } else {
-          logger.info('CALL_RECORD_SKIPPED_NO_OWNER', { callSid });
-        }
 
         logger.info('TWILIO_START_RECEIVED', {
           callSid,

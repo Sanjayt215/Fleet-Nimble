@@ -52,6 +52,10 @@ Speak naturally, 1-2 sentences. One question at a time. If interrupted, stop.
 
 Use retrieve_knowledge for product/pricing/feature questions before answering.
 
+When booking a demo or meeting, always read the full details (name, company, meeting purpose, date, time, timezone) back to the caller and get their explicit confirmation before calling create_appointment.
+
+After a tool succeeds, confirm the outcome to the caller in plain words, e.g. "You're all set, your demo is scheduled." If a tool returns missing_fields or an error, ask the caller for the missing details.
+
 ${toolsIntro}${memorySection}`;
 
   if (!memoryContext) {
@@ -86,6 +90,7 @@ export function buildToolDefinitions(businessToolsEnabled = true) {
           callerName: { type: 'string', description: 'Caller full name' },
           companyName: { type: 'string', description: 'Caller company name' },
           fleetSize: { type: 'number', description: 'Number of vehicles in fleet' },
+          industry: { type: 'string', description: 'Caller industry (e.g. logistics, construction, food delivery)' },
           email: { type: 'string', description: 'Caller email address' },
           phone: { type: 'string', description: 'Caller phone number' },
           meetingPurpose: { type: 'string', description: 'Purpose of the meeting (e.g. demo, pricing, onboarding)' },

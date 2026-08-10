@@ -3,6 +3,7 @@ import api from '../services/api';
 
 export default function AnalyticsCards() {
   const [analytics, setAnalytics] = useState(null);
+  const [conversation, setConversation] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -12,8 +13,12 @@ export default function AnalyticsCards() {
   const loadAnalytics = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/ai-receptionist/analytics');
-      setAnalytics(res.data.data);
+      const [analyticsRes, conversationRes] = await Promise.allSettled([
+        api.get('/ai-receptionist/analytics'),
+        api.get('/ai-receptionist/conversations/analytics'),
+      ]);
+      if (analyticsRes.status === 'fulfilled') setAnalytics(analyticsRes.value.data.data);
+      if (conversationRes.status === 'fulfilled') setConversation(conversationRes.value.data.data || null);
     } catch (err) {
       console.error('Error loading analytics:', err);
       setAnalytics(null);
@@ -98,6 +103,52 @@ export default function AnalyticsCards() {
                 {lang.toUpperCase()}: {count}
               </span>
             ))}
+          </div>
+        </div>
+      )}
+
+      {conversation && Object.keys(conversation).length > 0 && (
+        <div className="card">
+          <p className="mb-3 text-sm font-medium text-white">Conversation Quality (30-day)</p>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div>
+              <p className="text-xs text-slate-500">Calls Analyzed</p>
+              <p className="mt-1 text-xl font-bold text-cyan-400">{conversation.analyzed ?? 0}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Avg Conversation Score</p>
+              <p className="mt-1 text-xl font-bold text-green-400">{conversation.avgConversationScore ?? '-'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Avg Sales Score</p>
+              <p className="mt-1 text-xl font-bold text-purple-400">{conversation.avgSalesScore ?? '-'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Avg Support Score</p>
+              <p className="mt-1 text-xl font-bold text-amber-400">{conversation.avgSupportScore ?? '-'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Avg Response Latency</p>
+              <p className="mt-1 text-xl font-bold text-blue-400">
+                {conversation.avgResponseLatencyMs != null
+                  ? (conversation.avgResponseLatencyMs >= 1000
+                    ? `${(conversation.avgResponseLatencyMs / 1000).toFixed(1)}s`
+                    : `${conversation.avgResponseLatencyMs}ms`)
+                  : '-'}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Interruptions</p>
+              <p className="mt-1 text-xl font-bold text-red-400">{conversation.totalInterruptions ?? 0}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Knowledge Searches</p>
+              <p className="mt-1 text-xl font-bold text-violet-400">{conversation.totalKnowledgeHits ?? 0}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Avg Talk Ratio</p>
+              <p className="mt-1 text-xl font-bold text-slate-300">{conversation.avgTalkRatio ?? '-'}</p>
+            </div>
           </div>
         </div>
       )}

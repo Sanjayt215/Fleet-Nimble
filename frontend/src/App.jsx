@@ -23,6 +23,7 @@ import LiveOBD from './pages/LiveOBD';
 import GpsTracking from './pages/GpsTracking';
 import AIAssistant from './pages/AIAssistant';
 import AIReceptionist from './pages/AIReceptionist';
+import FleetBrainDashboard from './pages/FleetBrainDashboard';
 export default function App() {
   return (
     <Routes>
@@ -53,6 +54,7 @@ export default function App() {
           <Route path="/demo/admin/rag" element={<RAGDashboard />} />
           <Route path="/demo/ai-assistant" element={<AIAssistant />} />
           <Route path="/demo/ai-receptionist" element={<AIReceptionist />} />
+          <Route path="/demo/fleet-brain" element={<FleetBrainDashboard />} />
 
           {/* Live Analysis routes */}
           <Route path="/analysis" element={<Dashboard />} />
@@ -74,6 +76,7 @@ export default function App() {
           <Route path="/analysis/admin/rag" element={<RAGDashboard />} />
           <Route path="/analysis/ai-assistant" element={<AIAssistant />} />
           <Route path="/analysis/ai-receptionist" element={<AIReceptionist />} />
+          <Route path="/analysis/fleet-brain" element={<FleetBrainDashboard />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

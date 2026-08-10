@@ -32,6 +32,8 @@ const io = new Server(server, {
 
 app.set('io', io);
 initSockets(io);
+const { setIo } = await import('./utils/socketHub.js');
+setIo(io);
 startCronJobs(app);
 
 startMqttConsumer(io).catch((err) => {
@@ -209,26 +211,28 @@ server.listen(config.port, host, async () => {
 });
 
 // ── Server-side DB connectivity timer for cleanup ──
-setInterval(async () => {
+const cleanupIntervals = [];
+
+cleanupIntervals.push(setInterval(async () => {
   const { cleanupStaleSessions } = await import('./services/receptionistAgent.service.js');
   const count = cleanupStaleSessions(1800000);
   if (count > 0) logger.info('STALE_AGENT_SESSIONS_CLEANED', { count });
-}, 600000);
+}, 600000));
 
-setInterval(async () => {
+cleanupIntervals.push(setInterval(async () => {
   const { cleanupStaleSessions: cleanupOld } = await import('./services/receptionistRealtime.service.js');
   cleanupOld(600000);
-}, 600000);
+}, 600000));
 
-setInterval(async () => {
+cleanupIntervals.push(setInterval(async () => {
   const { RealtimeSessionManager: RSM } = await import('./services/realtimeSessionManager.js');
   RSM.cleanup(600000);
-}, 600000);
+}, 600000));
 
-setInterval(async () => {
+cleanupIntervals.push(setInterval(async () => {
   const { cleanupOrchestrator } = await import('./services/receptionistOrchestrator.service.js');
   cleanupOrchestrator();
-}, 3600000);
+}, 3600000));
 
 // ── Global error handlers for 24/7 reliability ──
 process.on('unhandledRejection', (reason, promise) => {
@@ -237,11 +241,18 @@ process.on('unhandledRejection', (reason, promise) => {
 
 process.on('uncaughtException', (err) => {
   logger.error('UNCAUGHT_EXCEPTION', { error: err?.message, stack: err?.stack });
+  process.exit(1);
 });
 
-process.on('SIGTERM', async () => {
-  logger.info('SHUTDOWN_INITIATED');
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info('SHUTDOWN_INITIATED', { signal });
   stopMqttConsumer();
+
+  // Clear all cleanup intervals
+  cleanupIntervals.forEach(interval => clearInterval(interval));
 
   try {
     const { cleanupStaleSessions } = await import('./services/receptionistRealtime.service.js');
@@ -267,4 +278,7 @@ process.on('SIGTERM', async () => {
   });
 
   setTimeout(() => process.exit(0), 5000);
-});
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

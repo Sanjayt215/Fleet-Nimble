@@ -619,8 +619,12 @@ export async function generateAllSmartNotifications(userId) {
 /**
  * Schedule smart notifications check (runs every hour)
  */
+let smartNotificationsInterval = null;
+
 export function scheduleSmartNotificationsCheck() {
-  setInterval(async () => {
+  if (smartNotificationsInterval) return;
+  
+  smartNotificationsInterval = setInterval(async () => {
     try {
       const users = await prisma.user.findMany({
         where: { deletedAt: null },
@@ -660,4 +664,11 @@ export function scheduleSmartNotificationsCheck() {
   }, 60 * 60 * 1000); // Every hour
 
   logger.info('Smart notifications check scheduled');
+}
+
+export function stopSmartNotificationsCheck() {
+  if (smartNotificationsInterval) {
+    clearInterval(smartNotificationsInterval);
+    smartNotificationsInterval = null;
+  }
 }

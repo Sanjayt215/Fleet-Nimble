@@ -19,14 +19,21 @@ function parseFloatEnv(value, defaultValue) {
 const env = process.env.NODE_ENV || 'development';
 const publicUrl = process.env.PUBLIC_BACKEND_URL || 'http://localhost:5000';
 
+const jwtSecret = process.env.JWT_SECRET || 'dev-secret-change-in-production';
+const jwtRefreshSecret = process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret';
+
+if (env === 'production' && (jwtSecret === 'dev-secret-change-in-production' || jwtRefreshSecret === 'dev-refresh-secret')) {
+  throw new Error('FATAL: JWT_SECRET / JWT_REFRESH_SECRET must be set in production. Refusing to boot with default secrets.');
+}
+
 export const config = {
   env,
   port: parseIntEnv(process.env.PORT, 5000),
   databaseUrl: process.env.DATABASE_URL,
   redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',
   jwt: {
-    secret: process.env.JWT_SECRET || 'dev-secret-change-in-production',
-    refreshSecret: process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret',
+    secret: jwtSecret,
+    refreshSecret: jwtRefreshSecret,
     expiresIn: process.env.JWT_EXPIRES_IN || '15m',
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
   },
@@ -135,12 +142,36 @@ export const config = {
   knowledge: {
     providerOrder: (process.env.KNOWLEDGE_PROVIDER_ORDER || 'json,markdown,synchronized,database').split(',').map(s => s.trim()),
   },
+  multiAgent: {
+    enabled: parseBool(process.env.AI_RECEPTIONIST_MULTIAGENT_ENABLED, false),
+    shadowMode: parseBool(process.env.AI_RECEPTIONIST_MULTIAGENT_SHADOW, false),
+    maxParallel: parseIntEnv(process.env.AI_RECEPTIONIST_MULTIAGENT_MAX_PARALLEL, 4),
+    taskTimeoutMs: parseIntEnv(process.env.AI_RECEPTIONIST_MULTIAGENT_TASK_TIMEOUT_MS, 10000),
+    maxTaskRetries: parseIntEnv(process.env.AI_RECEPTIONIST_MULTIAGENT_MAX_RETRIES, 2),
+    retryBaseBackoffMs: parseIntEnv(process.env.AI_RECEPTIONIST_MULTIAGENT_RETRY_BACKOFF_MS, 300),
+    maxRunHistory: parseIntEnv(process.env.AI_RECEPTIONIST_MULTIAGENT_RUN_HISTORY, 200),
+    idempotencyTtlSeconds: parseIntEnv(process.env.AI_RECEPTIONIST_MULTIAGENT_IDEMPOTENCY_TTL, 3600),
+    persistRuns: parseBool(process.env.AI_RECEPTIONIST_MULTIAGENT_PERSIST_RUNS, true),
+    healthThresholdFailures: parseIntEnv(process.env.AI_RECEPTIONIST_MULTIAGENT_HEALTH_THRESHOLD, 5),
+  },
+  fleetBrain: {
+    enabled: parseBool(process.env.AI_FLEET_BRAIN_ENABLED, true),
+    contextTtlMs: parseIntEnv(process.env.FLEET_BRAIN_CONTEXT_TTL_MS, 30000),
+    shortTermMemoryTtlSec: parseIntEnv(process.env.FLEET_BRAIN_SHORT_TERM_TTL_SEC, 3600),
+    maxContexts: parseIntEnv(process.env.FLEET_BRAIN_MAX_CONTEXTS, 500),
+    maxPlans: parseIntEnv(process.env.FLEET_BRAIN_MAX_PLANS, 200),
+    maxWorkflowRuns: parseIntEnv(process.env.FLEET_BRAIN_MAX_WORKFLOW_RUNS, 100),
+    persistMemory: parseBool(process.env.FLEET_BRAIN_PERSIST_MEMORY, true),
+    persistWorkflows: parseBool(process.env.FLEET_BRAIN_PERSIST_WORKFLOWS, true),
+    persistInsights: parseBool(process.env.FLEET_BRAIN_PERSIST_INSIGHTS, true),
+    persistLearnings: parseBool(process.env.FLEET_BRAIN_PERSIST_LEARNINGS, true),
+  },
   rag: {
     enabled: parseBool(process.env.RAG_ENABLED, true),
     embedding: {
-      provider: process.env.RAG_EMBEDDING_PROVIDER || 'openai',
-      model: process.env.RAG_EMBEDDING_MODEL || 'text-embedding-ada-002',
-      dimensions: parseIntEnv(process.env.RAG_EMBEDDING_DIMENSIONS, 1536),
+      provider: process.env.RAG_EMBEDDING_PROVIDER || 'gemini',
+      model: process.env.RAG_EMBEDDING_MODEL || 'text-embedding-004',
+      dimensions: parseIntEnv(process.env.RAG_EMBEDDING_DIMENSIONS, 768),
       batchSize: parseIntEnv(process.env.RAG_EMBEDDING_BATCH_SIZE, 20),
       maxRetries: parseIntEnv(process.env.RAG_EMBEDDING_MAX_RETRIES, 3),
       openaiKey: process.env.OPENAI_API_KEY || '',

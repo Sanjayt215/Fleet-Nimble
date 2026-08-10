@@ -123,17 +123,22 @@ export async function executeAppointmentBookingWorkflow({
 
       // Step 5: Link Appointment to Call
       if (callId) {
-        await tx.aiReceptionistCall.update({
-          where: { id: callId },
-          data: {
-            appointmentId: appointment.id,
-            customerId: customer.id,
-            callStatus: 'COMPLETED',
-            callEndedAt: new Date(),
-            transcript: JSON.stringify(transcript),
-            extractedData,
-          },
-        });
+        const existingCall = await tx.aiReceptionistCall.findUnique({ where: { id: callId }, select: { id: true } });
+        if (existingCall) {
+          await tx.aiReceptionistCall.update({
+            where: { id: callId },
+            data: {
+              appointmentId: appointment.id,
+              customerId: customer.id,
+              callStatus: 'COMPLETED',
+              callEndedAt: new Date(),
+              transcript: JSON.stringify(transcript),
+              extractedData,
+            },
+          });
+        } else {
+          logger.warn('DATABASE_SKIPPED', { operation: 'call_update', callId, reason: 'call_not_found' });
+        }
       }
 
       // Step 6: Generate Conversation Summary

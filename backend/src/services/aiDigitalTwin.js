@@ -429,8 +429,12 @@ export async function getDigitalTwin(vehicleId, userId) {
 /**
  * Schedule digital twin updates (every 30 minutes)
  */
+let digitalTwinInterval = null;
+
 export function scheduleDigitalTwinUpdates() {
-  setInterval(async () => {
+  if (digitalTwinInterval) return;
+  
+  digitalTwinInterval = setInterval(async () => {
     try {
       const users = await prisma.user.findMany({
         where: { deletedAt: null },
@@ -456,4 +460,11 @@ export function scheduleDigitalTwinUpdates() {
   }, 30 * 60 * 1000); // Every 30 minutes
 
   logger.info('Digital twin updates scheduled');
+}
+
+export function stopDigitalTwinUpdates() {
+  if (digitalTwinInterval) {
+    clearInterval(digitalTwinInterval);
+    digitalTwinInterval = null;
+  }
 }

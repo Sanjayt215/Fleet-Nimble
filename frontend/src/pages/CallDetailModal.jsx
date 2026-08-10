@@ -1,6 +1,38 @@
+import { useState, useEffect } from 'react';
 import api from '../services/api';
 
+const EVENT_ICONS = {
+  CALL_STARTED: '📞', GREETING_SENT: '👋', INTENT_DETECTED: '🎯', KNOWLEDGE_SEARCHED: '📚',
+  LEAD_QUALIFIED: '⭐', TOOL_STARTED: '🛠️', TOOL_COMPLETED: '✅', APPOINTMENT_CONFIRMED: '📅',
+  CRM_UPDATED: '💾', SUMMARY_CREATED: '📝', MEMORY_UPDATED: '🧠', FSM_TRANSITION: '🔁',
+  AGENT_RUN_STARTED: '🤖', AGENT_RUN_COMPLETED: '🏁', SUPERVISOR_RETRY: '🔁',
+  SUPERVISOR_RECOVERED: '🩹', CALL_COMPLETED: '📴',
+};
+
 export default function CallDetailModal({ call, onClose, onRefresh }) {
+  const [intelligence, setIntelligence] = useState(null);
+  const [intelLoading, setIntelLoading] = useState(false);
+
+  useEffect(() => {
+    if (!call?.id) return;
+    let cancelled = false;
+    setIntelLoading(true);
+    Promise.allSettled([
+      api.get(`/ai-receptionist/conversations/replay/${call.id}`),
+      api.get(`/ai-receptionist/conversations/summaries/${call.id}`),
+      api.get(`/ai-receptionist/conversations/analytics/${call.id}`),
+    ]).then(([replayRes, summaryRes, analyticsRes]) => {
+      if (cancelled) return;
+      setIntelligence({
+        replay: replayRes.status === 'fulfilled' ? replayRes.value.data.data : null,
+        summary: summaryRes.status === 'fulfilled' ? summaryRes.value.data.data : null,
+        analytics: analyticsRes.status === 'fulfilled' ? analyticsRes.value.data.data : null,
+      });
+      setIntelLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [call?.id]);
+
   let transcript = [];
   try {
     if (call.transcript) {
@@ -20,9 +52,20 @@ export default function CallDetailModal({ call, onClose, onRefresh }) {
     return m > 0 ? `${m}m ${s}s` : `${seconds}s`;
   };
 
+  const formatLatency = (ms) => {
+    if (!ms) return '-';
+    return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+  };
+
+  const timeline = intelligence?.replay?.timeline || [];
+  const analytics = intelligence?.analytics;
+  const summary = intelligence?.summary;
+  const agentRuns = intelligence?.replay?.agentRuns || [];
+  const latencyMarkers = intelligence?.replay?.latency?.markers || [];
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="mx-4 w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
+      <div className="mx-4 w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-700 px-6 py-4">
           <h2 className="text-lg font-semibold text-white">Call Details</h2>
           <button onClick={onClose} className="text-slate-400 hover:text-white text-xl">&times;</button>
@@ -131,6 +174,122 @@ export default function CallDetailModal({ call, onClose, onRefresh }) {
               </div>
             </div>
           )}
+
+          {/* Conversation Intelligence */}
+          <div>
+            <p className="mb-2 text-xs font-semibold text-slate-500">Conversation Intelligence</p>
+            {intelLoading ? (
+              <div className="flex items-center justify-center h-16">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent" />
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {analytics && (
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <div className="rounded-lg bg-slate-800 p-2 text-center">
+                      <p className="text-[10px] text-slate-500">Conversation</p>
+                      <p className="text-sm font-bold text-green-400">{analytics.conversationScore}</p>
+                    </div>
+                    <div className="rounded-lg bg-slate-800 p-2 text-center">
+                      <p className="text-[10px] text-slate-500">Sales</p>
+                      <p className="text-sm font-bold text-purple-400">{analytics.salesScore}</p>
+                    </div>
+                    <div className="rounded-lg bg-slate-800 p-2 text-center">
+                      <p className="text-[10px] text-slate-500">Support</p>
+                      <p className="text-sm font-bold text-amber-400">{analytics.supportScore}</p>
+                    </div>
+                    <div className="rounded-lg bg-slate-800 p-2 text-center">
+                      <p className="text-[10px] text-slate-500">Avg Latency</p>
+                      <p className="text-sm font-bold text-blue-400">{formatLatency(analytics.avgResponseLatencyMs)}</p>
+                    </div>
+                  </div>
+                )}
+
+                {analytics?.breakdown && (
+                  <div className="flex flex-wrap gap-2 text-[10px] text-slate-400">
+                    <span className="rounded bg-slate-800 px-2 py-0.5">Talk ratio: {analytics.breakdown.talkRatio}</span>
+                    <span className="rounded bg-slate-800 px-2 py-0.5">Interruptions: {analytics.breakdown.interruptions}</span>
+                    <span className="rounded bg-slate-800 px-2 py-0.5">Silence: {formatLatency(analytics.breakdown.silenceDurationMs)}</span>
+                    <span className="rounded bg-slate-800 px-2 py-0.5">Knowledge hits: {analytics.breakdown.knowledgeHits}</span>
+                    <span className="rounded bg-slate-800 px-2 py-0.5">Tool uses: {analytics.breakdown.toolUses}</span>
+                  </div>
+                )}
+
+                {summary && (
+                  <div className="space-y-2 rounded-lg border border-slate-700 bg-slate-800/50 p-3">
+                    {summary.executiveSummary && (
+                      <p className="text-xs text-slate-300"><span className="text-slate-500 font-medium">Executive: </span>{summary.executiveSummary}</p>
+                    )}
+                    {summary.salesSummary && (
+                      <p className="text-xs text-slate-300"><span className="text-slate-500 font-medium">Sales: </span>{summary.salesSummary}</p>
+                    )}
+                    {summary.supportSummary && (
+                      <p className="text-xs text-slate-300"><span className="text-slate-500 font-medium">Support: </span>{summary.supportSummary}</p>
+                    )}
+                    {(summary.customerIntent || summary.nextBestAction) && (
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        {summary.customerIntent && (
+                          <span className="rounded bg-blue-900/30 px-2 py-0.5 text-[10px] text-blue-300">Intent: {summary.customerIntent}</span>
+                        )}
+                        {summary.nextBestAction && (
+                          <span className="rounded bg-green-900/30 px-2 py-0.5 text-[10px] text-green-300">Next best action: {summary.nextBestAction}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {timeline.length > 0 && (
+                  <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg bg-slate-800/60 p-2">
+                    {timeline.map((event, i) => (
+                      <div key={event.id || `${event.at}-${i}`} className="flex items-start gap-2 text-[11px]">
+                        <span>{EVENT_ICONS[event.eventType] || '•'}</span>
+                        <span className="text-slate-300">{event.label || event.eventType}</span>
+                        <span className="ml-auto text-[10px] text-slate-600">{new Date(event.at).toLocaleTimeString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {latencyMarkers.length > 0 && (
+                  <div>
+                    <p className="mb-1 text-[10px] text-slate-500">Turn latencies</p>
+                    <div className="flex flex-wrap gap-1">
+                      {latencyMarkers.slice(-12).map((m, i) => (
+                        <span key={i} className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">{formatLatency(m.gapMs)}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {agentRuns.length > 0 && (
+                  <div className="rounded-lg bg-slate-800/60 p-2">
+                    <p className="mb-1 text-[10px] font-semibold text-slate-500">Agent runs ({agentRuns.length})</p>
+                    <div className="space-y-1">
+                      {agentRuns.map((run) => (
+                        <div key={run.id} className="flex items-center gap-2 text-[11px]">
+                          <span className={`rounded px-1.5 py-0.5 font-medium ${
+                            run.status === 'SUCCESS' ? 'bg-green-900/40 text-green-300' :
+                            run.status === 'FAILED' ? 'bg-red-900/40 text-red-300' :
+                            'bg-amber-900/40 text-amber-300'
+                          }`}>{run.status}</span>
+                          <span className="text-slate-300">{run.mode}</span>
+                          <span className="text-slate-500">intent: {run.intent || '-'}</span>
+                          <span className="ml-auto text-[10px] text-slate-600">
+                            {run.tasks?.length || 0} tasks · {new Date(run.startedAt).toLocaleTimeString()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {!analytics && !summary && timeline.length === 0 && agentRuns.length === 0 && (
+                  <p className="text-xs text-slate-600">No conversation intelligence available for this call.</p>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Related Appointment */}
           {call.appointment && (

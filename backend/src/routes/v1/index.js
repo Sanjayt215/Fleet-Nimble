@@ -11,7 +11,10 @@ router.use('/devices', deviceRoutes);
 router.get('/fleet/map', authenticate, async (req, res, next) => {
   try {
     const companyId = req.user.companyId;
-    const where = companyId ? { companyId, deletedAt: null } : { deletedAt: null };
+    const where = {
+      deletedAt: null,
+      OR: [{ userId: req.user.id }, ...(companyId ? [{ companyId }] : [])],
+    };
 
     const vehicles = await prisma.vehicle.findMany({
       where,

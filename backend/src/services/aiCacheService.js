@@ -64,7 +64,19 @@ export function cleanupExpiredCache() {
 }
 
 // Run cleanup every minute
-setInterval(cleanupExpiredCache, 60000);
+let cacheCleanupInterval = null;
+
+export function startCacheCleanup() {
+  if (cacheCleanupInterval) return;
+  cacheCleanupInterval = setInterval(cleanupExpiredCache, 60000);
+}
+
+export function stopCacheCleanup() {
+  if (cacheCleanupInterval) {
+    clearInterval(cacheCleanupInterval);
+    cacheCleanupInterval = null;
+  }
+}
 
 /**
  * Get or set cache with factory function

@@ -28,6 +28,7 @@ const mockPrisma = {
     findUnique: vi.fn(),
     findMany: vi.fn(),
     create: vi.fn(),
+    upsert: vi.fn(),
     update: vi.fn(),
     count: vi.fn(),
     aggregate: vi.fn(),
@@ -60,6 +61,7 @@ const mockPrisma = {
     findMany: vi.fn(),
     count: vi.fn(),
   },
+  $transaction: vi.fn((callback) => callback(mockPrisma)),
 };
 
 vi.mock('../src/utils/prisma.js', () => ({ default: mockPrisma }));
@@ -117,11 +119,11 @@ describe('Receptionist Orchestrator - Call Record Creation', () => {
   });
 
   it('should create new call record', async () => {
-    mockPrisma.aiReceptionistCall.findFirst.mockResolvedValue(null);
-    mockPrisma.aiReceptionistCall.create.mockResolvedValue({ id: 'call-1', twilioCallSid: 'CA123' });
+    mockPrisma.aiReceptionistCall.upsert.mockResolvedValue({ id: 'call-1', twilioCallSid: 'CA123' });
 
     const result = await orchestrator.createCallRecord({
       userId: 'user-1',
+      companyId: 'company-1',
       callSid: 'CA123',
       from: '+919876543210',
       to: '+16693306377',
@@ -132,24 +134,29 @@ describe('Receptionist Orchestrator - Call Record Creation', () => {
   });
 
   it('should not duplicate call records with same twilioCallSid', async () => {
-    mockPrisma.aiReceptionistCall.findFirst.mockResolvedValue({ id: 'call-1', twilioCallSid: 'CA123' });
+    mockPrisma.aiReceptionistCall.upsert.mockResolvedValue({ id: 'call-1', twilioCallSid: 'CA123' });
 
     const result = await orchestrator.createCallRecord({
       userId: 'user-1',
+      companyId: 'company-1',
       callSid: 'CA123',
       from: '+919876543210',
       to: '+16693306377',
     });
 
     expect(result.id).toBe('call-1');
+    expect(mockPrisma.aiReceptionistCall.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { twilioCallSid: 'CA123' } })
+    );
     expect(mockPrisma.aiReceptionistCall.create).not.toHaveBeenCalled();
   });
 
   it('should handle database error gracefully', async () => {
-    mockPrisma.aiReceptionistCall.findFirst.mockRejectedValue(new Error('DB Error'));
+    mockPrisma.aiReceptionistCall.upsert.mockRejectedValue(new Error('DB Error'));
 
     const result = await orchestrator.createCallRecord({
       userId: 'user-1',
+      companyId: 'company-1',
       callSid: 'CA123',
       from: '+919876543210',
       to: '+16693306377',
@@ -221,13 +228,17 @@ describe('Receptionist Orchestrator - Appointment Workflow', () => {
   });
 
   it('should execute appointment creation on confirmation', async () => {
+    mockPrisma.receptionistCustomer.findFirst.mockResolvedValue(null);
+    mockPrisma.receptionistCustomer.create.mockResolvedValue({ id: 'cust-1' });
+    mockPrisma.receptionistCustomer.update.mockResolvedValue({});
     mockPrisma.aiReceptionistAppointment.create.mockResolvedValue({ id: 'appt-1' });
-    mockPrisma.aiReceptionistCall.findFirst.mockResolvedValue(null);
     mockPrisma.aiReceptionistCall.update.mockResolvedValue({});
+    mockPrisma.aiReceptionistAuditLog.create.mockResolvedValue({});
 
     const result = await orchestrator.handleConfirmation(
       {
         userId: 'user-1',
+        companyId: 'company-1',
         callId: 'call-1',
         collectedData: {
           callerName: 'Nithish',
@@ -291,12 +302,13 @@ describe('Receptionist Orchestrator - Support Workflow', () => {
 
   it('should execute support ticket creation on confirmation', async () => {
     mockPrisma.aiReceptionistSupportTicket.create.mockResolvedValue({ id: 'ticket-1' });
-    mockPrisma.aiReceptionistCall.findFirst.mockResolvedValue(null);
     mockPrisma.aiReceptionistCall.update.mockResolvedValue({});
+    mockPrisma.aiReceptionistAuditLog.create.mockResolvedValue({});
 
     const result = await orchestrator.handleConfirmation(
       {
         userId: 'user-1',
+        companyId: 'company-1',
         callId: 'call-1',
         collectedData: {
           callerName: 'Raj',
@@ -320,12 +332,16 @@ describe('Receptionist Orchestrator - Duplicate Prevention', () => {
   });
 
   it('should not create duplicate appointments', { timeout: 10000 }, async () => {
+    mockPrisma.receptionistCustomer.findFirst.mockResolvedValue(null);
+    mockPrisma.receptionistCustomer.create.mockResolvedValue({ id: 'cust-1' });
+    mockPrisma.receptionistCustomer.update.mockResolvedValue({});
     mockPrisma.aiReceptionistAppointment.create.mockResolvedValue({ id: 'appt-1' });
-    mockPrisma.aiReceptionistCall.findFirst.mockResolvedValue(null);
     mockPrisma.aiReceptionistCall.update.mockResolvedValue({});
+    mockPrisma.aiReceptionistAuditLog.create.mockResolvedValue({});
 
     const session = {
       userId: 'user-1',
+      companyId: 'company-1',
       callId: 'call-dupe-appt',
       collectedData: {
         callerName: 'Nithish',
@@ -349,11 +365,12 @@ describe('Receptionist Orchestrator - Duplicate Prevention', () => {
 
   it('should not create duplicate support tickets', { timeout: 10000 }, async () => {
     mockPrisma.aiReceptionistSupportTicket.create.mockResolvedValue({ id: 'ticket-1' });
-    mockPrisma.aiReceptionistCall.findFirst.mockResolvedValue(null);
     mockPrisma.aiReceptionistCall.update.mockResolvedValue({});
+    mockPrisma.aiReceptionistAuditLog.create.mockResolvedValue({});
 
     const session = {
       userId: 'user-1',
+      companyId: 'company-1',
       callId: 'call-dupe-ticket',
       collectedData: { callerName: 'Raj', issue: 'GPS not working', phone: '+919876543210' },
       pendingAction: 'create_support_ticket',

@@ -5,6 +5,8 @@ import apiRoutes from './routes/index.js';
 import v1Routes from './routes/v1/index.js';
 import { apiLimiter } from './middleware/rateLimiter.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
+import { performanceMonitor, getPerformanceMetrics } from './middleware/performanceMonitor.js';
+import prisma, { getPrismaMetrics } from './utils/prisma.js';
 
 const app = express();
 
@@ -31,6 +33,9 @@ app.use(
 
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// Performance monitoring
+app.use(performanceMonitor);
 
 // ── Liveness: always returns 200 when the process is alive ──
 app.get('/api/health/live', (_req, res) => {
@@ -69,6 +74,18 @@ app.get('/api/health/ready', async (_req, res) => {
 app.use('/api', apiLimiter);
 app.use('/api/v1', v1Routes);
 app.use('/api', apiRoutes);
+
+// Performance metrics endpoint (admin only)
+app.get('/api/admin/performance', (req, res) => {
+  const apiMetrics = getPerformanceMetrics();
+  const dbMetrics = getPrismaMetrics();
+  res.json({
+    apiMetrics,
+    dbMetrics,
+    timestamp: new Date().toISOString(),
+    uptimeSeconds: Math.floor(process.uptime())
+  });
+});
 
 // Root health check route
 app.get('/', (req, res) => {

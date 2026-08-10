@@ -316,6 +316,18 @@ export async function cleanupOldAnalytics(daysToKeep = 90) {
 }
 
 // Run cleanup weekly
-setInterval(() => {
-  cleanupOldAnalytics(90).catch(err => logger.error('Analytics cleanup failed', { error: err.message }));
-}, 7 * 24 * 60 * 60 * 1000);
+let analyticsCleanupInterval = null;
+
+export function startAnalyticsCleanup() {
+  if (analyticsCleanupInterval) return;
+  analyticsCleanupInterval = setInterval(() => {
+    cleanupOldAnalytics(90).catch(err => logger.error('Analytics cleanup failed', { error: err.message }));
+  }, 7 * 24 * 60 * 60 * 1000);
+}
+
+export function stopAnalyticsCleanup() {
+  if (analyticsCleanupInterval) {
+    clearInterval(analyticsCleanupInterval);
+    analyticsCleanupInterval = null;
+  }
+}

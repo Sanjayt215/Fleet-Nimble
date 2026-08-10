@@ -13,6 +13,8 @@ const EVENTS = [
   'closed',
 ];
 
+import logger from '../../utils/logger.js';
+
 export class RealtimeVoiceProvider {
   constructor() {
     this._eventHandlers = {};
@@ -39,7 +41,7 @@ export class RealtimeVoiceProvider {
       try {
         handler(data);
       } catch (err) {
-        console.error(`Provider event handler error: ${eventName}`, err);
+        logger.error('PROVIDER_EVENT_HANDLER_ERROR', { eventName, error: err.message });
       }
     }
   }

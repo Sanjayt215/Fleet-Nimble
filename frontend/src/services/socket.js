@@ -10,7 +10,7 @@ export function getSocket() {
     socket = io(SOCKET_URL, {
       autoConnect: false,
       reconnection: true,
-      reconnectionAttempts: Infinity,
+      reconnectionAttempts: 20,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
       transports: ['websocket', 'polling'],
@@ -47,6 +47,15 @@ export function connectSocket() {
   s.auth = { token: localStorage.getItem('accessToken') };
   if (!s.connected) s.connect();
   return s;
+}
+
+export function updateSocketAuth() {
+  if (socket) {
+    socket.auth = { token: localStorage.getItem('accessToken') };
+    if (!socket.connected && socket.active) {
+      socket.connect();
+    }
+  }
 }
 
 export function disconnectSocket() {

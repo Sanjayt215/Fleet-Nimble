@@ -12,7 +12,7 @@ const STATE = {
 };
 
 class RealtimeSession {
-  constructor(callSid, twilioSocket, metadata = {}) {
+  constructor(callSid, twilioSocket, metadata = {}, onStateChange = null) {
     this.callSid = callSid;
     this.streamSid = null;
     this.providerSocket = null;
@@ -32,16 +32,25 @@ class RealtimeSession {
     this.droppedPackets = 0;
     this.latencyMs = [];
     this.stopReconnect = false;
+    this.onStateChange = typeof onStateChange === 'function' ? onStateChange : null;
   }
 
   setState(newState) {
     const oldState = this.state;
+    if (oldState === newState) return;
     this.state = newState;
     logger.info('SESSION_STATE_CHANGE', {
       callSid: this.callSid,
       from: oldState,
       to: newState,
     });
+    if (this.onStateChange) {
+      try {
+        this.onStateChange({ from: oldState, to: newState, session: this });
+      } catch (err) {
+        logger.warn('SESSION_STATE_CHANGE_HOOK_FAILED', { callSid: this.callSid, error: err.message });
+      }
+    }
   }
 
   updateActivity() {
@@ -91,12 +100,12 @@ const sessions = new Map();
 export class RealtimeSessionManager {
   static STATES = STATE;
 
-  static create(callSid, twilioSocket, metadata = {}) {
+  static create(callSid, twilioSocket, metadata = {}, onStateChange = null) {
     if (sessions.has(callSid)) {
       logger.warn('SESSION_ALREADY_EXISTS', { callSid });
       return sessions.get(callSid);
     }
-    const session = new RealtimeSession(callSid, twilioSocket, metadata);
+    const session = new RealtimeSession(callSid, twilioSocket, metadata, onStateChange);
     session.setState(STATE.IDLE);
     sessions.set(callSid, session);
     logger.info('SESSION_CREATED', { callSid });

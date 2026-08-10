@@ -16,6 +16,8 @@ import * as metrics from './receptionistMetrics.service.js';
 import { config } from '../config/index.js';
 import prisma from '../utils/prisma.js';
 import { createAssistantProvider } from '../providers/assistant/assistantProviderFactory.js';
+import { emitToUser } from '../utils/socketHub.js';
+import { resolveScheduledDate, missingBookingFields, toSafeBookingLog } from '../utils/scheduling.js';
 
 const PENDING_ACTIONS = new Map();
 
@@ -226,7 +228,7 @@ export async function handleConfirmation(session, userText) {
     return { reply: 'No problem. Please let me know what you would like to change or how I can help.', intent: 'clarifying', conversationStage: 'clarifying' };
   }
 
-  const executionId = `${callId}_${pendingAction}`;
+  const executionId = `${userId || 'u'}_${callId || 'call'}_${pendingAction}`;
   if (PENDING_ACTIONS.has(executionId)) {
     return { reply: 'This has already been processed. Is there anything else I can help you with?', intent: 'completed' };
   }
@@ -254,17 +256,6 @@ async function checkSlotConflict(userId, scheduledDate, durationMinutes = 30) {
     select: { id: true, scheduledDate: true, callerName: true },
   });
   return conflicting;
-}
-
-function normalizeToUtc(date) {
-  return new Date(Date.UTC(
-    date.getFullYear(),
-    date.getMonth(),
-    date.getDate(),
-    date.getHours(),
-    date.getMinutes(),
-    date.getSeconds(),
-  ));
 }
 
 function computeLeadScore(data) {
@@ -312,10 +303,12 @@ export async function generateAISummary(transcriptEntries, collectedData) {
 
 export async function executeAppointmentCreation(session) {
   const { userId, companyId, callId, collectedData = {}, callerPhone } = session;
-  const executionId = `${callId}_create_appointment`;
+  const executionId = `${userId || 'u'}_${callId || 'call'}_create_appointment`;
 
   logger.info('TOOL_STARTED', { tool: 'create_appointment', callId, userId });
-  logger.info('TOOL_ARGUMENTS', { tool: 'create_appointment', callId, args: collectedData });
+  logger.info('BOOKING_EXECUTION_STARTED', {
+    callId, userId, companyId, collectedData: toSafeBookingLog(collectedData),
+  });
 
   if (PENDING_ACTIONS.has(executionId)) {
     logger.info('TOOL_COMPLETED', { tool: 'create_appointment', callId, result: 'duplicate_prevented' });
@@ -324,12 +317,29 @@ export async function executeAppointmentCreation(session) {
 
   if (!userId || !companyId) {
     logger.error('TOOL_FAILED', { tool: 'create_appointment', callId, reason: 'missing_owner' });
+    logger.warn('BOOKING_FAILED', { callId, reason: 'missing_owner' });
     return { success: false, reply: 'I apologize, but our system is unable to create appointments at this time. Our team has been notified.', intent: 'error', error: 'missing_owner' };
   }
 
-  const scheduledDate = collectedData.preferredDate && collectedData.preferredTime
-    ? new Date(`${collectedData.preferredDate}T${collectedData.preferredTime}:00`)
-    : new Date(Date.now() + 86400000);
+  const missingFields = missingBookingFields(collectedData);
+  const hasResolvableDateTime = Boolean(
+    collectedData.scheduledDateTime
+    || (collectedData.preferredDate && collectedData.preferredTime)
+  );
+  if (!hasResolvableDateTime) {
+    logger.warn('BOOKING_VALIDATION_INCOMPLETE', { callId, userId, missing: missingFields });
+    return {
+      success: false,
+      retryable: false,
+      missing_fields: missingFields,
+      reply: `I need a few more details to schedule this: ${missingFields.join(', ')}. Could you please provide them?`,
+      intent: 'needs_more_info',
+      error: 'missing_required_fields',
+    };
+  }
+
+  const resolvedDate = resolveScheduledDate(collectedData);
+  const scheduledDate = resolvedDate || new Date(Date.now() + 86400000);
   if (isNaN(scheduledDate.getTime())) {
     logger.error('TOOL_FAILED', { tool: 'create_appointment', callId, reason: 'invalid_date', date: collectedData.preferredDate, time: collectedData.preferredTime });
     return { success: false, reply: 'I apologize, but we need a valid date and time to schedule. Could you please provide both?', intent: 'error', error: 'invalid_date' };
@@ -346,11 +356,12 @@ export async function executeAppointmentCreation(session) {
     return { success: false, conflict: true, reply: `I'm sorry, but there is already an appointment scheduled at that time. Please choose a different date or time.`, intent: 'slot_conflict' };
   }
 
-  const utcDate = normalizeToUtc(scheduledDate);
+  const utcDate = new Date(scheduledDate.getTime());
   const timezone = collectedData.timezone || process.env.AI_RECEPTIONIST_TIMEZONE || 'UTC';
 
   let customer = null;
   let appointment = null;
+  let customerCreated = false;
 
   try {
     const result = await prisma.$transaction(async (tx) => {
@@ -379,6 +390,7 @@ export async function executeAppointmentCreation(session) {
               email: customerEmail,
               name: collectedData.callerName || 'Caller',
               companyName: collectedData.company || null,
+              industry: collectedData.industry || null,
               fleetSize: collectedData.fleetSize || null,
               status: 'LEAD',
               leadScore: computeLeadScore(collectedData),
@@ -386,12 +398,14 @@ export async function executeAppointmentCreation(session) {
               lastContactAt: new Date(),
             },
           });
+          customerCreated = true;
           logger.info('DATABASE_SUCCESS', { tool: 'create_appointment', callId, operation: 'customer_create', customerId: txCustomer.id });
           logger.info('LEAD_CREATED', { customerId: txCustomer.id, name: collectedData.callerName, company: collectedData.company, leadScore: computeLeadScore(collectedData), callId, userId });
         } else {
           const custUpdates = { lastContactAt: new Date(), totalCalls: { increment: 1 } };
           if (collectedData.callerName && !txCustomer.name) custUpdates.name = collectedData.callerName;
           if (collectedData.company && !txCustomer.companyName) custUpdates.companyName = collectedData.company;
+          if (collectedData.industry && !txCustomer.industry) custUpdates.industry = collectedData.industry;
           if (collectedData.fleetSize != null) custUpdates.fleetSize = collectedData.fleetSize;
           txCustomer = await tx.receptionistCustomer.update({
             where: { id: txCustomer.id },
@@ -409,6 +423,7 @@ export async function executeAppointmentCreation(session) {
           callerPhone: normalizedPhone,
           callerEmail: customerEmail,
           companyName: collectedData.company || null,
+          industry: collectedData.industry || null,
           fleetSize: collectedData.fleetSize || null,
           meetingPurpose: collectedData.meetingPurpose || 'Demo',
           meetingTitle: collectedData.meetingPurpose ? `${collectedData.meetingPurpose} - FleetNimble` : 'FleetNimble Demo',
@@ -421,18 +436,23 @@ export async function executeAppointmentCreation(session) {
       logger.info('DATABASE_SUCCESS', { tool: 'create_appointment', callId, operation: 'appointment_create', appointmentId: txAppointment.id });
 
       if (callId) {
-        const callUpdateData = {
-          appointmentId: txAppointment.id,
-          callType: 'DEMO',
-          customerId: txCustomer?.id || undefined,
-          callerEmail: customerEmail || undefined,
-          fleetSize: collectedData.fleetSize || undefined,
-          companyName: collectedData.company || undefined,
-          callerName: collectedData.callerName || undefined,
-        };
-        Object.keys(callUpdateData).forEach(k => { if (callUpdateData[k] === undefined) delete callUpdateData[k]; });
-        await tx.aiReceptionistCall.update({ where: { id: callId }, data: callUpdateData });
-        logger.info('DATABASE_SUCCESS', { tool: 'create_appointment', callId, operation: 'call_update' });
+        const existingCall = await tx.aiReceptionistCall.findUnique({ where: { id: callId }, select: { id: true } });
+        if (existingCall) {
+          const callUpdateData = {
+            appointmentId: txAppointment.id,
+            callType: 'DEMO',
+            customerId: txCustomer?.id || undefined,
+            callerEmail: customerEmail || undefined,
+            fleetSize: collectedData.fleetSize || undefined,
+            companyName: collectedData.company || undefined,
+            callerName: collectedData.callerName || undefined,
+          };
+          Object.keys(callUpdateData).forEach(k => { if (callUpdateData[k] === undefined) delete callUpdateData[k]; });
+          await tx.aiReceptionistCall.update({ where: { id: callId }, data: callUpdateData });
+          logger.info('DATABASE_SUCCESS', { tool: 'create_appointment', callId, operation: 'call_update' });
+        } else {
+          logger.warn('DATABASE_SKIPPED', { tool: 'create_appointment', callId, operation: 'call_update', reason: 'call_not_found' });
+        }
       }
 
       if (txCustomer && txAppointment) {
@@ -458,14 +478,48 @@ export async function executeAppointmentCreation(session) {
 
       logger.info('DATABASE_WRITE', { tool: 'create_appointment', callId, operation: 'transaction_commit' });
 
-      return { customer: txCustomer, appointment: txAppointment };
+      return { customer: txCustomer, appointment: txAppointment, customerCreated };
     });
 
     customer = result.customer;
     appointment = result.appointment;
+    customerCreated = result.customerCreated;
     logger.info('APPOINTMENT_CREATED', { appointmentId: appointment.id, callId, userId, companyId, customerId: customer?.id });
+    logger.info('BOOKING_CONFIRMED', {
+      callId,
+      userId,
+      companyId,
+      appointmentId: appointment.id,
+      customerId: customer?.id,
+      customerCreated,
+      scheduledDate: appointment.scheduledDate?.toISOString?.() || null,
+      meetingPurpose: appointment.meetingPurpose,
+      industry: appointment.industry || null,
+    });
     logger.info('CRM_UPDATED', { customerId: customer?.id, appointmentId: appointment.id, operation: 'lead_created_or_updated' });
     logger.info('TRANSCRIPT_SAVED', { context: 'appointment_creation', callId });
+
+    try {
+      const { recordTimelineEvent, TIMELINE_EVENT_TYPES } = await import('./conversationTimeline.service.js');
+      await recordTimelineEvent({
+        userId,
+        callId,
+        callSid: null,
+        eventType: TIMELINE_EVENT_TYPES.APPOINTMENT_CONFIRMED,
+        data: { appointmentId: appointment.id, leadScore: customer?.leadScore ?? null },
+      });
+      if (customer?.id) {
+        await recordTimelineEvent({
+          userId,
+          callId,
+          callSid: null,
+          eventType: TIMELINE_EVENT_TYPES.CRM_UPDATED,
+          data: { customerId: customer.id, operation: 'lead_created_or_updated' },
+        });
+      }
+    } catch (err) {
+      logger.warn('APPOINTMENT_TIMELINE_FAILED', { appointmentId: appointment.id, error: err.message });
+    }
 
     PENDING_ACTIONS.set(executionId, { id: appointment.id, timestamp: Date.now() });
     metrics.recordAppointmentCreated();
@@ -474,6 +528,7 @@ export async function executeAppointmentCreation(session) {
       tool: 'create_appointment', callId, userId, error: err.message, stack: err.stack,
       prismaError: err.code || null, constraint: err.meta?.constraint || null, field: err.meta?.field_name || null,
     });
+    logger.error('BOOKING_FAILED', { callId, userId, reason: err.message, code: err.code || null });
     metrics.recordAppointmentFailed();
     return { success: false, reply: 'I apologize, but I encountered an issue creating the appointment. Our team has been notified. Is there anything else?', intent: 'error', error: err.message };
   }
@@ -530,6 +585,61 @@ export async function executeAppointmentCreation(session) {
     logger.warn('DASHBOARD_UPDATE_FAILED', { appointmentId: appointment.id, error: err.message });
   }
 
+  try {
+    const { createFollowUpBundle } = await import('./followUp.service.js');
+    const followUps = await createFollowUpBundle({
+      userId,
+      companyId,
+      callId,
+      customerId: customer?.id || null,
+      appointment,
+    });
+    logger.info('FOLLOW_UP_BUNDLE_CREATED', { appointmentId: appointment.id, channels: followUps?.created?.map(c => c.channel) || [] });
+  } catch (err) {
+    logger.warn('FOLLOW_UP_BUNDLE_FAILED', { appointmentId: appointment.id, error: err.message });
+  }
+
+  // Socket.IO emissions for real-time frontend updates
+  try {
+    emitToUser(userId, 'appointment.created', {
+      appointmentId: appointment.id,
+      callerName: appointment.callerName,
+      companyName: appointment.companyName,
+      scheduledDate: appointment.scheduledDate,
+      status: appointment.status,
+      meetingPurpose: appointment.meetingPurpose,
+    });
+    logger.info('SOCKET_EMIT_SUCCESS', { event: 'appointment.created', userId, appointmentId: appointment.id });
+  } catch (err) {
+    logger.warn('SOCKET_EMIT_FAILED', { event: 'appointment.created', userId, error: err.message });
+  }
+
+  if (customer) {
+    try {
+      emitToUser(userId, 'crm.updated', {
+        customerId: customer.id,
+        name: customer.name,
+        companyName: customer.companyName,
+        leadScore: customer.leadScore,
+        status: customer.status,
+        totalAppointments: customer.totalAppointments,
+      });
+      emitToUser(userId, customerCreated ? 'crm.customer.created' : 'crm.customer.updated', {
+        customerId: customer.id,
+        name: customer.name,
+        companyName: customer.companyName,
+        industry: customer.industry || null,
+        leadScore: customer.leadScore,
+        status: customer.status,
+        totalAppointments: customer.totalAppointments,
+      });
+      logger.info('SOCKET_EMIT_SUCCESS', { event: 'crm.updated', userId, customerId: customer.id });
+      logger.info('SOCKET_EMIT_SUCCESS', { event: customerCreated ? 'crm.customer.created' : 'crm.customer.updated', userId, customerId: customer.id });
+    } catch (err) {
+      logger.warn('SOCKET_EMIT_FAILED', { event: 'crm.updated', userId, error: err.message });
+    }
+  }
+
   logger.info('TOOL_COMPLETED', { tool: 'create_appointment', callId, appointmentId: appointment.id, customerId: customer?.id });
 
   const reply = `Perfect! Your demo has been scheduled.\n\n- Purpose: ${collectedData.meetingPurpose || 'Demo'}\n- Date: ${collectedData.preferredDate}\n- Time: ${collectedData.preferredTime || '10:00'}\n- Confirmation: ${appointment.id.substring(0, 8)}\n\nIs there anything else I can help you with?`;
@@ -539,10 +649,12 @@ export async function executeAppointmentCreation(session) {
 
 export async function executeSupportTicketCreation(session) {
   const { userId, companyId, callId, collectedData = {} } = session;
-  const executionId = `${callId}_create_support_ticket`;
+  const executionId = `${userId || 'u'}_${callId || 'call'}_create_support_ticket`;
 
   logger.info('TOOL_STARTED', { tool: 'create_support_ticket', callId, userId });
-  logger.info('TOOL_ARGUMENTS', { tool: 'create_support_ticket', callId, args: collectedData });
+  logger.info('BOOKING_EXECUTION_STARTED', {
+    callId, userId, companyId, tool: 'create_support_ticket', collectedData: toSafeBookingLog(collectedData),
+  });
 
   if (PENDING_ACTIONS.has(executionId)) {
     logger.info('TOOL_COMPLETED', { tool: 'create_support_ticket', callId, result: 'duplicate_prevented' });
@@ -551,6 +663,7 @@ export async function executeSupportTicketCreation(session) {
 
   if (!userId || !companyId) {
     logger.error('TOOL_FAILED', { tool: 'create_support_ticket', callId, reason: 'missing_owner' });
+    logger.warn('BOOKING_FAILED', { callId, reason: 'missing_owner', tool: 'create_support_ticket' });
     return { success: false, reply: 'I apologize, but our system is unable to create support tickets at this time.', intent: 'error', error: 'missing_owner' };
   }
 
@@ -576,11 +689,16 @@ export async function executeSupportTicketCreation(session) {
       logger.info('DATABASE_SUCCESS', { tool: 'create_support_ticket', callId, operation: 'ticket_create', ticketId: txTicket.id });
 
       if (callId) {
-        await tx.aiReceptionistCall.update({
-          where: { id: callId },
-          data: { supportTicketId: txTicket.id, callType: 'SUPPORT' },
-        });
-        logger.info('DATABASE_SUCCESS', { tool: 'create_support_ticket', callId, operation: 'call_update' });
+        const existingCall = await tx.aiReceptionistCall.findUnique({ where: { id: callId }, select: { id: true } });
+        if (existingCall) {
+          await tx.aiReceptionistCall.update({
+            where: { id: callId },
+            data: { supportTicketId: txTicket.id, callType: 'SUPPORT' },
+          });
+          logger.info('DATABASE_SUCCESS', { tool: 'create_support_ticket', callId, operation: 'call_update' });
+        } else {
+          logger.warn('DATABASE_SKIPPED', { tool: 'create_support_ticket', callId, operation: 'call_update', reason: 'call_not_found' });
+        }
       }
 
       logger.info('DATABASE_WRITE', { tool: 'create_support_ticket', callId, operation: 'transaction_commit' });
@@ -635,6 +753,43 @@ export async function executeSupportTicketCreation(session) {
     logger.info('DASHBOARD_UPDATED', { ticketId: ticket.id });
   } catch (err) {
     logger.warn('DASHBOARD_UPDATE_FAILED', { ticketId: ticket.id, error: err.message });
+  }
+
+  // Socket.IO emissions for real-time frontend updates
+  try {
+    emitToUser(userId, 'support_ticket.created', {
+      ticketId: ticket.id,
+      issueTitle: ticket.issueTitle,
+      callerName: ticket.callerName,
+      companyName: ticket.companyName,
+      urgency: ticket.urgency,
+      status: ticket.status,
+    });
+    emitToUser(userId, 'support.ticket.created', {
+      ticketId: ticket.id,
+      issueTitle: ticket.issueTitle,
+      callerName: ticket.callerName,
+      companyName: ticket.companyName,
+      urgency: ticket.urgency,
+      status: ticket.status,
+    });
+    logger.info('SOCKET_EMIT_SUCCESS', { event: 'support_ticket.created', userId, ticketId: ticket.id });
+    logger.info('SOCKET_EMIT_SUCCESS', { event: 'support.ticket.created', userId, ticketId: ticket.id });
+  } catch (err) {
+    logger.warn('SOCKET_EMIT_FAILED', { event: 'support_ticket.created', userId, error: err.message });
+  }
+
+  try {
+    const { recordTimelineEvent, TIMELINE_EVENT_TYPES } = await import('./conversationTimeline.service.js');
+    await recordTimelineEvent({
+      userId,
+      callId,
+      callSid: null,
+      eventType: TIMELINE_EVENT_TYPES.SUPPORT_TICKET_CREATED,
+      data: { ticketId: ticket.id, issue: collectedData.issue?.substring(0, 100), urgency: collectedData.urgency || 'MEDIUM' },
+    });
+  } catch (err) {
+    logger.warn('SUPPORT_TICKET_TIMELINE_FAILED', { ticketId: ticket.id, error: err.message });
   }
 
   logger.info('TOOL_COMPLETED', { tool: 'create_support_ticket', callId, ticketId: ticket.id });

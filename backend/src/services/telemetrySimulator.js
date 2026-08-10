@@ -248,6 +248,7 @@ async function checkAlerts(vehicleId, state, io) {
 }
 
 let simulationTimer = null;
+let fallbackTimer = null;
 let ioRef = null;
 
 /**
@@ -357,7 +358,7 @@ export function startSimulator(io) {
   simulationTimer = setInterval(runSimulationTick, INTERVAL_MS);
 
   // Fallback check every 30 seconds
-  setInterval(checkRealFallback, 30_000);
+  fallbackTimer = setInterval(checkRealFallback, 30_000);
 
   logger.info('Telemetry Simulation Service started', { intervalMs: INTERVAL_MS });
 }
@@ -366,8 +367,12 @@ export function stopSimulator() {
   if (simulationTimer) {
     clearInterval(simulationTimer);
     simulationTimer = null;
-    logger.info('Telemetry Simulation Service stopped');
   }
+  if (fallbackTimer) {
+    clearInterval(fallbackTimer);
+    fallbackTimer = null;
+  }
+  logger.info('Telemetry Simulation Service stopped');
 }
 
 /**

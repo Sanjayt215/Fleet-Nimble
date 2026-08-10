@@ -487,8 +487,12 @@ async function generateFleetInsights(userId, vehicles) {
 /**
  * Schedule proactive insights generation (every hour)
  */
+let proactiveInsightsInterval = null;
+
 export function scheduleProactiveInsights() {
-  setInterval(async () => {
+  if (proactiveInsightsInterval) return;
+  
+  proactiveInsightsInterval = setInterval(async () => {
     try {
       const users = await prisma.user.findMany({
         where: { deletedAt: null },
@@ -519,4 +523,11 @@ export function scheduleProactiveInsights() {
   }, 60 * 60 * 1000); // Every hour
 
   logger.info('Proactive insights generation scheduled');
+}
+
+export function stopProactiveInsights() {
+  if (proactiveInsightsInterval) {
+    clearInterval(proactiveInsightsInterval);
+    proactiveInsightsInterval = null;
+  }
 }

@@ -3,6 +3,9 @@ import logger from '../utils/logger.js';
 import { processTelemetryAlerts, createDtcAlerts } from '../services/alertEngine.js';
 import prisma from '../utils/prisma.js';
 import { ingestObdReading } from '../services/obdIngest.js';
+import { ADMIN_ROOM } from '../utils/socketHub.js';
+
+const socketHubHelpers = { ADMIN_ROOM };
 
 export function initSockets(io) {
   io.use(async (socket, next) => {
@@ -131,6 +134,13 @@ export function initSockets(io) {
       logger.debug('RECEPTIONIST_JOINED', { userId: socket.userId });
     });
 
+    socket.on('receptionist:adminJoin', () => {
+      const { ADMIN_ROOM } = socketHubHelpers;
+      socket.join(ADMIN_ROOM);
+      socket.join(`user:${socket.userId}`);
+      logger.info('RECEPTIONIST_ADMIN_JOINED', { userId: socket.userId, role: socket.userRole });
+    });
+
     socket.on('receptionist:endCall', (callSid) => {
       logger.info('RECEPTIONIST_END_CALL', { userId: socket.userId, callSid });
       socket.to(`user:${socket.userId}`).emit('call.ended', {
@@ -147,10 +157,25 @@ export function initSockets(io) {
       });
     });
 
+    // ── Fleet Brain events ──
+    socket.on('fleetbrain:join', () => {
+      socket.join(`user:${socket.userId}`);
+      logger.debug('FLEET_BRAIN_JOINED', { userId: socket.userId });
+    });
+
+    socket.on('fleetbrain:refresh', () => {
+      socket.join(`user:${socket.userId}`);
+      socket.to(`user:${socket.userId}`).emit('fleetbrain.updated', {
+        timestamp: new Date().toISOString(),
+      });
+    });
+
     rejoinRooms();
 
     socket.on('disconnect', () => {
       logger.debug('Socket disconnected', { userId: socket.userId });
+      // Socket.IO handles cleanup automatically
+      // Application-level cleanup if needed
     });
   });
 }

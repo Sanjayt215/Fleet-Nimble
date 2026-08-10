@@ -1,3 +1,4 @@
+import twilio from 'twilio';
 import logger from '../utils/logger.js';
 
 class EmailProvider {
@@ -10,19 +11,26 @@ class EmailProvider {
   _init() {
     const smtpHost = process.env.EMAIL_SMTP_HOST;
     if (smtpHost) {
-      this.available = true;
-      logger.info('EMAIL_PROVIDER_AVAILABLE', { host: smtpHost });
+      // No SMTP transport library is installed, so email cannot actually be
+      // delivered. Report unavailable instead of claiming a successful send.
+      logger.warn('EMAIL_PROVIDER_TRANSPORT_UNAVAILABLE', {
+        host: smtpHost,
+        reason: 'No SMTP transport installed (nodemailer missing). Install nodemailer and set EMAIL_SMTP_* to enable email.',
+      });
     } else {
       logger.warn('EMAIL_PROVIDER_UNAVAILABLE', { reason: 'EMAIL_SMTP_HOST not configured', fix: 'Set EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, EMAIL_SMTP_USER, EMAIL_SMTP_PASS in environment' });
+      logger.info('EMAIL_SKIPPED_SMTP_NOT_CONFIGURED', {
+        reason: 'EMAIL_SMTP_HOST not set; confirmation emails will not be sent. Set EMAIL_SMTP_* to enable.',
+      });
     }
   }
 
   async send(options) {
-    if (!this.available) {
-      return { sent: false, provider: this.name, reason: 'provider_unavailable' };
-    }
-    logger.info('EMAIL_SEND', { to: options.to, subject: options.subject, appointmentId: options.appointmentId });
-    return { sent: true, provider: this.name };
+    logger.warn('EMAIL_SKIPPED_SMTP_NOT_CONFIGURED', {
+      reason: 'email_transport_unavailable',
+      recipientDomain: options?.to ? String(options.to).split('@')[1] : null,
+    });
+    return { sent: false, provider: this.name, reason: 'email_transport_unavailable' };
   }
 }
 
@@ -30,26 +38,41 @@ class SmsProvider {
   constructor() {
     this.name = 'sms';
     this.available = false;
+    this._from = null;
+    this._client = null;
     this._init();
   }
 
   _init() {
     const twilioSid = process.env.TWILIO_ACCOUNT_SID;
     const twilioAuth = process.env.TWILIO_AUTH_TOKEN;
-    if (twilioSid && twilioAuth) {
+    const twilioPhone = process.env.TWILIO_PHONE_NUMBER;
+    if (twilioSid && twilioAuth && twilioPhone) {
+      this._client = twilio(twilioSid, twilioAuth);
+      this._from = twilioPhone;
       this.available = true;
-      logger.info('SMS_PROVIDER_AVAILABLE');
+      logger.info('SMS_PROVIDER_AVAILABLE', { from: twilioPhone });
     } else {
-      logger.warn('SMS_PROVIDER_UNAVAILABLE', { reason: 'TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN not configured' });
+      logger.warn('SMS_PROVIDER_UNAVAILABLE', { reason: 'TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER must all be configured' });
     }
   }
 
   async send(options) {
-    if (!this.available) {
+    if (!this.available || !this._client) {
       return { sent: false, provider: this.name, reason: 'provider_unavailable' };
     }
-    logger.info('SMS_SEND', { to: options.to, message: options.message?.substring(0, 80) });
-    return { sent: true, provider: this.name };
+    try {
+      const message = await this._client.messages.create({
+        to: options.to,
+        from: this._from,
+        body: options.message,
+      });
+      logger.info('SMS_SENT', { to: options.to, sid: message.sid, status: message.status });
+      return { sent: true, provider: this.name, sid: message.sid, status: message.status };
+    } catch (err) {
+      logger.error('SMS_SEND_FAILED', { to: options.to, error: err.message });
+      return { sent: false, provider: this.name, reason: err.message };
+    }
   }
 }
 

@@ -102,7 +102,11 @@ describe('Status Callback Handling', () => {
     await handleStatusCallback(req, res);
 
     expect(res.status).toHaveBeenCalledWith(204);
-    expect(prisma.aiReceptionistCall.update).not.toHaveBeenCalled();
+    expect(prisma.aiReceptionistCall.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ callStatus: 'COMPLETED' }),
+      })
+    );
   });
 });
 

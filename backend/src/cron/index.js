@@ -108,7 +108,7 @@ export function startCronJobs(app) {
   // Knowledge sync: crawl approved sources every 6 hours
   cron.schedule('0 */6 * * *', async () => {
     try {
-      const prisma = (await import('../../utils/prisma.js')).default;
+      const prisma = (await import('../utils/prisma.js')).default;
       const sources = await prisma.knowledgeSource.findMany({ where: { enabled: true, schedule: { not: null } } });
       for (const source of sources) {
         try {

@@ -8,9 +8,10 @@ export async function list(req, res, next) {
       req.user.role.name === 'ADMIN' ? { deletedAt: null } : { userId: req.userId, deletedAt: null };
     const vehicles = await prisma.vehicle.findMany({ where: vehicleWhere, select: { id: true } });
     const ids = vehicles.map((v) => v.id);
+    const scopedIds = vehicleId ? ids.filter((id) => id === vehicleId) : ids;
 
     const where = {
-      vehicleId: vehicleId ? vehicleId : { in: ids },
+      vehicleId: { in: scopedIds },
       ...(status && { status }),
     };
     const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);

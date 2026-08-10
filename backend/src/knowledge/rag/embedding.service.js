@@ -10,6 +10,9 @@ const PROVIDERS = {
   local: LocalEmbeddingProvider,
 };
 
+// Fallback chain used when the configured provider fails to initialize.
+const FALLBACK_CHAIN = ['gemini', 'local'];
+
 let _provider = null;
 let _initialized = false;
 
@@ -17,28 +20,29 @@ export async function getEmbeddingProvider() {
   if (_initialized && _provider) return _provider;
 
   const cfg = config.rag.embedding;
-  const ProviderClass = PROVIDERS[cfg.provider];
+  const candidates = [cfg.provider, ...FALLBACK_CHAIN.filter(p => p !== cfg.provider)];
 
-  if (!ProviderClass) {
-    logger.error('RAG_UNKNOWN_EMBEDDING_PROVIDER', { provider: cfg.provider });
-    throw new Error(`Unknown embedding provider: ${cfg.provider}. Supported: ${Object.keys(PROVIDERS).join(', ')}`);
+  for (const name of candidates) {
+    const ProviderClass = PROVIDERS[name];
+    if (!ProviderClass) continue;
+    try {
+      const candidate = new ProviderClass(cfg);
+      await candidate.initialize();
+      _provider = candidate;
+      _initialized = true;
+      logger.info('RAG_EMBEDDING_PROVIDER_INITIALIZED', {
+        provider: _provider.name,
+        model: _provider.model,
+        dimensions: _provider.dimensions,
+      });
+      return _provider;
+    } catch (err) {
+      logger.warn('RAG_EMBEDDING_PROVIDER_FALLBACK', { provider: name, error: err.message });
+    }
   }
 
-  try {
-    _provider = new ProviderClass(cfg);
-    await _provider.initialize();
-    _initialized = true;
-    logger.info('RAG_EMBEDDING_PROVIDER_INITIALIZED', {
-      provider: _provider.name,
-      model: _provider.model,
-      dimensions: _provider.dimensions,
-    });
-    return _provider;
-  } catch (err) {
-    logger.error('RAG_EMBEDDING_PROVIDER_FAILED', { provider: cfg.provider, error: err.message });
-    _initialized = false;
-    throw err;
-  }
+  logger.error('RAG_EMBEDDING_PROVIDER_FAILED', { provider: cfg.provider, candidates });
+  throw new Error(`No embedding provider could be initialized. Tried: ${candidates.join(', ')}`);
 }
 
 export async function embedText(text) {

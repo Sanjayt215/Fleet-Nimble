@@ -489,7 +489,19 @@ export function cleanupExpiredActions() {
 }
 
 // Run cleanup every minute
-setInterval(cleanupExpiredActions, 60000);
+let cleanupInterval = null;
+
+export function startActionCleanup() {
+  if (cleanupInterval) return;
+  cleanupInterval = setInterval(cleanupExpiredActions, 60000);
+}
+
+export function stopActionCleanup() {
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+    cleanupInterval = null;
+  }
+}
 
 /**
  * Generate unique action ID

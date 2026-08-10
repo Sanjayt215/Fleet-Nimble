@@ -8,16 +8,18 @@ export async function createCalendarEvent(userId, appointment) {
     return { provider: 'internal', eventId: null };
   }
 
-  logger.info('GOOGLE_CALENDAR_EVENT_CREATED', { userId, appointmentId: appointment.id });
-  return { provider: 'google', eventId: 'placeholder-' + appointment.id, meetingLink: null };
+  // Google Calendar API integration is not implemented — never claim an event
+  // was created or fabricate an eventId.
+  logger.warn('GOOGLE_CALENDAR_API_NOT_IMPLEMENTED', { userId, appointmentId: appointment.id });
+  return { provider: 'google', eventId: null, meetingLink: null, created: false };
 }
 
 export async function updateCalendarEvent(userId, appointment) {
-  logger.info('GOOGLE_CALENDAR_EVENT_UPDATED', { userId, appointmentId: appointment.id });
-  return { success: true };
+  logger.warn('GOOGLE_CALENDAR_API_NOT_IMPLEMENTED', { op: 'update', userId, appointmentId: appointment?.id });
+  return { success: false, reason: 'google_calendar_api_not_implemented' };
 }
 
 export async function deleteCalendarEvent(userId, eventId) {
-  logger.info('GOOGLE_CALENDAR_EVENT_DELETED', { userId, eventId });
-  return { success: true };
+  logger.warn('GOOGLE_CALENDAR_API_NOT_IMPLEMENTED', { op: 'delete', userId, eventId });
+  return { success: false, reason: 'google_calendar_api_not_implemented' };
 }

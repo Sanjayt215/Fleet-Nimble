@@ -7,6 +7,19 @@ import { AppError } from '../middleware/errorHandler.js';
 const router = Router();
 router.use(authenticate, requireAdmin);
 
+const USER_SELECT = {
+  id: true,
+  name: true,
+  email: true,
+  roleId: true,
+  companyId: true,
+  deletedAt: true,
+  createdAt: true,
+  updatedAt: true,
+  role: { select: { id: true, name: true } },
+  _count: { select: { vehicles: true } },
+};
+
 router.get('/stats', async (_req, res, next) => {
   try {
     const [users, vehicles, activeDtc, openWorkOrders] = await Promise.all([
@@ -25,7 +38,8 @@ router.get('/users', async (_req, res, next) => {
   try {
     const users = await prisma.user.findMany({
       where: { deletedAt: null },
-      include: { role: true, _count: { select: { vehicles: true } } },
+      select: USER_SELECT,
+      orderBy: { createdAt: 'desc' },
     });
     res.json({ success: true, data: users });
   } catch (err) {
@@ -36,12 +50,15 @@ router.get('/users', async (_req, res, next) => {
 router.patch('/users/:id/role', async (req, res, next) => {
   try {
     const { roleName } = req.body;
+    if (req.params.id === req.user.id) {
+      throw new AppError('Admins cannot change their own role', 400, 'VALIDATION_ERROR');
+    }
     const role = await prisma.role.findUnique({ where: { name: roleName } });
     if (!role) throw new AppError('Invalid role', 400, 'VALIDATION_ERROR');
     const user = await prisma.user.update({
       where: { id: req.params.id },
       data: { roleId: role.id },
-      include: { role: true },
+      select: USER_SELECT,
     });
     res.json({ success: true, data: user });
   } catch (err) {

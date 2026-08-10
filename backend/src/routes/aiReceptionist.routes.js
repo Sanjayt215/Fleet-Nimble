@@ -16,6 +16,8 @@ import {
 
 const router = Router();
 
+router.use(authenticate);
+
 router.get('/status', (_req, res) => {
   res.json({
     success: true,
@@ -23,6 +25,7 @@ router.get('/status', (_req, res) => {
       enabled: config.ai.receptionistEnabled,
       browserVoice: config.ai.voiceAgentMode === 'browser' || config.ai.voiceAgentMode === 'hybrid' ? 'available' : 'not_configured',
       twilioPhone: process.env.TWILIO_ACCOUNT_SID ? 'configured' : 'not_configured',
+      phoneNumber: config.twilio.phoneNumber || null,
       openaiRealtime: process.env.OPENAI_API_KEY ? 'configured' : 'not_configured',
       voiceAgentMode: config.ai.voiceAgentMode,
       message: config.ai.voiceAgentMode === 'twilio' && !process.env.TWILIO_ACCOUNT_SID
@@ -33,8 +36,6 @@ router.get('/status', (_req, res) => {
     },
   });
 });
-
-router.use(authenticate);
 
 router.get('/summary', ctrl.getSummary);
 

@@ -260,7 +260,7 @@ export async function simulateCall(req, res, next) {
         if (session.customerId) {
           await memoryService.updateCustomerAfterCall(session.customerId, {
             appointmentId: appointment.id, intent: 'schedule_meeting',
-            summary: result.response, sentiment: result.extracted.urgency || 'neutral',
+            summary: result.response,
           }).catch(e => logger.warn('CRM_UPDATE_FAILED', { error: e.message }));
         }
       } else if (result.intent === 'support_request') {
@@ -284,7 +284,7 @@ export async function simulateCall(req, res, next) {
         if (session.customerId) {
           await memoryService.updateCustomerAfterCall(session.customerId, {
             ticketId: ticket.id, intent: 'support_request',
-            summary: result.response, sentiment: 'neutral',
+            summary: result.response,
           }).catch(e => logger.warn('CRM_UPDATE_FAILED', { error: e.message }));
         }
       }
