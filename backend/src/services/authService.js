@@ -5,16 +5,17 @@ import prisma from '../utils/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
 
 function signTokens(userId) {
-  const accessToken = jwt.sign({ userId }, config.jwt.secret, {
+  const accessToken = jwt.sign({ sub: userId }, config.jwt.secret, {
     expiresIn: config.jwt.expiresIn,
   });
-  const refreshToken = jwt.sign({ userId }, config.jwt.refreshSecret, {
+  const refreshToken = jwt.sign({ sub: userId }, config.jwt.refreshSecret, {
     expiresIn: config.jwt.refreshExpiresIn,
   });
   return { accessToken, refreshToken };
 }
 
-export async function register({ name, email, password }) {
+export async function register({ name, email: rawEmail, password }) {
+  const email = String(rawEmail || '').trim().toLowerCase();
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) throw new AppError('Email already registered', 409, 'EMAIL_EXISTS');
 
@@ -39,7 +40,8 @@ export async function register({ name, email, password }) {
   };
 }
 
-export async function login({ email, password }) {
+export async function login({ email: rawEmail, password }) {
+  const email = String(rawEmail || '').trim().toLowerCase();
   const user = await prisma.user.findFirst({
     where: { email, deletedAt: null },
     include: { role: true },

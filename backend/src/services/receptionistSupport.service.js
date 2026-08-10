@@ -1,6 +1,10 @@
 import prisma from '../utils/prisma.js';
 import { emitToUser } from '../utils/socketHub.js';
 
+function tenantWhere(userId, companyId) {
+  return companyId ? { OR: [{ userId }, { companyId }] } : { userId };
+}
+
 export async function createSupportTicket(userId, data) {
   const { callId, ...ticketData } = data;
   const ticket = await prisma.aiReceptionistSupportTicket.create({
@@ -20,8 +24,8 @@ export async function createSupportTicket(userId, data) {
   return ticket;
 }
 
-export async function getSupportTickets(userId, { page = 1, limit = 20, status, urgency }) {
-  const where = { userId };
+export async function getSupportTickets(userId, { page = 1, limit = 20, status, urgency }, companyId = null) {
+  const where = tenantWhere(userId, companyId);
   if (status) where.status = status;
   if (urgency) where.urgency = urgency;
 

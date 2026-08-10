@@ -19,8 +19,8 @@ const RECEPTIONIST_ENABLED = config.ai.receptionistEnabled;
 export async function getSummary(req, res, next) {
   try {
     const [summary, pipeline] = await Promise.all([
-      callService.getSummary(req.userId),
-      crmService.getLeadPipelineSummary(req.userId),
+      callService.getSummary(req.userId, req.user.companyId),
+      crmService.getLeadPipelineSummary(req.userId, req.user.companyId),
     ]);
     res.json({ success: true, data: { ...summary, ...pipeline } });
   } catch (err) { next(err); }
@@ -33,14 +33,14 @@ export async function getCalls(req, res, next) {
     const result = await callService.getCallLogs(req.userId, {
       page: parseInt(page, 10), limit: Math.min(parseInt(limit, 10), 100),
       status, type, startDate, endDate,
-    });
+    }, req.user.companyId);
     res.json({ success: true, data: result });
   } catch (err) { next(err); }
 }
 
 export async function getCallById(req, res, next) {
   try {
-    const call = await callService.getCallById(req.userId, req.params.id);
+    const call = await callService.getCallById(req.userId, req.params.id, req.user.companyId);
     if (!call) throw new AppError('Call not found', 404, 'NOT_FOUND');
     res.json({ success: true, data: call });
   } catch (err) { next(err); }
@@ -93,7 +93,7 @@ export async function getAppointments(req, res, next) {
     const result = await appointmentService.getAppointments(req.userId, {
       page: parseInt(page, 10), limit: Math.min(parseInt(limit, 10), 100),
       status, startDate, endDate,
-    });
+    }, req.user.companyId);
     res.json({ success: true, data: result });
   } catch (err) { next(err); }
 }
@@ -121,7 +121,7 @@ export async function getSupportTickets(req, res, next) {
     const result = await supportService.getSupportTickets(req.userId, {
       page: parseInt(page, 10), limit: Math.min(parseInt(limit, 10), 100),
       status, urgency,
-    });
+    }, req.user.companyId);
     res.json({ success: true, data: result });
   } catch (err) { next(err); }
 }
@@ -148,14 +148,14 @@ export async function getCustomers(req, res, next) {
     const result = await crmService.getCustomers(req.userId, {
       page: parseInt(page, 10), limit: Math.min(parseInt(limit, 10), 100),
       status, search, sortBy, sortOrder,
-    });
+    }, req.user.companyId);
     res.json({ success: true, data: result });
   } catch (err) { next(err); }
 }
 
 export async function getCustomerById(req, res, next) {
   try {
-    const customer = await crmService.getCustomerById(req.userId, req.params.id);
+    const customer = await crmService.getCustomerById(req.userId, req.params.id, req.user.companyId);
     if (!customer) throw new AppError('Customer not found', 404, 'NOT_FOUND');
     res.json({ success: true, data: customer });
   } catch (err) { next(err); }
@@ -179,8 +179,8 @@ export async function addCustomerNote(req, res, next) {
 
 export async function getLeadPipeline(req, res, next) {
   try {
-    const pipeline = await crmService.getLeadPipelineSummary(req.userId);
-    const highPriority = await crmService.getHighPriorityLeads(req.userId, 10);
+    const pipeline = await crmService.getLeadPipelineSummary(req.userId, req.user.companyId);
+    const highPriority = await crmService.getHighPriorityLeads(req.userId, 10, req.user.companyId);
     res.json({ success: true, data: { ...pipeline, highPriority } });
   } catch (err) { next(err); }
 }

@@ -1,6 +1,10 @@
 import prisma from '../utils/prisma.js';
 import { emitToUser } from '../utils/socketHub.js';
 
+function tenantWhere(userId, companyId) {
+  return companyId ? { OR: [{ userId }, { companyId }] } : { userId };
+}
+
 export async function createAppointment(userId, data) {
   const { callId, ...apptData } = data;
   const appointment = await prisma.aiReceptionistAppointment.create({
@@ -24,8 +28,8 @@ export async function createAppointment(userId, data) {
   return appointment;
 }
 
-export async function getAppointments(userId, { page = 1, limit = 20, status, startDate, endDate }) {
-  const where = { userId };
+export async function getAppointments(userId, { page = 1, limit = 20, status, startDate, endDate }, companyId = null) {
+  const where = tenantWhere(userId, companyId);
   if (status) where.status = status;
   if (startDate || endDate) {
     where.scheduledDate = {};
@@ -56,10 +60,10 @@ export async function updateAppointment(userId, id, data) {
   return prisma.aiReceptionistAppointment.update({ where: { id }, data: updateData });
 }
 
-export async function getUpcomingAppointments(userId, limit = 10) {
+export async function getUpcomingAppointments(userId, limit = 10, companyId = null) {
   return prisma.aiReceptionistAppointment.findMany({
     where: {
-      userId,
+      ...tenantWhere(userId, companyId),
       scheduledDate: { gte: new Date() },
       status: { in: ['SCHEDULED', 'CONFIRMED'] },
     },

@@ -5,9 +5,18 @@ import { AppError } from '../middleware/errorHandler.js';
 import logger from '../utils/logger.js';
 import { randomUUID } from 'crypto';
 
+function describeHash(hash) {
+  if (!hash || typeof hash !== 'string') return { format: 'missing', length: 0 };
+  if (hash.startsWith('$2a$') || hash.startsWith('$2b$')) {
+    return { format: 'bcrypt', rounds: Number(hash.split('$')[2] || 0), length: hash.length };
+  }
+  return { format: 'unknown', length: hash.length };
+}
+
 export async function register(req, res, next) {
   try {
-    const { name, email, password } = req.body;
+    const { name, password } = req.body;
+    const email = String(req.body?.email || '').trim().toLowerCase();
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) throw new AppError('Email already registered', 409, 'CONFLICT');
 
@@ -34,17 +43,30 @@ export async function register(req, res, next) {
 
 export async function login(req, res, next) {
   try {
-    const { email, password } = req.body;
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = req.body?.password;
+    if (!email || !password) throw new AppError('Email and password are required', 400, 'VALIDATION_ERROR');
+
     const user = await prisma.user.findFirst({
       where: { email, deletedAt: null },
       include: { role: true },
     });
+    logger.info('AUTH_LOGIN_STAGE', {
+      stage: 'user_lookup',
+      emailPresent: true,
+      found: !!user,
+      role: user?.role?.name || null,
+      companyId: user?.companyId || null,
+      hash: describeHash(user?.passwordHash),
+    });
     if (!user) throw new AppError('Invalid credentials', 401, 'UNAUTHORIZED');
 
     const valid = await bcrypt.compare(password, user.passwordHash);
+    logger.info('AUTH_LOGIN_STAGE', { stage: 'password_check', passwordValid: valid });
     if (!valid) throw new AppError('Invalid credentials', 401, 'UNAUTHORIZED');
 
     const tokens = await issueTokens(user);
+    logger.info('AUTH_LOGIN_STAGE', { stage: 'tokens_issued', userId: user.id });
     res.json({ success: true, data: { user: sanitizeUser(user), ...tokens } });
   } catch (err) {
     next(err);

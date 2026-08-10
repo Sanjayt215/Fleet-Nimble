@@ -1,8 +1,12 @@
 import prisma from '../utils/prisma.js';
 import { emitToUser } from '../utils/socketHub.js';
 
-export async function getCallLogs(userId, { page = 1, limit = 20, status, type, startDate, endDate }) {
-  const where = { userId };
+function tenantWhere(userId, companyId) {
+  return companyId ? { OR: [{ userId }, { companyId }] } : { userId };
+}
+
+export async function getCallLogs(userId, { page = 1, limit = 20, status, type, startDate, endDate }, companyId = null) {
+  const where = tenantWhere(userId, companyId);
   if (status) where.callStatus = status;
   if (type) where.callType = type;
   if (startDate || endDate) {
@@ -29,9 +33,9 @@ export async function getCallLogs(userId, { page = 1, limit = 20, status, type, 
   return { calls, total, page, totalPages: Math.ceil(total / limit) };
 }
 
-export async function getCallById(userId, id) {
+export async function getCallById(userId, id, companyId = null) {
   return prisma.aiReceptionistCall.findFirst({
-    where: { id, userId },
+    where: { id, ...tenantWhere(userId, companyId) },
     include: {
       appointment: true,
       supportTicket: true,
@@ -74,21 +78,21 @@ export async function updateCall(userId, id, data) {
   return prisma.aiReceptionistCall.update({ where: { id }, data });
 }
 
-export async function getSummary(userId) {
+export async function getSummary(userId, companyId = null) {
   const [totalCalls, missedCalls, scheduledMeetings, supportTickets, escalatedCalls] = await Promise.all([
-    prisma.aiReceptionistCall.count({ where: { userId } }),
-    prisma.aiReceptionistCall.count({ where: { userId, callStatus: 'FAILED' } }),
-    prisma.aiReceptionistAppointment.count({ where: { userId, status: { in: ['SCHEDULED', 'CONFIRMED'] } } }),
-    prisma.aiReceptionistSupportTicket.count({ where: { userId, status: { in: ['OPEN', 'IN_PROGRESS'] } } }),
-    prisma.aiReceptionistCall.count({ where: { userId, callStatus: 'ESCALATED' } }),
+    prisma.aiReceptionistCall.count({ where: tenantWhere(userId, companyId) }),
+    prisma.aiReceptionistCall.count({ where: { ...tenantWhere(userId, companyId), callStatus: 'FAILED' } }),
+    prisma.aiReceptionistAppointment.count({ where: { ...tenantWhere(userId, companyId), status: { in: ['SCHEDULED', 'CONFIRMED'] } } }),
+    prisma.aiReceptionistSupportTicket.count({ where: { ...tenantWhere(userId, companyId), status: { in: ['OPEN', 'IN_PROGRESS'] } } }),
+    prisma.aiReceptionistCall.count({ where: { ...tenantWhere(userId, companyId), callStatus: 'ESCALATED' } }),
   ]);
 
   return { totalCalls, missedCalls, scheduledMeetings, supportTickets, escalatedCalls };
 }
 
-export async function getRecentCalls(userId, limit = 5) {
+export async function getRecentCalls(userId, limit = 5, companyId = null) {
   return prisma.aiReceptionistCall.findMany({
-    where: { userId },
+    where: tenantWhere(userId, companyId),
     orderBy: { callStartedAt: 'desc' },
     take: limit,
     include: {

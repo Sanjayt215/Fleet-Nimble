@@ -1,15 +1,22 @@
 import prisma from '../utils/prisma.js';
 
-export async function getCustomers(userId, { page = 1, limit = 20, status, search, sortBy = 'leadScore', sortOrder = 'desc' }) {
-  const where = { userId };
+function tenantWhere(userId, companyId) {
+  return companyId ? { OR: [{ userId }, { companyId }] } : { userId };
+}
+
+export async function getCustomers(userId, { page = 1, limit = 20, status, search, sortBy = 'leadScore', sortOrder = 'desc' }, companyId = null) {
+  const where = tenantWhere(userId, companyId);
   if (status) where.status = status;
   if (search) {
-    where.OR = [
-      { name: { contains: search, mode: 'insensitive' } },
-      { companyName: { contains: search, mode: 'insensitive' } },
-      { phone: { contains: search } },
-      { email: { contains: search, mode: 'insensitive' } },
-    ];
+    where.AND = where.AND || [];
+    where.AND.push({
+      OR: [
+        { name: { contains: search, mode: 'insensitive' } },
+        { companyName: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search } },
+        { email: { contains: search, mode: 'insensitive' } },
+      ],
+    });
   }
 
   const orderBy = {};
@@ -35,9 +42,9 @@ export async function getCustomers(userId, { page = 1, limit = 20, status, searc
   return { customers, total, page, totalPages: Math.ceil(total / limit) };
 }
 
-export async function getCustomerById(userId, id) {
+export async function getCustomerById(userId, id, companyId = null) {
   return prisma.receptionistCustomer.findFirst({
-    where: { id, userId },
+    where: { id, ...tenantWhere(userId, companyId) },
     include: {
       notes: { orderBy: { createdAt: 'desc' } },
     },
@@ -58,21 +65,21 @@ export async function addCustomerNote(userId, customerId, content, type = 'GENER
   });
 }
 
-export async function getLeadPipelineSummary(userId) {
+export async function getLeadPipelineSummary(userId, companyId = null) {
   const [leads, prospects, customers, partners, enterprise] = await Promise.all([
-    prisma.receptionistCustomer.count({ where: { userId, status: 'LEAD' } }),
-    prisma.receptionistCustomer.count({ where: { userId, status: 'PROSPECT' } }),
-    prisma.receptionistCustomer.count({ where: { userId, status: 'CUSTOMER' } }),
-    prisma.receptionistCustomer.count({ where: { userId, status: 'PARTNER' } }),
-    prisma.receptionistCustomer.count({ where: { userId, status: 'ENTERPRISE' } }),
+    prisma.receptionistCustomer.count({ where: { ...tenantWhere(userId, companyId), status: 'LEAD' } }),
+    prisma.receptionistCustomer.count({ where: { ...tenantWhere(userId, companyId), status: 'PROSPECT' } }),
+    prisma.receptionistCustomer.count({ where: { ...tenantWhere(userId, companyId), status: 'CUSTOMER' } }),
+    prisma.receptionistCustomer.count({ where: { ...tenantWhere(userId, companyId), status: 'PARTNER' } }),
+    prisma.receptionistCustomer.count({ where: { ...tenantWhere(userId, companyId), status: 'ENTERPRISE' } }),
   ]);
 
   return { leads, prospects, customers, partners, enterprise, total: leads + prospects + customers + partners + enterprise };
 }
 
-export async function getHighPriorityLeads(userId, limit = 10) {
+export async function getHighPriorityLeads(userId, limit = 10, companyId = null) {
   return prisma.receptionistCustomer.findMany({
-    where: { userId, leadScore: { gte: 50 } },
+    where: { ...tenantWhere(userId, companyId), leadScore: { gte: 50 } },
     orderBy: { leadScore: 'desc' },
     take: limit,
   });

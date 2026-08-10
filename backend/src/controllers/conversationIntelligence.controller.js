@@ -97,7 +97,7 @@ export async function getLeadByCustomer(req, res) {
     return res.status(400).json({ success: false, message: 'Missing customerId' });
   }
   const customer = await prisma.receptionistCustomer.findFirst({
-    where: { id: customerId, userId: req.user.id },
+    where: { id: customerId, ...(req.user.companyId ? { OR: [{ userId: req.user.id }, { companyId: req.user.companyId }] } : { userId: req.user.id }) },
     select: {
       id: true, name: true, companyName: true, phone: true, email: true, fleetSize: true,
       status: true, salesStage: true, leadScore: true, metadata: true, tags: true,
