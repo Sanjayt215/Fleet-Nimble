@@ -16,7 +16,7 @@ import {
   bufferTranscriptEntry,
   flushPendingTranscripts,
 } from './receptionistTranscript.service.js';
-import { buildSystemPrompt, buildToolDefinitions } from './receptionistVoice.service.js';
+import { buildSystemPrompt, buildToolDefinitions, buildGreetingMessage, isBookingConfirmationRequest } from './receptionistVoice.service.js';
 import * as orchestrator from './receptionistOrchestrator.service.js';
 import * as liveTools from './receptionistLiveTools.service.js';
 import * as transcriptService from './receptionistTranscript.service.js';
@@ -106,6 +106,7 @@ function handleMediaStream(ws, req) {
   let currentToolCallKey = null;
   let toolCallInterrupted = false;
   let callTranscriptBuffer = [];
+  let bookingConfirmationLogged = false;
 
   // Phase 4 — audio pipeline counters
   let pipelineCounters = {
@@ -300,16 +301,15 @@ function handleMediaStream(ws, req) {
     if (rtmSession) {
       rtmSession.greetingSent = true;
       rtmSession.diagGreetingRequestTime = Date.now();
+      rtmSession.setGreetingState(RealtimeSessionManager.GREETING_STATES.PLAYING);
       rtmSession.setState(RealtimeSessionManager.STATES.GREETING);
     }
     recordTimeline(TIMELINE_EVENT_TYPES.GREETING_SENT, 'Greeting sent', { personalized: !!customerMemory });
     emitCallStage('ai-speaking', 'AI Speaking', { phase: 'greeting' });
     if (provider && provider.isConnected) {
-      const greetingText = customerMemory?.isReturning && customerMemory?.customer?.name
-        ? `Welcome back, ${customerMemory.customer.name}. Last time we discussed FleetNimble. How may I help you today?`
-        : "Hello. Thank you for calling FleetNimble. I'm the FleetNimble AI Receptionist. How may I help you today?";
+      const greetingText = buildGreetingMessage(customerMemory);
       provider.sendText(greetingText);
-      logger.info('GREETING_REQUEST_STARTED', { callSid, personalized: !!customerMemory });
+      logger.info('RECEPTIONIST_GREETING_STARTED', { callSid, personalized: !!customerMemory });
 
       if (greetingTimeoutTimer) clearTimeout(greetingTimeoutTimer);
       greetingTimeoutTimer = setTimeout(() => {
@@ -352,6 +352,7 @@ function handleMediaStream(ws, req) {
         logger.info('BOOKING_TOOL_CALLED', {
           callSid, callId: callRecordId, args: toSafeBookingLog(args),
         });
+        logger.info('RECEPTIONIST_INTENT_DETECTED', { callSid, intent: 'demo_booking' });
 
         const normalized = normalizeSchedulingArgs(args || {});
         collectedData.callerName = collectedData.callerName || normalized.callerName;
@@ -366,6 +367,9 @@ function handleMediaStream(ws, req) {
         if (normalized.scheduledDateTime) collectedData.scheduledDateTime = normalized.scheduledDateTime;
         if (normalized.preferredDate) collectedData.preferredDate = normalized.preferredDate;
         if (normalized.preferredTime) collectedData.preferredTime = normalized.preferredTime;
+        logger.info('RECEPTIONIST_DETAILS_UPDATED', {
+          callSid, callId: callRecordId, details: toSafeBookingLog(collectedData),
+        });
 
         const missing = missingBookingFields(collectedData);
         logger.info('BOOKING_ARGUMENTS_VALIDATED', {
@@ -376,6 +380,7 @@ function handleMediaStream(ws, req) {
           logger.warn('BOOKING_VALIDATION_INCOMPLETE', {
             callSid, callId: callRecordId, missing,
           });
+          logger.info('RECEPTIONIST_DETAILS_COLLECTION_STARTED', { callSid, missing });
           result = {
             success: false,
             retryable: false,
@@ -413,6 +418,15 @@ function handleMediaStream(ws, req) {
           collectedData.appointmentCreated = true;
           pendingAction = null;
           currentStage = 'completed';
+          logger.info('RECEPTIONIST_BOOKING_CREATED', {
+            callSid, callId: callRecordId, appointmentId: orchestratorResult.actionResult.id,
+            customerId: orchestratorResult.customerId || customerId || null,
+          });
+          if (orchestratorResult.customerId || customerId) {
+            logger.info('RECEPTIONIST_CUSTOMER_PERSISTED', {
+              callSid, customerId: orchestratorResult.customerId || customerId,
+            });
+          }
           result = { success: true, appointmentId: orchestratorResult.actionResult.id, customerId: orchestratorResult.customerId, message: orchestratorResult.reply };
         } else {
           logger.error('VOICE_AGENT_TOOL_FAILED', {
@@ -536,6 +550,7 @@ function handleMediaStream(ws, req) {
       }
 
       case 'end_call': {
+        logger.info('RECEPTIONIST_GOODBYE_STARTED', { callSid, reason: args?.reason || 'caller_requested' });
         result = { success: true, message: 'Ending call' };
         scheduleTimer(() => {
           endCallGracefully('Thank you for calling FleetNimble. Have a great day! Goodbye.');
@@ -780,8 +795,9 @@ function handleMediaStream(ws, req) {
         if (rtmSession && !rtmSession.greetingAudioReceived && rtmSession.state === RealtimeSessionManager.STATES.GREETING) {
           rtmSession.greetingAudioReceived = true;
           rtmSession.diagGreetingFirstAudioTime = Date.now();
+          rtmSession.setGreetingState(RealtimeSessionManager.GREETING_STATES.PLAYING);
           const latencyMs = rtmSession.diagGreetingRequestTime ? Date.now() - rtmSession.diagGreetingRequestTime : null;
-          logger.info('GREETING_FIRST_AUDIO', { callSid, latencyMs });
+          logger.info('RECEPTIONIST_GREETING_AUDIO', { callSid, latencyMs });
           if (greetingTimeoutTimer) {
             clearTimeout(greetingTimeoutTimer);
             greetingTimeoutTimer = null;
@@ -857,6 +873,10 @@ function handleMediaStream(ws, req) {
         if (data.partial) return;
         callTranscriptBuffer.push({ role: 'assistant', content: data.text, timestamp: new Date().toISOString() });
         addTranscriptEntry(callSid, { role: 'assistant', content: data.text });
+        if (!bookingConfirmationLogged && isBookingConfirmationRequest(data.text)) {
+          bookingConfirmationLogged = true;
+          logger.info('RECEPTIONIST_BOOKING_CONFIRMATION_REQUESTED', { callSid, text: data.text.substring(0, 120) });
+        }
         if (legacySession?.metadata?.callLogId) {
           bufferTranscriptEntry(legacySession.metadata.callLogId, { role: 'assistant', content: data.text, timestamp: new Date().toISOString() });
         }
@@ -877,6 +897,12 @@ function handleMediaStream(ws, req) {
         if (rtmSession?.state === RealtimeSessionManager.STATES.RESPONDING) {
           interruptionCount++;
           emitSocketEvent('call.interrupted', { callSid, count: interruptionCount, timestamp: new Date().toISOString() });
+        }
+        if (rtmSession && rtmSession.state === RealtimeSessionManager.STATES.GREETING &&
+            rtmSession.greetingState !== RealtimeSessionManager.GREETING_STATES.COMPLETED) {
+          rtmSession.setGreetingState(RealtimeSessionManager.GREETING_STATES.COMPLETED);
+          logger.info('RECEPTIONIST_GREETING_COMPLETED', { callSid, reason: 'interrupted' });
+          logger.info('RECEPTIONIST_GREETING_INTERRUPTED', { callSid });
         }
         multiAgentResponding = false;
         emitCallStage('customer-speaking', 'Customer Speaking');
@@ -906,11 +932,12 @@ function handleMediaStream(ws, req) {
       provider.on('responseCompleted', () => {
         multiAgentResponding = false;
         if (rtmSession) {
-          if (rtmSession.state === RealtimeSessionManager.STATES.RESPONDING ||
-              rtmSession.state === RealtimeSessionManager.STATES.GREETING) {
-            rtmSession.greetingSent = true;
-            rtmSession.setState(RealtimeSessionManager.STATES.LISTENING);
+          if (rtmSession.greetingState !== RealtimeSessionManager.GREETING_STATES.COMPLETED) {
+            rtmSession.setGreetingState(RealtimeSessionManager.GREETING_STATES.COMPLETED);
+            logger.info('RECEPTIONIST_GREETING_COMPLETED', { callSid });
           }
+          rtmSession.greetingSent = true;
+          rtmSession.setState(RealtimeSessionManager.STATES.LISTENING);
         }
       });
 
@@ -1334,6 +1361,7 @@ function handleMediaStream(ws, req) {
         ticketCreated: !!collectedData.supportTicketCreated,
         duration: pipelineCounters.duration,
         greetingSent,
+        greetingState: rtmSession?.greetingState || null,
         greetingAudioReceived: rtmSession?.greetingAudioReceived,
         totalDroppedAudioFrames: droppedFrameCount,
         providerError: providerErrorCode,
@@ -1342,6 +1370,13 @@ function handleMediaStream(ws, req) {
         audioBytes: pipelineCounters.audioBytes,
         speechEvents: pipelineCounters.speechEvents,
         transcriptionEvents: pipelineCounters.transcriptionEvents,
+      });
+      logger.info('RECEPTIONIST_CALL_COMPLETED', {
+        callSid,
+        callRecordId,
+        duration: pipelineCounters.duration,
+        intent: currentIntent,
+        appointmentCreated: !!collectedData.appointmentCreated,
       });
     }
     providerHealth.enableAudioForwarding();
@@ -1353,6 +1388,7 @@ function handleMediaStream(ws, req) {
   function endCallGracefully(message) {
     if (isClosing || endCallInitiated) return;
     endCallInitiated = true;
+    logger.info('RECEPTIONIST_GOODBYE_STARTED', { callSid, reason: 'end_call_flow' });
     if (!provider || !provider.isConnected) {
       gracefulClose();
       return;
@@ -1489,6 +1525,12 @@ function handleMediaStream(ws, req) {
         });
         legacySession.streamSid = streamSid;
         legacySession.timers = timers;
+
+        logger.info('RECEPTIONIST_CALL_STARTED', {
+          callSid,
+          streamSid,
+          fromTail: callerPhone ? callerPhone.slice(-4) : 'unknown',
+        });
 
         logger.info('TWILIO_START_RECEIVED', {
           callSid,

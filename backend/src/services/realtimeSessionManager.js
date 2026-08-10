@@ -11,6 +11,12 @@ const STATE = {
   CLOSED: 'CLOSED',
 };
 
+const GREETING_STATE = {
+  NOT_STARTED: 'NOT_STARTED',
+  PLAYING: 'PLAYING',
+  COMPLETED: 'COMPLETED',
+};
+
 class RealtimeSession {
   constructor(callSid, twilioSocket, metadata = {}, onStateChange = null) {
     this.callSid = callSid;
@@ -20,6 +26,7 @@ class RealtimeSession {
     this.startedAt = Date.now();
     this.lastActivity = Date.now();
     this.greetingSent = false;
+    this.greetingState = GREETING_STATE.NOT_STARTED;
     this.closed = false;
     this.state = STATE.IDLE;
     this.metadata = { ...metadata };
@@ -33,6 +40,17 @@ class RealtimeSession {
     this.latencyMs = [];
     this.stopReconnect = false;
     this.onStateChange = typeof onStateChange === 'function' ? onStateChange : null;
+  }
+
+  setGreetingState(newState) {
+    const oldState = this.greetingState;
+    if (oldState === newState) return;
+    this.greetingState = newState;
+    logger.info('SESSION_GREETING_STATE_CHANGE', {
+      callSid: this.callSid,
+      from: oldState,
+      to: newState,
+    });
   }
 
   setState(newState) {
@@ -81,6 +99,7 @@ class RealtimeSession {
       startedAt: this.startedAt,
       lastActivity: this.lastActivity,
       greetingSent: this.greetingSent,
+      greetingState: this.greetingState,
       closed: this.closed,
       duration: Date.now() - this.startedAt,
       reconnectCount: this.reconnectCount,
@@ -99,6 +118,7 @@ const sessions = new Map();
 
 export class RealtimeSessionManager {
   static STATES = STATE;
+  static GREETING_STATES = GREETING_STATE;
 
   static create(callSid, twilioSocket, metadata = {}, onStateChange = null) {
     if (sessions.has(callSid)) {

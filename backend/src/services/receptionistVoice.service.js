@@ -12,7 +12,28 @@ const GEMINI_VOICE_MAP = {
 };
 
 export const AI_RECEPTIONIST_GREETING =
-  "Hello. Thank you for calling FleetNimble. I'm the FleetNimble AI Receptionist. How may I help you today?";
+  "Hi! Thank you for calling FleetNimble. I'm FleetNimble's AI Receptionist, and I'm here to help. I can answer your questions about our fleet management platform, help you explore what FleetNimble can do for your business, or help you book a demo. How can I help you today?";
+
+export function buildGreetingMessage(customerMemory = null) {
+  if (customerMemory?.isReturning && customerMemory?.customer?.name) {
+    return `Welcome back, ${customerMemory.customer.name}. Last time we discussed FleetNimble. I'm FleetNimble's AI Receptionist, and I'm here to help. How may I help you today?`;
+  }
+  return AI_RECEPTIONIST_GREETING;
+}
+
+const BOOKING_CONFIRMATION_PATTERNS = [
+  /shall i (?:go ahead and|proceed to)?\s*(?:book|schedule|confirm)/i,
+  /(?:go ahead|confirm|ready to)\s*(?:and)?\s*(?:book|schedule)/i,
+  /book (?:this|that|the) (?:demo|appointment|meeting)/i,
+  /should i (?:go ahead|book|schedule)/i,
+  /may i (?:go ahead|book|schedule)/i,
+  /i(?:'| a)?ll (?:go ahead|book|schedule)/i,
+];
+
+export function isBookingConfirmationRequest(text) {
+  if (!text || typeof text !== 'string') return false;
+  return BOOKING_CONFIRMATION_PATTERNS.some((pattern) => pattern.test(text));
+}
 
 export function mapToOpenAIVoice(voiceId) {
   if (OPENAI_VOICES.includes(voiceId?.toLowerCase())) {
@@ -31,7 +52,8 @@ export function mapToProviderVoice(provider, voiceId) {
 const BASE_PROMPT_CACHE = new Map();
 
 export function buildSystemPrompt(config, memoryContext = '') {
-  const cacheKey = `${config.businessName || 'FleetNimble'}_${config.realtime?.businessToolsEnabled ?? true}`;
+  const businessName = config.businessName || 'FleetNimble';
+  const cacheKey = `${businessName}_${config.realtime?.businessToolsEnabled ?? true}`;
   if (BASE_PROMPT_CACHE.has(cacheKey) && !memoryContext) {
     return BASE_PROMPT_CACHE.get(cacheKey);
   }
@@ -46,15 +68,32 @@ export function buildSystemPrompt(config, memoryContext = '') {
     ? `\nCaller: ${memoryContext}`
     : '';
 
-  const prompt = `You are ${config.businessName || 'FleetNimble'}'s AI Receptionist.
+  const prompt = `You are ${businessName}'s AI Receptionist.
 
-Speak naturally, 1-2 sentences. One question at a time. If interrupted, stop.
+Your job is to warmly welcome callers, understand their needs, answer questions about ${businessName}, help qualified callers book demos, collect the necessary information naturally, and ensure collected information is persisted correctly.
+
+Every new call MUST begin with a warm ${businessName} greeting. Never begin a new call by immediately requesting personal information such as name, company, phone number, email, or fleet size. Greet the caller warmly first and ask how you can help, then let them explain why they called.
+
+Listen to the caller. If the caller interrupts you, stop speaking immediately and respond naturally to what they said. Never repeat the greeting after the call has started.
+
+Speak naturally, 1-2 short sentences. Ask one question at a time. Be conversational, concise, professional, warm, and helpful.
 
 Use retrieve_knowledge for product/pricing/feature questions before answering.
 
-When booking a demo or meeting, always read the full details (name, company, meeting purpose, date, time, timezone) back to the caller and get their explicit confirmation before calling create_appointment.
+For a general question, answer the caller's question directly and then ask if there is anything else they need. Do not collect personal or business details unless they are needed for an action such as booking a demo.
+
+When the caller wants to book a demo:
+1. Confirm they want to book a demo.
+2. Collect the required details one at a time, conversationally: full name, company name, email, phone number, fleet size (number of vehicles), preferred demo date/time, and timezone. Never ask all of them in one robotic block.
+3. When all details are collected, read the full details back to the caller and ask for their explicit confirmation before calling create_appointment.
+
+Never call create_appointment until the caller has explicitly confirmed the full details. Do not silently create appointments.
 
 After a tool succeeds, confirm the outcome to the caller in plain words, e.g. "You're all set, your demo is scheduled." If a tool returns missing_fields or an error, ask the caller for the missing details.
+
+At the end of a successful conversation, politely say goodbye before the call ends.
+
+Never invent ${businessName} features, pricing, availability, appointments, or customer information.
 
 ${toolsIntro}${memorySection}`;
 
