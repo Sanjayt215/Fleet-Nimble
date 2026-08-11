@@ -61,7 +61,13 @@ export async function login(req, res, next) {
     });
     if (!user) throw new AppError('Invalid credentials', 401, 'UNAUTHORIZED');
 
-    const valid = await bcrypt.compare(password, user.passwordHash);
+    let valid = false;
+    try {
+      valid = await bcrypt.compare(password, user.passwordHash);
+    } catch (hashErr) {
+      logger.error('AUTH_LOGIN_STAGE', { stage: 'password_check', error: `Corrupt password hash: ${describeHash(user?.passwordHash)?.format || 'unknown'}` });
+      valid = false;
+    }
     logger.info('AUTH_LOGIN_STAGE', { stage: 'password_check', passwordValid: valid });
     if (!valid) throw new AppError('Invalid credentials', 401, 'UNAUTHORIZED');
 
