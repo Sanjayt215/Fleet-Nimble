@@ -51,10 +51,10 @@ export function mapToProviderVoice(provider, voiceId) {
 
 const BASE_PROMPT_CACHE = new Map();
 
-export function buildSystemPrompt(config, memoryContext = '') {
+export function buildSystemPrompt(config, memoryContext = '', businessContext = null) {
   const businessName = config.businessName || 'FleetNimble';
   const cacheKey = `${businessName}_${config.realtime?.businessToolsEnabled ?? true}`;
-  if (BASE_PROMPT_CACHE.has(cacheKey) && !memoryContext) {
+  if (BASE_PROMPT_CACHE.has(cacheKey) && !memoryContext && !businessContext) {
     return BASE_PROMPT_CACHE.get(cacheKey);
   }
 
@@ -66,6 +66,10 @@ export function buildSystemPrompt(config, memoryContext = '') {
 
   const memorySection = memoryContext
     ? `\nCaller: ${memoryContext}`
+    : '';
+
+  const businessSection = businessContext
+    ? `\n\nBusiness context for this call:\n${businessContext}\n\nAnswer questions about this business using the business context and the knowledge tools before anything else. Never invent business information that is not present above. If the information is not available, say you do not have that information and offer to connect them with the team.`
     : '';
 
   const prompt = `You are ${businessName}'s AI Receptionist.
@@ -95,13 +99,67 @@ At the end of a successful conversation, politely say goodbye before the call en
 
 Never invent ${businessName} features, pricing, availability, appointments, or customer information.
 
-${toolsIntro}${memorySection}`;
+${toolsIntro}${memorySection}${businessSection}`;
 
-  if (!memoryContext) {
+  if (!memoryContext && !businessContext) {
     BASE_PROMPT_CACHE.set(cacheKey, prompt);
   }
 
   return prompt;
+}
+
+/**
+ * Builds a compact business context string injected into the system prompt.
+ * Includes business name, description, products/services, pricing summary,
+ * locations, hours, agent personality/goals and custom business context.
+ */
+export function buildBusinessContext(businessProfile, agentConfig) {
+  const parts = [];
+
+  if (agentConfig?.businessContext) parts.push(`Context: ${agentConfig.businessContext}`);
+  if (agentConfig?.agentName) parts.push(`Agent name: ${agentConfig.agentName}`);
+  if (agentConfig?.personality) parts.push(`Personality: ${agentConfig.personality}`);
+  if (agentConfig?.tone) parts.push(`Tone: ${agentConfig.tone}`);
+  if (agentConfig?.primaryGoal) parts.push(`Primary goal: ${agentConfig.primaryGoal}`);
+  const secondaryGoals = agentConfig?.secondaryGoals;
+  if (Array.isArray(secondaryGoals) && secondaryGoals.length > 0) {
+    parts.push(`Secondary goals: ${secondaryGoals.join('; ')}`);
+  }
+
+  if (businessProfile) {
+    if (businessProfile.businessName) parts.push(`Business name: ${businessProfile.businessName}`);
+    if (businessProfile.description) parts.push(`About: ${businessProfile.description}`);
+    const products = businessProfile.products;
+    if (Array.isArray(products) && products.length > 0) {
+      parts.push(`Products: ${products.map((p) => (typeof p === 'string' ? p : p?.name)).filter(Boolean).join(', ')}`);
+    }
+    const services = businessProfile.services;
+    if (Array.isArray(services) && services.length > 0) {
+      parts.push(`Services: ${services.map((s) => (typeof s === 'string' ? s : s?.name)).filter(Boolean).join(', ')}`);
+    }
+    const pricing = businessProfile.pricing;
+    if (pricing && typeof pricing === 'object') {
+      const entries = Object.entries(pricing).filter(([, v]) => v);
+      if (entries.length > 0) {
+        parts.push(`Pricing summary: ${entries.map(([k, v]) => `${k}: ${v}`).join(', ')}`);
+      }
+    }
+    const locations = businessProfile.locations;
+    if (Array.isArray(locations) && locations.length > 0) {
+      parts.push(`Locations: ${locations.map((l) => (typeof l === 'string' ? l : [l?.city, l?.address].filter(Boolean).join(', '))).filter(Boolean).join('; ')}`);
+    }
+    const hours = businessProfile.businessHours;
+    if (hours && typeof hours === 'object' && Object.keys(hours).length > 0) {
+      parts.push(`Business hours: ${Object.entries(hours).map(([k, v]) => `${k}: ${v}`).join(', ')}`);
+    }
+    const faqs = businessProfile.faqs;
+    if (Array.isArray(faqs) && faqs.length > 0) {
+      const faqText = faqs.slice(0, 3).map((f) => (typeof f === 'string' ? f : [f?.question || f?.q, f?.answer || f?.a].filter(Boolean).join(' — '))).filter(Boolean);
+      if (faqText.length > 0) parts.push(`FAQs: ${faqText.join(' | ')}`);
+    }
+  }
+
+  return parts.join('\n');
 }
 
 export function buildToolDefinitions(businessToolsEnabled = true) {

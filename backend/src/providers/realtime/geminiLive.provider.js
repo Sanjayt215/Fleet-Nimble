@@ -227,7 +227,7 @@ export class GeminiLiveProvider extends RealtimeVoiceProvider {
     const memoryContext = this._sessionContext.memoryContext || '';
     const businessToolsEnabled = this._sessionContext.businessToolsEnabled ?? config.realtime?.businessToolsEnabled ?? true;
     const tools = businessToolsEnabled ? buildToolDefinitions(true) : [];
-    const systemPrompt = await buildSystemPrompt(config, memoryContext);
+    const systemPrompt = await buildSystemPrompt(config, memoryContext, this._sessionContext.businessContext || null);
     const serverVadEnabled = process.env.GEMINI_ENABLE_SERVER_VAD !== 'false';
     const vadDisabled = serverVadEnabled === false || config.gemini?.enableServerVad === false;
 

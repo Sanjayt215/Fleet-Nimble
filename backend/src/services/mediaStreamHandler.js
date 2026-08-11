@@ -16,7 +16,7 @@ import {
   bufferTranscriptEntry,
   flushPendingTranscripts,
 } from './receptionistTranscript.service.js';
-import { buildSystemPrompt, buildToolDefinitions, buildGreetingMessage, isBookingConfirmationRequest } from './receptionistVoice.service.js';
+import { buildSystemPrompt, buildToolDefinitions, buildGreetingMessage, isBookingConfirmationRequest, buildBusinessContext } from './receptionistVoice.service.js';
 import * as orchestrator from './receptionistOrchestrator.service.js';
 import * as liveTools from './receptionistLiveTools.service.js';
 import * as transcriptService from './receptionistTranscript.service.js';
@@ -25,6 +25,11 @@ import { redirectToGreeting, redirectToUnavailable } from './twilioWebhook.servi
 import * as providerHealth from './receptionistProviderHealth.service.js';
 import * as metrics from './receptionistMetrics.service.js';
 import { resolveTenant, isPersistenceAvailable } from './receptionistTenantResolver.service.js';
+import { getAgentConfig } from './agentConfig.service.js';
+import { getBusinessProfile } from './businessProfile.service.js';
+import { answerFromTenantKnowledge } from './businessKnowledge.service.js';
+import { executeNewTool, getNewToolNames } from './toolRegistry.service.js';
+import { logAiInteraction } from './receptionistQA.service.js';
 import { createRealtimeVoiceProvider, isRealtimeProviderEnabled } from '../providers/realtime/realtimeVoiceProviderFactory.js';
 import { validateTwilioPayload } from './audio/twilioAudioCodec.js';
 import { shouldUseMultiAgent } from '../multiagent/index.js';
@@ -56,6 +61,7 @@ const ALLOWED_TOOLS = new Set([
   'retrieve_knowledge',
   'update_conversation_memory',
   ...liveTools.getLiveToolNames(),
+  ...getNewToolNames(),
 ]);
 
 const COMPLETED_TOOL_CALLS = new Set();
@@ -107,6 +113,10 @@ function handleMediaStream(ws, req) {
   let toolCallInterrupted = false;
   let callTranscriptBuffer = [];
   let bookingConfirmationLogged = false;
+  // Business knowledge intelligence (tenant-scoped, loaded after resolution)
+  let agentGreeting = null;
+  let businessContext = null;
+  let businessContextLoaded = false;
 
   // Phase 4 — audio pipeline counters
   let pipelineCounters = {
@@ -304,12 +314,15 @@ function handleMediaStream(ws, req) {
       rtmSession.setGreetingState(RealtimeSessionManager.GREETING_STATES.PLAYING);
       rtmSession.setState(RealtimeSessionManager.STATES.GREETING);
     }
-    recordTimeline(TIMELINE_EVENT_TYPES.GREETING_SENT, 'Greeting sent', { personalized: !!customerMemory });
+    recordTimeline(TIMELINE_EVENT_TYPES.GREETING_SENT, 'Greeting sent', { personalized: !!customerMemory, custom: !!agentGreeting });
     emitCallStage('ai-speaking', 'AI Speaking', { phase: 'greeting' });
     if (provider && provider.isConnected) {
-      const greetingText = buildGreetingMessage(customerMemory);
+      // Business knowledge intelligence — admin-configured greeting override
+      // (explicitly set via AgentConfig) when available, otherwise the
+      // standard professional FleetNimble greeting.
+      const greetingText = agentGreeting || buildGreetingMessage(customerMemory);
       provider.sendText(greetingText);
-      logger.info('RECEPTIONIST_GREETING_STARTED', { callSid, personalized: !!customerMemory });
+      logger.info('RECEPTIONIST_GREETING_STARTED', { callSid, personalized: !!customerMemory, custom: !!agentGreeting });
 
       if (greetingTimeoutTimer) clearTimeout(greetingTimeoutTimer);
       greetingTimeoutTimer = setTimeout(() => {
@@ -320,6 +333,36 @@ function handleMediaStream(ws, req) {
       timers.push(greetingTimeoutTimer);
     } else {
       logger.warn('GREETING_SKIPPED_PROVIDER_NOT_READY', { callSid, providerReady: provider?.isConnected });
+    }
+  }
+
+  /**
+   * Business knowledge intelligence — loads the tenant's business profile and
+   * agent configuration right after tenant resolution. Non-blocking: the call
+   * proceeds with the standard FleetNimble greeting/prompt if this hasn't
+   * finished before the provider session is ready.
+   */
+  async function loadBusinessIntelligence(ownerUserId, ownerCompanyId, calledPhone) {
+    if (!ownerUserId || businessContextLoaded) return;
+    try {
+      const [agentConfig, profile] = await Promise.all([
+        getAgentConfig({ userId: ownerUserId, companyId: ownerCompanyId, phoneNumber: calledPhone }),
+        getBusinessProfile({ userId: ownerUserId, companyId: ownerCompanyId }),
+      ]);
+
+      // Explicitly configured agent config → use its greeting (still a
+      // professional FleetNimble greeting by default; greeting_protected
+      // prevents empty removal). Default configs keep the standard greeting.
+      if (agentConfig?.greetingMessage && !agentConfig.isDefault && !greetingSent) {
+        agentGreeting = agentConfig.greetingMessage;
+      }
+
+      const contextText = buildBusinessContext(profile, agentConfig);
+      if (contextText) businessContext = contextText;
+      businessContextLoaded = true;
+      logger.info('BUSINESS_INTELLIGENCE_LOADED', { callSid, userId: ownerUserId, hasProfile: !!profile, hasCustomGreeting: !!agentGreeting });
+    } catch (err) {
+      logger.warn('BUSINESS_INTELLIGENCE_LOAD_FAILED', { callSid, error: err.message });
     }
   }
 
@@ -525,11 +568,92 @@ function handleMediaStream(ws, req) {
       }
 
       case 'retrieve_knowledge': {
-        const { queryKnowledgeBase } = await import('./receptionistKnowledgeBase.service.js');
-        const answer = await queryKnowledgeBase(args?.query || '', userId);
-        result = { found: !!answer, answer: answer || null, query: args?.query };
+        // Business knowledge intelligence — tenant-scoped retrieval first
+        // (business profile + approved documents), global KB fallback.
+        const query = args?.query || '';
+        let answer = null;
+        let sources = [];
+
+        if (userId) {
+          try {
+            const tenantResult = await answerFromTenantKnowledge({
+              userId,
+              companyId: companyId || null,
+              query,
+              category: null,
+              useProfile: true,
+            });
+            if (tenantResult?.answer) {
+              answer = tenantResult.answer;
+              sources = tenantResult.sources || [];
+            }
+          } catch (err) {
+            logger.warn('TENANT_RETRIEVAL_FAILED', { callSid, error: err.message });
+          }
+        }
+
+        if (!answer) {
+          const { queryKnowledgeBase } = await import('./receptionistKnowledgeBase.service.js');
+          answer = await queryKnowledgeBase(query, userId);
+        }
+
+        result = { found: !!answer, answer: answer || null, query, sources };
         if (answer) {
-          collectedData.lastKnowledgeQuery = args?.query;
+          collectedData.lastKnowledgeQuery = query;
+          if (sources.length > 0) {
+            collectedData.knowledgeSourcesUsed = sources;
+          }
+        }
+        break;
+      }
+
+      case 'search_knowledge':
+      case 'create_lead':
+      case 'transfer_call':
+      case 'create_follow_up': {
+        const toolResult = await executeNewTool(functionName, args, {
+          userId,
+          companyId: companyId || null,
+          callSid,
+          callId: callRecordId,
+          customerId,
+        });
+        result = toolResult;
+        if (toolResult.success) {
+          if (functionName === 'search_knowledge') collectedData.lastKnowledgeQuery = args?.query;
+          if (functionName === 'create_lead') {
+            collectedData.leadCreated = true;
+            logAiInteraction({
+              callSid,
+              callId: callRecordId,
+              userId,
+              companyId: companyId || null,
+              intent: 'lead_creation',
+              question: 'create_lead',
+              answer: `Lead created: ${args?.name}`,
+              toolCalls: [{ name: 'create_lead' }],
+              toolResults: [toolResult],
+              channel: 'voice',
+              success: true,
+              leadCreation: true,
+            }).catch(() => {});
+          }
+          if (functionName === 'transfer_call') {
+            logAiInteraction({
+              callSid,
+              callId: callRecordId,
+              userId,
+              companyId: companyId || null,
+              intent: 'human_handoff',
+              question: 'transfer_call',
+              answer: `Handoff to ${args?.department}`,
+              toolCalls: [{ name: 'transfer_call' }],
+              toolResults: [toolResult],
+              channel: 'voice',
+              success: true,
+              handoff: true,
+            }).catch(() => {});
+          }
         }
         break;
       }
@@ -609,14 +733,15 @@ function handleMediaStream(ws, req) {
     logToolStarted({ userId, callId: callRecordId, callSid, tool: functionName, args });
 
     const stageForTool = (name) => {
-      if (name === 'retrieve_knowledge') return { stage: 'searching', label: 'Searching Knowledge' };
+      if (name === 'retrieve_knowledge' || name === 'search_knowledge') return { stage: 'searching', label: 'Searching Knowledge' };
       if (name === 'create_appointment') return { stage: 'booking-demo', label: 'Booking Demo' };
-      if (name === 'lookup_customer' || name === 'save_customer_note' || name === 'update_conversation_memory') return { stage: 'saving-crm', label: 'Saving to CRM' };
+      if (name === 'lookup_customer' || name === 'save_customer_note' || name === 'update_conversation_memory' || name === 'create_lead' || name === 'create_follow_up') return { stage: 'saving-crm', label: 'Saving to CRM' };
+      if (name === 'transfer_call' || name === 'request_human_handoff') return { stage: 'handoff', label: 'Transferring to Team' };
       return { stage: 'executing-tool', label: 'Executing Tool' };
     };
     const stageInfo = stageForTool(functionName);
     emitCallStage(stageInfo.stage, stageInfo.label, { tool: functionName });
-    if (functionName === 'retrieve_knowledge') {
+    if (functionName === 'retrieve_knowledge' || functionName === 'search_knowledge') {
       await recordTimeline(TIMELINE_EVENT_TYPES.KNOWLEDGE_SEARCHED, 'Knowledge search', { query: args?.query });
     }
 
@@ -1052,6 +1177,7 @@ function handleMediaStream(ws, req) {
         businessToolsEnabled,
         providerName,
         resumptionHandle,
+        businessContext,
       }).catch(err => {
         logger.error('REALTIME_CALL_FAILED', { callSid, reason: 'provider_connect_error', error: err.message });
         logger.error('PIPELINE_FAILURE', {
@@ -1450,6 +1576,10 @@ function handleMediaStream(ws, req) {
             userId = ownerUserId;
             companyId = ownerCompanyId;
             logger.info('TENANT_RESOLVED_FOR_CALL', { callSid, source: owner.source });
+            // Business knowledge intelligence — load profile + agent config
+            loadBusinessIntelligence(ownerUserId, ownerCompanyId, calledNumber).catch(err =>
+              logger.warn('BUSINESS_INTELLIGENCE_LOAD_FAILED', { callSid, error: err.message })
+            );
           } else {
             logger.warn('TENANT_NOT_RESOLVED', { callSid });
           }

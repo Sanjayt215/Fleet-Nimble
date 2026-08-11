@@ -19,18 +19,22 @@ model Role {
 }
 
 model Company {
-  id        String             @id @default(uuid())
-  name      String
-  slug      String             @unique
-  plan      String             @default("standard")
-  settings  Json               @default("{}")
-  createdAt DateTime           @default(now()) @map("created_at")
-  updatedAt DateTime           @updatedAt @map("updated_at")
-  auditLogs AuditLog[]
-  geofences Geofence[]
-  devices   TelematicsDevice[]
-  users     User[]
-  vehicles  Vehicle[]
+  id                    String                      @id @default(uuid())
+  name                  String
+  slug                  String                      @unique
+  plan                  String                      @default("standard")
+  settings              Json                        @default("{}")
+  createdAt             DateTime                    @default(now()) @map("created_at")
+  updatedAt             DateTime                    @updatedAt @map("updated_at")
+  auditLogs             AuditLog[]
+  geofences             Geofence[]
+  devices               TelematicsDevice[]
+  users                 User[]
+  vehicles              Vehicle[]
+  businessProfiles      BusinessProfile[]
+  agentConfigs          AgentConfig[]
+  businessKnowledgeDocs BusinessKnowledgeDocument[]
+  aiInteractionLogs     AiInteractionLog[]
 
   @@map("companies")
 }
@@ -77,6 +81,10 @@ model User {
   fleetBrainWorkflowRuns     FleetBrainWorkflowRun[]
   fleetBrainLearnings        FleetBrainLearning[]
   fleetBrainInsights         FleetBrainInsight[]
+  businessProfiles           BusinessProfile[]
+  agentConfigs               AgentConfig[]
+  businessKnowledgeDocs      BusinessKnowledgeDocument[]
+  aiInteractionLogs          AiInteractionLog[]
 
   @@index([email])
   @@index([roleId])
@@ -1554,4 +1562,150 @@ model AgentTaskLog {
   @@index([agent, at])
   @@index([runId])
   @@map("agent_task_logs")
+}
+
+// ──────────────────────────────────────────────
+// Business Knowledge Intelligence
+// Multi-tenant: every record is scoped to a company/user (tenant).
+// ──────────────────────────────────────────────
+
+model BusinessProfile {
+  id                     String   @id @default(uuid())
+  userId                 String   @map("user_id")
+  companyId              String?  @map("company_id")
+  businessName           String   @map("business_name")
+  website                String?
+  industry               String?
+  description            String?
+  products               Json     @default("[]")
+  services               Json     @default("[]")
+  locations              Json     @default("[]")
+  businessHours          Json     @default("{}")
+  contact                Json     @default("{}")
+  pricing                Json     @default("{}")
+  faqs                   Json     @default("[]")
+  policies               Json     @default("{}")
+  bookingRules           Json     @default("{}")
+  leadQualificationRules Json     @default("{}")
+  version                Int      @default(1)
+  status                 String   @default("ACTIVE")
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+  user                   User     @relation(fields: [userId], references: [id])
+  company                Company? @relation(fields: [companyId], references: [id])
+
+  @@unique([companyId])
+  @@index([userId])
+  @@index([industry])
+  @@map("business_profiles")
+}
+
+/// AI Agent configuration — one agent per tenant/business/phone number.
+model AgentConfig {
+  id                     String   @id @default(uuid())
+  userId                 String   @map("user_id")
+  companyId              String?  @map("company_id")
+  agentName              String   @default("FleetNimble AI Receptionist") @map("agent_name")
+  voiceId                String?  @default("Puck") @map("voice_id")
+  language               String   @default("en")
+  tone                   String   @default("professional")
+  personality            String   @default("Warm, professional, concise and helpful")
+  greetingMessage        String   @map("greeting_message")
+  businessContext        String?  @map("business_context")
+  knowledgeSourceIds     String[] @default([]) @map("knowledge_source_ids")
+  primaryGoal            String   @default("Answer caller questions accurately and book qualified demos") @map("primary_goal")
+  secondaryGoals         Json     @default("[]") @map("secondary_goals")
+  qualificationQuestions Json     @default("[]") @map("qualification_questions")
+  bookingRules           Json     @default("{}") @map("booking_rules")
+  transferRules          Json     @default("{}") @map("transfer_rules")
+  fallbackBehavior       Json     @default("{}") @map("fallback_behavior")
+  workingHours           Json     @default("{}") @map("working_hours")
+  phoneNumber            String?  @map("phone_number")
+  /// When true, an empty greeting update is rejected so the greeting can never be
+  /// accidentally removed. Only an explicit admin greeting replaces it.
+  greetingProtected      Boolean  @default(true) @map("greeting_protected")
+  enabled                Boolean  @default(true)
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+  user                   User     @relation(fields: [userId], references: [id])
+  company                Company? @relation(fields: [companyId], references: [id])
+
+  @@unique([companyId])
+  @@index([userId])
+  @@map("agent_configs")
+}
+
+/// Knowledge documents owned by a tenant (manual, website ingestion, API).
+model BusinessKnowledgeDocument {
+  id         String                   @id @default(uuid())
+  userId     String                   @map("user_id")
+  companyId  String?                  @map("company_id")
+  title      String
+  category   String                   @default("General")
+  /// manual | website | api
+  sourceType String                   @default("manual") @map("source_type")
+  sourceUrl  String?                  @map("source_url")
+  content    String
+  keywords   String[]                 @default([])
+  summary    String?
+  /// DRAFT | APPROVED | ARCHIVED
+  status     String                   @default("DRAFT")
+  confidence Float                    @default(0.8)
+  version    Int                      @default(1)
+  metadata   Json                     @default("{}")
+  createdAt  DateTime                 @default(now()) @map("created_at")
+  updatedAt  DateTime                 @updatedAt @map("updated_at")
+  user       User                     @relation(fields: [userId], references: [id])
+  company    Company?                 @relation(fields: [companyId], references: [id])
+  chunks     BusinessKnowledgeChunk[]
+
+  @@index([companyId, status])
+  @@index([category])
+  @@index([sourceType])
+  @@map("business_knowledge_documents")
+}
+
+model BusinessKnowledgeChunk {
+  id         String                    @id @default(uuid())
+  documentId String                    @map("document_id")
+  chunkIndex Int                       @map("chunk_index")
+  content    String
+  keywords   String[]                  @default([])
+  metadata   Json                      @default("{}")
+  createdAt  DateTime                  @default(now()) @map("created_at")
+  document   BusinessKnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, chunkIndex])
+  @@map("business_knowledge_chunks")
+}
+
+/// Observability record for every AI interaction (call/text/web).
+model AiInteractionLog {
+  id                   String   @id @default(uuid())
+  callId               String?  @map("call_id")
+  callSid              String?  @map("call_sid")
+  userId               String?  @map("user_id")
+  companyId            String?  @map("company_id")
+  agentId              String?  @map("agent_id")
+  intent               String?
+  question             String?  @map("question")
+  answer               String?  @map("answer")
+  knowledgeSourcesUsed Json     @default("[]") @map("knowledge_sources_used")
+  toolCalls            Json     @default("[]") @map("tool_calls")
+  toolResults          Json     @default("[]") @map("tool_results")
+  latencyMs            Int?     @map("latency_ms")
+  success              Boolean  @default(true)
+  handoff              Boolean  @default(false)
+  booking              Boolean  @default(false)
+  leadCreation         Boolean  @default(false) @map("lead_creation")
+  channel              String   @default("voice")
+  createdAt            DateTime @default(now()) @map("created_at")
+  Company              Company? @relation(fields: [companyId], references: [id])
+  User                 User?    @relation(fields: [userId], references: [id])
+
+  @@index([companyId, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([callId])
+  @@index([intent])
+  @@map("ai_interaction_logs")
 }

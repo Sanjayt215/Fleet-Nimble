@@ -74,7 +74,7 @@ export class OpenAIRealtimeProvider extends RealtimeVoiceProvider {
       const memoryContext = sessionContext.memoryContext || '';
       const tools = sessionContext.businessToolsEnabled ? buildToolDefinitions(true) : [];
 
-      const instructions = await buildSystemPrompt(config, memoryContext);
+      const instructions = await buildSystemPrompt(config, memoryContext, sessionContext.businessContext || null);
       const sessionPayload = {
         type: 'session.update',
         session: {

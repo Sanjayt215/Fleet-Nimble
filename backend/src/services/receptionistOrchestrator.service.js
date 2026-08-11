@@ -56,20 +56,50 @@ export async function processReceptionistTurn({ session, userText, channel, user
       conversationMode = CONVERSATION_MODES.SALES;
     }
 
-    const engine = await getKnowledgeEngine();
-    const results = await engine.search(userText, {
-      mode: conversationMode,
-      limit: 3,
+    // Phase 6 — knowledge-aware QA: tenant business knowledge first,
+    // global FleetNimble engine fallback, conversational context and
+    // category overviews. Falls back to the classic engine path when the
+    // QA layer cannot answer (no-hallucination guarantee).
+    const { answerKnowledgeQuestion, logAiInteraction } = await import('./receptionistQA.service.js');
+    const qaResult = await answerKnowledgeQuestion({
+      userId,
+      companyId: session.companyId || null,
+      message: userText,
+      sessionContext: {
+        lastTopic: session.lastTopic,
+        lastCategory: session.lastCategory,
+        conversationMode,
+      },
     });
 
-    const answer = engine.getAnswer(results, conversationMode);
-    const salesTip = engine.getProactiveSalesSuggestion(results);
+    const response = {
+      reply: qaResult.answer,
+      intent,
+      isKnowledgeBase: qaResult.isKnowledgeBase,
+      results: qaResult.results || [],
+      conversationMode,
+    };
 
-    const response = { reply: answer, intent, isKnowledgeBase: true, results };
+    if (qaResult.overviewSuggestion) {
+      response.reply = `${qaResult.answer} ${qaResult.overviewSuggestion}`;
+    }
+    if (qaResult.topic) response.lastTopic = qaResult.topic;
+    if (qaResult.found) {
+      response.knowledgeSources = qaResult.usedSources;
 
-    if (salesTip && conversationMode === CONVERSATION_MODES.SALES) {
-      response.proactiveSalesTip = salesTip;
-      response.reply = `${answer} ${salesTip}`;
+      // Observability — record the AI interaction (Phase 12)
+      logAiInteraction({
+        callSid: session.callSid,
+        userId,
+        companyId: session.companyId || null,
+        intent,
+        question: userText,
+        answer: response.reply,
+        knowledgeSourcesUsed: qaResult.usedSources,
+        latencyMs: qaResult.latencyMs,
+        channel: channel || 'text',
+        success: true,
+      }).catch(() => {});
     }
 
     return response;

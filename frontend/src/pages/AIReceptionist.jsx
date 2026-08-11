@@ -10,6 +10,7 @@ import AnalyticsCards from './AnalyticsCards';
 import LiveCallsPanel from './LiveCallsPanel';
 import ConversationIntelligencePanel from './ConversationIntelligencePanel';
 import CallDetailModal from './CallDetailModal';
+import AgentConfiguration from './AgentConfiguration';
 import { normalizeDisplayText } from '../utils/normalizeDisplayText';
 
 const TABS = [
@@ -25,6 +26,7 @@ const ADMIN_SUBTABS = [
   { id: 'analytics', label: 'Analytics' },
   { id: 'live', label: 'Live Calls' },
   { id: 'settings', label: 'Settings' },
+  { id: 'agent', label: 'Agent Config' },
 ];
 
 export default function AIReceptionist() {
@@ -561,6 +563,7 @@ export default function AIReceptionist() {
           {activeAdminTab === 'conversations' && <ConversationIntelligencePanel showToast={showToast} />}
           {activeAdminTab === 'live' && <LiveCallsPanel showToast={showToast} />}
           {activeAdminTab === 'settings' && <ReceptionistSettingsModal onClose={() => {}} showToast={showToast} embedded />}
+          {activeAdminTab === 'agent' && <AgentConfiguration showToast={showToast} />}
         </div>
       )}
 
