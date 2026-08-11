@@ -5,14 +5,21 @@
  * Guarantees:
  *  - Migrations ALWAYS run through the DIRECT (unpooled) database connection.
  *    Neon pooled endpoints route through PgBouncer (transaction mode), which
- *    cannot hold session-scoped pg_advisory_lock() — the exact cause of P1002.
+ *    cannot hold session-scoped pg_advisory_lock() - the exact cause of P1002.
  *  - No silent fallback: if DIRECT_DATABASE_URL is missing or points at a
  *    pooler, this fails with a clear configuration error (Prisma itself
  *    silently falls back to the pooled DATABASE_URL in that case).
+ *  - The Prisma subprocess is given DIRECT_DATABASE_URL AND an explicit
+ *    DATABASE_URL pointing at the direct endpoint, so no fallback path can
+ *    reach the pooler even if Prisma's directUrl resolution ever changes.
+ *  - A live SELECT 1 preflight proves the direct endpoint is reachable
+ *    before any migration is attempted.
+ *  - Post-run safety check: if Prisma reports a "Datasource ... at " host
+ *    containing "-pooler", the deployment is aborted immediately.
  *  - Concurrent-deploy safety: transient P1002 (advisory-lock contention from
  *    another deployment) is retried with exponential backoff.
  *  - Genuine migration failures exit non-zero and are never ignored.
- *  - Credentials are never printed; only scheme + host are logged.
+ *  - Credentials are never printed; only protocol + host are logged.
  */
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -76,14 +83,40 @@ if (/-pooler/i.test(directUrl)) {
   );
 }
 
-console.log(`[MIGRATE-DEPLOY] application connection : host ${urlHost(dbUrl)} (pooled)`);
-console.log(`[MIGRATE-DEPLOY] migration connection   : host ${urlHost(directUrl)} (direct)`);
+console.log('[MIGRATE-DEPLOY] application connection : ' +
+  `protocol=postgresql host=${urlHost(dbUrl)} (pooled)`);
+console.log('MIGRATION_DATABASE_TARGET ' +
+  JSON.stringify({ host: urlHost(directUrl), protocol: 'postgresql', direct: true }));
 console.log(`[MIGRATE-DEPLOY] schema                  : ${schemaPath}`);
+
+async function preflightDirectConnection() {
+  const { PrismaClient } = await import('@prisma/client');
+  const client = new PrismaClient({
+    datasources: { db: { url: directUrl } },
+  });
+  try {
+    await client.$queryRawUnsafe('SELECT 1');
+    console.log('[MIGRATE-DEPLOY] direct connection preflight: OK');
+    return true;
+  } catch (err) {
+    console.error('[MIGRATE-DEPLOY] direct connection preflight FAILED:', err.message);
+    return false;
+  } finally {
+    await client.$disconnect();
+  }
+}
 
 function runMigrateDeploy() {
   return new Promise((resolve) => {
+    // Explicit env: the migration subprocess can NEVER resolve to the pooled
+    // endpoint, even if Prisma's directUrl fallback behavior changes.
+    const childEnv = {
+      ...process.env,
+      DATABASE_URL: directUrl,
+      DIRECT_DATABASE_URL: directUrl,
+    };
     const child = spawn(process.execPath, [prismaCli, 'migrate', 'deploy', '--schema', schemaPath], {
-      env: process.env,
+      env: childEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
@@ -104,9 +137,33 @@ function isLockContention(output) {
   return LOCK_MARKERS.some((marker) => lower.includes(marker.toLowerCase()));
 }
 
+function extractDatasourceHost(output) {
+  const match = output.match(/Datasource\s+"db".*?\bat\s+"([^"]+)"/s);
+  return match ? match[1] : null;
+}
+
+const preflightOk = await preflightDirectConnection();
+if (!preflightOk) {
+  fatal(
+    `Could not connect to the DIRECT database endpoint (host ${urlHost(directUrl)}). ` +
+      'Fix DIRECT_DATABASE_URL (hostname, port, credentials, or Neon compute state) before deploying. ' +
+      'Migrations will not run against the pooled endpoint.'
+  );
+}
+
 for (let attempt = 1; ; attempt++) {
   console.log(`[MIGRATE-DEPLOY] running prisma migrate deploy (attempt ${attempt})...`);
   const { code, output } = await runMigrateDeploy();
+
+  const datasourceHost = extractDatasourceHost(output);
+  if (datasourceHost && /-pooler/i.test(datasourceHost)) {
+    fatal(
+      `Prisma reported a POOLED datasource host "${datasourceHost}" for the migration run. ` +
+        'The migration subprocess was explicitly given the direct URL, so this indicates a ' +
+        'deployment misconfiguration. Aborting to avoid running migrations through PgBouncer.'
+    );
+  }
+
   if (code === 0) {
     console.log('[MIGRATE-DEPLOY] migrations applied successfully.');
     process.exit(0);
