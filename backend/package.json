@@ -12,6 +12,8 @@
     "start": "node src/server.js",
     "db:generate": "prisma generate --schema=./prisma/schema.prisma",
     "db:migrate": "prisma migrate dev --schema=./prisma/schema.prisma",
+    "db:migrate:deploy": "node scripts/db-migrate-deploy.js",
+    "db:migrate:diagnose": "node scripts/db-migrate-diagnose.js",
     "db:push": "prisma db push --schema=./prisma/schema.prisma",
     "db:seed": "node prisma/seed.js",
     "db:seed:phase2": "node prisma/seed-phase2.js",
