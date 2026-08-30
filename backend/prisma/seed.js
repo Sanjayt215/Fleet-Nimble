@@ -60,17 +60,67 @@ async function main() {
   const ADMIN_PASSWORD = 'Admin123!';
   const hash = await bcrypt.hash(ADMIN_PASSWORD, 12);
 
-  const admin = await prisma.user.upsert({
-    where: { email: 'admin@fleetnimble.com' },
-    update: { companyId: company.id, passwordHash: hash },
-    create: {
-      name: 'FleetNimble Admin',
-      email: 'admin@fleetnimble.com',
-      passwordHash: hash,
-      roleId: adminRole.id,
-      companyId: company.id,
-    },
+  // Check if admin exists with valid password hash
+  const existingAdmin = await prisma.user.findUnique({ where: { email: 'admin@fleetnimble.com' } });
+  const hasValidHash = existingAdmin?.passwordHash && 
+    (existingAdmin.passwordHash.startsWith('$2a$') || existingAdmin.passwordHash.startsWith('$2b$'));
+
+  let admin;
+  if (!existingAdmin) {
+    // Create admin if doesn't exist
+    admin = await prisma.user.create({
+      data: {
+        name: 'FleetNimble Admin',
+        email: 'admin@fleetnimble.com',
+        passwordHash: hash,
+        roleId: adminRole.id,
+        companyId: company.id,
+      },
+    });
+    console.log('Created admin user');
+  } else if (!hasValidHash) {
+    // Update password hash only if invalid (corrupted or missing)
+    admin = await prisma.user.update({
+      where: { email: 'admin@fleetnimble.com' },
+      data: { 
+        passwordHash: hash,
+        companyId: company.id,
+        deletedAt: null,
+      },
+    });
+    console.log('Updated admin password hash (was invalid)');
+  } else {
+    // User exists with valid hash - only update companyId if needed
+    admin = await prisma.user.update({
+      where: { email: 'admin@fleetnimble.com' },
+      data: { companyId: company.id },
+    });
+    console.log('Admin user already exists with valid password hash');
+  }
+
+  // Create organization membership for multi-tenant architecture
+  const existingMembership = await prisma.organizationMember.findUnique({
+    where: {
+      organizationId_userId: {
+        organizationId: company.id,
+        userId: admin.id
+      }
+    }
   });
+
+  if (!existingMembership) {
+    await prisma.organizationMember.create({
+      data: {
+        organizationId: company.id,
+        userId: admin.id,
+        role: 'OWNER',
+        status: 'ACTIVE'
+      }
+    });
+    console.log('Created organization membership for admin');
+  } else {
+    console.log('Organization membership already exists');
+  }
 
   console.log('Seeding 25 vehicles with digital twins...');
 

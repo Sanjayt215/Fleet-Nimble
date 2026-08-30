@@ -45,36 +45,57 @@ export async function login(req, res, next) {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = req.body?.password;
-    if (!email || !password) throw new AppError('Email and password are required', 400, 'VALIDATION_ERROR');
+    if (!email || !password) {
+      logger.warn('AUTH_LOGIN_VALIDATION_ERROR', { emailPresent: !!email, passwordPresent: !!password });
+      throw new AppError('Email and password are required', 400, 'VALIDATION_ERROR');
+    }
 
     const user = await prisma.user.findFirst({
       where: { email, deletedAt: null },
       include: { role: true },
     });
-    logger.info('AUTH_LOGIN_STAGE', {
-      stage: 'user_lookup',
-      emailPresent: true,
-      found: !!user,
-      role: user?.role?.name || null,
-      companyId: user?.companyId || null,
-      hash: describeHash(user?.passwordHash),
-    });
-    if (!user) throw new AppError('Invalid credentials', 401, 'UNAUTHORIZED');
+    
+    if (!user) {
+      logger.warn('AUTH_LOGIN_USER_NOT_FOUND', { email });
+      throw new AppError('Invalid credentials', 401, 'UNAUTHORIZED');
+    }
 
     let valid = false;
     try {
       valid = await bcrypt.compare(password, user.passwordHash);
     } catch (hashErr) {
-      logger.error('AUTH_LOGIN_STAGE', { stage: 'password_check', error: `Corrupt password hash: ${describeHash(user?.passwordHash)?.format || 'unknown'}` });
+      logger.error('AUTH_LOGIN_PASSWORD_HASH_ERROR', { 
+        userId: user.id, 
+        error: hashErr.message,
+        hashFormat: describeHash(user.passwordHash).format 
+      });
       valid = false;
     }
-    logger.info('AUTH_LOGIN_STAGE', { stage: 'password_check', passwordValid: valid });
-    if (!valid) throw new AppError('Invalid credentials', 401, 'UNAUTHORIZED');
+    
+    if (!valid) {
+      logger.warn('AUTH_LOGIN_PASSWORD_MISMATCH', { userId: user.id });
+      throw new AppError('Invalid credentials', 401, 'UNAUTHORIZED');
+    }
 
     const tokens = await issueTokens(user);
-    logger.info('AUTH_LOGIN_STAGE', { stage: 'tokens_issued', userId: user.id });
+    logger.info('AUTH_LOGIN_SUCCESS', { 
+      userId: user.id, 
+      email: user.email,
+      role: user.role.name,
+      companyId: user.companyId,
+      activeOrganizationId: tokens.organizationId || user.companyId
+    });
     res.json({ success: true, data: { user: sanitizeUser(user), ...tokens } });
   } catch (err) {
+    if (err.isOperational) {
+      logger.warn('AUTH_LOGIN_ERROR', { 
+        code: err.code, 
+        message: err.message,
+        statusCode: err.statusCode 
+      });
+    } else {
+      logger.error('AUTH_LOGIN_INTERNAL_ERROR', { error: err.message });
+    }
     next(err);
   }
 }
@@ -152,12 +173,35 @@ export async function refresh(req, res, next) {
   }
 }
 
-async function issueTokens(user) {
+async function issueTokens(user, activeOrganizationId = null) {
+  // Determine active organization if not provided
+  let organizationId = activeOrganizationId;
+  
+  if (!organizationId) {
+    // First try user's companyId (legacy field)
+    if (user.companyId) {
+      organizationId = user.companyId;
+    } else {
+      // Fall back to first active organization membership
+      const membership = await prisma.organizationMember.findFirst({
+        where: {
+          userId: user.id,
+          status: 'ACTIVE',
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (membership) {
+        organizationId = membership.organizationId;
+      }
+    }
+  }
+
   const payload = {
     sub: user.id,
     email: user.email,
     role: user.role.name,
     companyId: user.companyId || null,
+    activeOrganizationId: organizationId || null,
   };
   const accessToken = signAccessToken(payload);
   const refreshToken = signRefreshToken({ ...payload, jti: randomUUID() });
@@ -172,3 +216,5 @@ function sanitizeUser(user) {
   const { passwordHash, ...rest } = user;
   return rest;
 }
+
+export { issueTokens };
