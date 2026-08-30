@@ -14,15 +14,17 @@ services:
       - key: NODE_ENV
         value: "production"
       - key: DATABASE_URL
-        # Pooled endpoint for the APPLICATION runtime only (keep "-pooler" suffix for Neon).
+        # Neon pooled endpoint (contains "-pooler" suffix).
+        # Used for both application runtime AND migrations.
+        # The migration wrapper (db-migrate-deploy.js) handles P1002 advisory lock errors
+        # with exponential backoff and retry logic.
         # Example: postgresql://USER:PASSWORD@ep-xxxxx-123-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require
         value: "postgresql://<USER>:<PASSWORD>@<HOST>-pooler.<REGION>.aws.neon.tech/<DBNAME>?sslmode=require"
       - key: DIRECT_DATABASE_URL
-        # DIRECT (unpooled) endpoint used ONLY by Prisma Migrate (npm run db:migrate:deploy).
-        # CRITICAL: same connection string but host WITHOUT the "-pooler" suffix.
-        # Prisma silently falls back to the pooled DATABASE_URL if this is missing/empty,
-        # which causes P1002 (pg_advisory_lock unsupported through Neon's PgBouncer).
-        value: "postgresql://<USER>:<PASSWORD>@<DIRECT_HOST>:<PORT>/<DBNAME>?sslmode=require"
+        # OPTIONAL: If a separate direct (non-pooled) endpoint is available, set it here.
+        # For this Neon project, only the pooled endpoint is reachable, so this is ignored.
+        # The migration wrapper will use DATABASE_URL with P1002 retry logic.
+        value: ""
       - key: REDIS_URL
         value: "redis://<HOST>:6379"
       - key: JWT_SECRET

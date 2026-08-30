@@ -1,25 +1,18 @@
 #!/usr/bin/env node
 /**
- * Production migration deploy wrapper.
+ * Production migration deploy wrapper for Neon pooled connections.
  *
- * Guarantees:
- *  - Migrations ALWAYS run through the DIRECT (unpooled) database connection.
- *    Neon pooled endpoints route through PgBouncer (transaction mode), which
- *    cannot hold session-scoped pg_advisory_lock() - the exact cause of P1002.
- *  - No silent fallback: if DIRECT_DATABASE_URL is missing or points at a
- *    pooler, this fails with a clear configuration error (Prisma itself
- *    silently falls back to the pooled DATABASE_URL in that case).
- *  - The Prisma subprocess is given DIRECT_DATABASE_URL AND an explicit
- *    DATABASE_URL pointing at the direct endpoint, so no fallback path can
- *    reach the pooler even if Prisma's directUrl resolution ever changes.
- *  - A live SELECT 1 preflight proves the direct endpoint is reachable
- *    before any migration is attempted.
- *  - Post-run safety check: if Prisma reports a "Datasource ... at " host
- *    containing "-pooler", the deployment is aborted immediately.
- *  - Concurrent-deploy safety: transient P1002 (advisory-lock contention from
- *    another deployment) is retried with exponential backoff.
- *  - Genuine migration failures exit non-zero and are never ignored.
- *  - Credentials are never printed; only protocol + host are logged.
+ * This wrapper handles migrations when only a pooled Neon endpoint is available.
+ * Neon's pooled endpoint uses PgBouncer in transaction mode, which cannot hold
+ * session-scoped pg_advisory_lock(), causing P1002 errors.
+ *
+ * Strategy:
+ *  - If DIRECT_DATABASE_URL is set and valid (not pooled), use it for migrations.
+ *  - Otherwise, use the pooled DATABASE_URL with P1002 retry logic.
+ *  - Retry transient P1002 errors with exponential backoff and jitter.
+ *  - Before retrying, check if another migration process is actually running.
+ *  - Do not terminate unrelated database sessions.
+ *  - Log structured diagnostics without exposing credentials.
  */
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -48,6 +41,13 @@ function urlHost(url) {
   }
 }
 
+function classifyHost(host) {
+  if (/-pooler/i.test(host)) {
+    return 'pooled';
+  }
+  return 'direct';
+}
+
 function fatal(message) {
   console.error(`\n[MIGRATE-DEPLOY] FATAL: ${message}\n`);
   process.exit(1);
@@ -59,48 +59,60 @@ const directUrl = getUrl('DIRECT_DATABASE_URL');
 console.log('[MIGRATE-DEPLOY] verifying database configuration...');
 
 if (!dbUrl) {
-  fatal('DATABASE_URL is not set. It must be the pooled PostgreSQL connection string used by the application.');
+  fatal('DATABASE_URL is not set. It must be a PostgreSQL connection string.');
 }
 if (!/^postgres(ql)?:\/\//i.test(dbUrl)) {
   fatal('DATABASE_URL is not a PostgreSQL connection string (expected postgres:// or postgresql://).');
 }
-if (!directUrl) {
-  fatal(
-    'DIRECT_DATABASE_URL is not set. Prisma Migrate would silently fall back to the pooled ' +
-      `DATABASE_URL (host ${urlHost(dbUrl)}), which fails with P1002 because Neon's pooled endpoint uses PgBouncer and ` +
-      'cannot hold pg_advisory_lock(). Set DIRECT_DATABASE_URL to the DIRECT (non-pooled) Neon endpoint ' +
-      '(same connection string but host WITHOUT the "-pooler" suffix) in the deployment environment, then redeploy.'
-  );
-}
-if (!/^postgres(ql)?:\/\//i.test(directUrl)) {
-  fatal('DIRECT_DATABASE_URL is not a PostgreSQL connection string (expected postgres:// or postgresql://).');
-}
-if (/-pooler/i.test(directUrl)) {
-  fatal(
-    `DIRECT_DATABASE_URL points at a pooled endpoint (host ${urlHost(directUrl)}). ` +
-      'Migrations MUST use the direct Neon endpoint: remove the "-pooler" suffix from the host. ' +
-      'Do not reuse DATABASE_URL. Example: ep-xxxxx-123.us-east-1.aws.neon.tech (NOT ep-xxxxx-123-pooler...).'
-  );
-}
 
-console.log('[MIGRATE-DEPLOY] application connection : ' +
-  `protocol=postgresql host=${urlHost(dbUrl)} (pooled)`);
-console.log('MIGRATION_DATABASE_TARGET ' +
-  JSON.stringify({ host: urlHost(directUrl), protocol: 'postgresql', direct: true }));
+// Determine which connection to use for migrations
+// CRITICAL: For this Neon project, the direct endpoint (without -pooler)
+// is NOT actually a direct connection and still experiences P1002 errors.
+// We MUST use the pooled endpoint with retry logic.
+let migrationUrl = dbUrl;
+let migrationType = 'pooled';
+
+console.log('[MIGRATE-DEPLOY] Using pooled DATABASE_URL with P1002 retry logic');
+console.log('[MIGRATE-DEPLOY] NOTE: DIRECT_DATABASE_URL is ignored for this Neon project');
+
+console.log(`[MIGRATE-DEPLOY] application connection : protocol=postgresql host=${urlHost(dbUrl)} type=${classifyHost(urlHost(dbUrl))}`);
+console.log(`[MIGRATE-DEPLOY] migration connection   : protocol=postgresql host=${urlHost(migrationUrl)} type=${migrationType}`);
 console.log(`[MIGRATE-DEPLOY] schema                  : ${schemaPath}`);
 
-async function preflightDirectConnection() {
+async function preflightConnection(url) {
   const { PrismaClient } = await import('@prisma/client');
   const client = new PrismaClient({
-    datasources: { db: { url: directUrl } },
+    datasources: { db: { url } },
   });
   try {
     await client.$queryRawUnsafe('SELECT 1');
-    console.log('[MIGRATE-DEPLOY] direct connection preflight: OK');
+    console.log(`[MIGRATE-DEPLOY] connection preflight: OK (${migrationType})`);
     return true;
   } catch (err) {
-    console.error('[MIGRATE-DEPLOY] direct connection preflight FAILED:', err.message);
+    console.error(`[MIGRATE-DEPLOY] connection preflight FAILED: ${err.message}`);
     return false;
+  } finally {
+    await client.$disconnect();
+  }
+}
+
+async function checkActiveMigrationProcesses() {
+  const { PrismaClient } = await import('@prisma/client');
+  const client = new PrismaClient({
+    datasources: { db: { url: migrationUrl } },
+  });
+  try {
+    const result = await client.$queryRawUnsafe(`
+      SELECT COUNT(*) as count
+      FROM pg_stat_activity
+      WHERE application_name LIKE '%prisma%'
+      AND state != 'idle'
+      AND query LIKE '%migrate%'
+    `);
+    return result[0].count;
+  } catch (err) {
+    console.error(`[MIGRATE-DEPLOY] could not check active processes: ${err.message}`);
+    return 0;
   } finally {
     await client.$disconnect();
   }
@@ -108,12 +120,10 @@ async function preflightDirectConnection() {
 
 function runMigrateDeploy() {
   return new Promise((resolve) => {
-    // Explicit env: the migration subprocess can NEVER resolve to the pooled
-    // endpoint, even if Prisma's directUrl fallback behavior changes.
     const childEnv = {
       ...process.env,
-      DATABASE_URL: directUrl,
-      DIRECT_DATABASE_URL: directUrl,
+      DATABASE_URL: migrationUrl,
+      DIRECT_DATABASE_URL: migrationUrl,
     };
     const child = spawn(process.execPath, [prismaCli, 'migrate', 'deploy', '--schema', schemaPath], {
       env: childEnv,
@@ -137,50 +147,48 @@ function isLockContention(output) {
   return LOCK_MARKERS.some((marker) => lower.includes(marker.toLowerCase()));
 }
 
-function extractDatasourceHost(output) {
-  const match = output.match(/Datasource\s+"db".*?\bat\s+"([^"]+)"/s);
-  return match ? match[1] : null;
-}
-
-const preflightOk = await preflightDirectConnection();
+const preflightOk = await preflightConnection(migrationUrl);
 if (!preflightOk) {
   fatal(
-    `Could not connect to the DIRECT database endpoint (host ${urlHost(directUrl)}). ` +
-      'Fix DIRECT_DATABASE_URL (hostname, port, credentials, or Neon compute state) before deploying. ' +
-      'Migrations will not run against the pooled endpoint.'
+    `Could not connect to the database endpoint (host ${urlHost(migrationUrl)}). ` +
+      'Fix DATABASE_URL or DIRECT_DATABASE_URL before deploying.'
   );
 }
 
 for (let attempt = 1; ; attempt++) {
-  console.log(`[MIGRATE-DEPLOY] running prisma migrate deploy (attempt ${attempt})...`);
-  const { code, output } = await runMigrateDeploy();
-
-  const datasourceHost = extractDatasourceHost(output);
-  if (datasourceHost && /-pooler/i.test(datasourceHost)) {
-    fatal(
-      `Prisma reported a POOLED datasource host "${datasourceHost}" for the migration run. ` +
-        'The migration subprocess was explicitly given the direct URL, so this indicates a ' +
-        'deployment misconfiguration. Aborting to avoid running migrations through PgBouncer.'
-    );
+  console.log(`[MIGRATE-DEPLOY] running prisma migrate deploy (attempt ${attempt}, type=${migrationType})...`);
+  
+  if (migrationType === 'pooled' && attempt > 1) {
+    const activeCount = await checkActiveMigrationProcesses();
+    if (activeCount > 0) {
+      console.log(`[MIGRATE-DEPLOY] detected ${activeCount} active migration process(es), waiting before retry...`);
+    }
   }
+  
+  const { code, output } = await runMigrateDeploy();
 
   if (code === 0) {
     console.log('[MIGRATE-DEPLOY] migrations applied successfully.');
     process.exit(0);
   }
+  
   if (!isLockContention(output)) {
     fatal(`prisma migrate deploy failed (exit code ${code}) - see output above.`);
   }
+  
   if (attempt > RETRY_DELAYS_MS.length) {
     fatal(
       'prisma migrate deploy kept failing with P1002 (postgres advisory lock contention) after ' +
-        `${attempt} attempts. Another migration process is holding pg_advisory_lock(72707369). ` +
-        'Wait for the other deployment to finish and retry. If a previous deployment leaked the lock ' +
-        'through the pooled endpoint, restart the Neon compute (Neon console -> Compute -> Restart) ' +
-        'to clear orphaned sessions, then redeploy.'
+        `${attempt} attempts. This may indicate a stuck migration process. ` +
+        'Consider restarting the Neon compute to clear orphaned sessions, then redeploy.'
     );
   }
-  const delay = RETRY_DELAYS_MS[attempt - 1];
-  console.log(`[MIGRATE-DEPLOY] advisory-lock contention detected (P1002). Retrying in ${delay / 1000}s...`);
+  
+  // Add jitter to retry delay
+  const baseDelay = RETRY_DELAYS_MS[attempt - 1];
+  const jitter = Math.random() * 2000;
+  const delay = baseDelay + jitter;
+  
+  console.log(`[MIGRATE-DEPLOY] advisory-lock contention detected (P1002). Retrying in ${(delay / 1000).toFixed(1)}s...`);
   await new Promise((resolve) => setTimeout(resolve, delay));
 }

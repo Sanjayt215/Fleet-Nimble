@@ -35,6 +35,9 @@ model Company {
   agentConfigs          AgentConfig[]
   businessKnowledgeDocs BusinessKnowledgeDocument[]
   aiInteractionLogs     AiInteractionLog[]
+  organizationMembers   OrganizationMember[]
+  organizationInvitations OrganizationInvitation[]
+  aiReceptionistConfig  AiReceptionistConfig?
 
   @@map("companies")
 }
@@ -64,7 +67,6 @@ model User {
   receptionistCalls          AiReceptionistCall[]
   receptionistAppointments   AiReceptionistAppointment[]
   receptionistSupportTickets AiReceptionistSupportTicket[]
-  receptionistConfig         AiReceptionistConfig?
   receptionistAuditLogs      AiReceptionistAuditLog[]
   receptionistCustomers      ReceptionistCustomer[]
   receptionistCustomerNotes  ReceptionistCustomerNote[]
@@ -85,6 +87,7 @@ model User {
   agentConfigs               AgentConfig[]
   businessKnowledgeDocs      BusinessKnowledgeDocument[]
   aiInteractionLogs          AiInteractionLog[]
+  organizationMemberships    OrganizationMember[]
 
   @@index([email])
   @@index([roleId])
@@ -102,6 +105,46 @@ model RefreshToken {
 
   @@index([userId])
   @@map("refresh_tokens")
+}
+
+model OrganizationMember {
+  id             String           @id @default(uuid())
+  organizationId String           @map("organization_id")
+  userId         String           @map("user_id")
+  role           OrganizationRole @default(MEMBER)
+  status         MemberStatus     @default(ACTIVE)
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  organization   Company @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([organizationId, role])
+  @@index([userId])
+  @@map("organization_members")
+}
+
+model OrganizationInvitation {
+  id             String      @id @default(uuid())
+  organizationId String      @map("organization_id")
+  email          String
+  token          String      @unique
+  role           OrganizationRole @default(MEMBER)
+  status         String      @default("PENDING") // PENDING | ACCEPTED | EXPIRED | REVOKED
+  invitedBy      String      @map("invited_by")
+  expiresAt      DateTime    @map("expires_at")
+  acceptedAt     DateTime?   @map("accepted_at")
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  organization   Company      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([email])
+  @@index([token])
+  @@index([expiresAt])
+  @@map("organization_invitations")
 }
 
 model Vehicle {
@@ -711,7 +754,7 @@ model ReceptionistCustomer {
   id                   String                     @id @default(uuid())
   userId               String                     @map("user_id")
   companyId            String?                    @map("company_id")
-  phone                String?                    @unique @map("phone")
+  phone                String?                    @map("phone")
   email                String?                    @map("email")
   name                 String                     @map("name")
   companyName          String?                    @map("company_name")
@@ -747,6 +790,7 @@ model ReceptionistCustomer {
   @@index([leadScore(sort: Desc)])
   @@index([phone])
   @@index([email])
+  @@unique([companyId, phone])
   @@map("receptionist_customers")
 }
 
@@ -754,6 +798,7 @@ model ReceptionistCustomerNote {
   id         String               @id @default(uuid())
   customerId String               @map("customer_id")
   userId     String               @map("user_id")
+  companyId  String?              @map("company_id")
   content    String
   type       NoteType             @default(GENERAL)
   createdAt  DateTime             @default(now()) @map("created_at")
@@ -761,12 +806,14 @@ model ReceptionistCustomerNote {
   user       User                 @relation(fields: [userId], references: [id])
 
   @@index([customerId, createdAt(sort: Desc)])
+  @@index([companyId])
   @@map("receptionist_customer_notes")
 }
 
 model AiReceptionistAuditLog {
   id        String   @id @default(uuid())
   userId    String   @map("user_id")
+  companyId String?  @map("company_id")
   eventType String   @map("event_type")
   metadata  Json     @default("{}")
   ipAddress String?  @map("ip_address")
@@ -775,6 +822,7 @@ model AiReceptionistAuditLog {
   user      User     @relation(fields: [userId], references: [id])
 
   @@index([userId, createdAt(sort: Desc)])
+  @@index([companyId])
   @@index([eventType])
   @@map("ai_receptionist_audit_logs")
 }
@@ -785,23 +833,25 @@ model AiReceptionistAuditLog {
 // ──────────────────────────────────────────────
 
 model ConversationTimelineEvent {
-  id        String             @id @default(uuid())
-  callId    String             @map("call_id")
-  callSid   String?            @map("call_sid")
-  userId    String             @map("user_id")
+  id             String             @id @default(uuid())
+  callId         String             @map("call_id")
+  callSid        String?            @map("call_sid")
+  userId         String             @map("user_id")
+  companyId      String?            @map("company_id")
   /// CALL_STARTED | GREETING_SENT | INTENT_DETECTED | KNOWLEDGE_SEARCHED | LEAD_QUALIFIED |
   /// TOOL_STARTED | TOOL_COMPLETED | APPOINTMENT_CONFIRMED | CRM_UPDATED | SUMMARY_CREATED |
   /// MEMORY_UPDATED | FSM_TRANSITION | AGENT_RUN_STARTED | AGENT_RUN_COMPLETED |
   /// SUPERVISOR_RETRY | SUPERVISOR_RECOVERED | CALL_COMPLETED
-  eventType String             @map("event_type")
-  label     String             @map("label")
-  data      Json               @default("{}")
-  at        DateTime           @default(now()) @map("at")
-  call      AiReceptionistCall @relation(fields: [callId], references: [id], onDelete: Cascade)
-  User      User               @relation(fields: [userId], references: [id])
+  eventType      String             @map("event_type")
+  label          String             @map("label")
+  data           Json               @default("{}")
+  at             DateTime           @default(now()) @map("at")
+  call           AiReceptionistCall @relation(fields: [callId], references: [id], onDelete: Cascade)
+  User           User               @relation(fields: [userId], references: [id])
 
   @@index([callId, at])
   @@index([userId, at])
+  @@index([companyId])
   @@map("conversation_timeline_events")
 }
 
@@ -809,6 +859,7 @@ model ConversationSummary {
   id               String                @id @default(uuid())
   callId           String                @unique @map("call_id")
   userId           String                @map("user_id")
+  companyId        String?               @map("company_id")
   customerId       String?               @map("customer_id")
   executiveSummary String                @default("") @map("executive_summary")
   salesSummary     String                @default("") @map("sales_summary")
@@ -822,6 +873,7 @@ model ConversationSummary {
   user             User                  @relation(fields: [userId], references: [id])
 
   @@index([userId, createdAt(sort: Desc)])
+  @@index([companyId])
   @@map("conversation_summaries")
 }
 
@@ -829,11 +881,12 @@ model ConversationAnalytics {
   id                   String             @id @default(uuid())
   callId               String             @unique @map("call_id")
   userId               String             @map("user_id")
+  companyId            String?            @map("company_id")
   talkRatio            Float              @default(0) @map("talk_ratio")
   avgResponseLatencyMs Int                @default(0) @map("avg_response_latency_ms")
   interruptions        Int                @default(0)
   silenceDurationMs    Int                @default(0) @map("silence_duration_ms")
-  knowledgeHits        Int                @default(0) @map("knowledge_hits")
+  knowledgeHits        Int                @default(0)
   toolUses             Int                @default(0) @map("tool_uses")
   conversationScore    Float              @default(0) @map("conversation_score")
   salesScore           Float              @default(0) @map("sales_score")
@@ -844,12 +897,14 @@ model ConversationAnalytics {
   user                 User               @relation(fields: [userId], references: [id])
 
   @@index([userId])
+  @@index([companyId])
   @@map("conversation_analytics")
 }
 
 model FollowUpReminder {
   id            String                     @id @default(uuid())
   userId        String                     @map("user_id")
+  companyId     String?                    @map("company_id")
   customerId    String?                    @map("customer_id")
   appointmentId String?                    @map("appointment_id")
   callId        String?                    @map("call_id")
@@ -868,6 +923,7 @@ model FollowUpReminder {
   call          AiReceptionistCall?        @relation(fields: [callId], references: [id])
 
   @@index([userId, status])
+  @@index([companyId])
   @@index([customerId])
   @@index([dueAt])
   @@map("follow_up_reminders")
@@ -1083,11 +1139,12 @@ model AiReceptionistSupportTicket {
 
 model AiReceptionistConfig {
   id                     String   @id @default(uuid())
-  userId                 String   @unique @map("user_id")
+  userId                 String?  @map("user_id")
   companyId              String?  @map("company_id")
-  twilioPhoneNumber      String?  @unique @map("twilio_phone_number")
+  twilioPhoneNumber      String?  @map("twilio_phone_number")
   businessName           String   @default("My Business") @map("business_name")
-  greetingMessage        String   @default("Hello! Thank you for calling FleetNimble. How can I assist you today?") @map("greeting_message")
+  brandName              String?  @map("brand_name")
+  greetingMessage        String   @default("Hello! Thank you for calling. How can I assist you today?") @map("greeting_message")
   workingHours           Json     @default("{\"monday\":{\"start\":\"09:00\",\"end\":\"17:00\"},\"tuesday\":{\"start\":\"09:00\",\"end\":\"17:00\"},\"wednesday\":{\"start\":\"09:00\",\"end\":\"17:00\"},\"thursday\":{\"start\":\"09:00\",\"end\":\"17:00\"},\"friday\":{\"start\":\"09:00\",\"end\":\"17:00\"},\"saturday\":{\"start\":null,\"end\":null},\"sunday\":{\"start\":null,\"end\":null}}") @map("working_hours")
   timezone               String   @default("UTC") @map("timezone")
   language               String   @default("en") @map("language")
@@ -1107,10 +1164,12 @@ model AiReceptionistConfig {
   emergencyHandoffNumber String?  @map("emergency_handoff_number")
   afterHoursBehavior     String   @default("voicemail") @map("after_hours_behavior")
   enabled                Boolean  @default(true)
+  knowledgeBase          Json?    @default("[]")
   createdAt              DateTime @default(now()) @map("created_at")
   updatedAt              DateTime @updatedAt @map("updated_at")
-  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company                Company? @relation(fields: [companyId], references: [id])
 
+  @@unique([companyId])
   @@index([companyId])
   @@map("ai_receptionist_configs")
 }
@@ -1170,6 +1229,7 @@ model AiUserPreference {
 model KnowledgeSource {
   id               String    @id @default(uuid())
   userId           String
+  companyId        String?   @map("company_id")
   name             String
   sourceType       String /// website | sitemap | markdown-directory | json-file | local-documentation | api-documentation
   baseUrl          String?
@@ -1197,6 +1257,7 @@ model KnowledgeSource {
   syncRuns       KnowledgeSyncRun[]
   stagedArticles KnowledgeStagedArticle[]
 
+  @@index([companyId])
   @@map("knowledge_sources")
 }
 
@@ -1205,6 +1266,7 @@ model KnowledgeSyncRun {
   id                 String    @id @default(uuid())
   sourceId           String
   userId             String?
+  companyId          String?   @map("company_id")
   status             String    @default("PENDING") /// PENDING | RUNNING | COMPLETED | FAILED | CANCELLED
   pagesDiscovered    Int       @default(0)
   pagesFetched       Int       @default(0)
@@ -1224,6 +1286,7 @@ model KnowledgeSyncRun {
   source         KnowledgeSource          @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   stagedArticles KnowledgeStagedArticle[]
 
+  @@index([companyId])
   @@map("knowledge_sync_runs")
 }
 
@@ -1233,6 +1296,7 @@ model KnowledgeStagedArticle {
   sourceId          String?
   syncRunId         String?
   userId            String?
+  companyId         String?   @map("company_id")
   status            String    @default("DISCOVERED") /// DISCOVERED | EXTRACTED | VALIDATED | NEEDS_REVIEW | APPROVED | REJECTED | ACTIVE | ARCHIVED | FAILED
   title             String
   category          String
@@ -1258,7 +1322,7 @@ model KnowledgeStagedArticle {
   approvedAt        DateTime?
   rejectedById      String?
   rejectedAt        DateTime?
-  rejectionReason   String?
+  rejectionReason   String?   @map("rejection_reason")
   archivedById      String?
   archivedAt        DateTime?
   archivedReason    String?
@@ -1273,6 +1337,7 @@ model KnowledgeStagedArticle {
   vectorEmbeddings VectorEmbedding[]
 
   @@index([status])
+  @@index([companyId])
   @@index([contentHash])
   @@map("knowledge_staged_articles")
 }
@@ -1380,6 +1445,19 @@ enum RoleName {
   MANAGER
   DRIVER
   VIEWER
+}
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  MANAGER
+  MEMBER
+}
+
+enum MemberStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
 }
 
 enum AlertSeverity {
